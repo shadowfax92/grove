@@ -365,7 +365,19 @@ func (m Model) toggleExpand() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.expanded[repoName] = !m.expanded[repoName]
+	m.saveCollapsed()
 	return m, nil
+}
+
+func (m Model) saveCollapsed() {
+	var collapsed []string
+	for name, exp := range m.expanded {
+		if !exp {
+			collapsed = append(collapsed, name)
+		}
+	}
+	m.st.Collapsed = collapsed
+	_ = m.stateMgr.Save(m.st)
 }
 
 func (m Model) startCreate() (tea.Model, tea.Cmd) {
@@ -539,11 +551,14 @@ func (m Model) confirmRename() (tea.Model, tea.Cmd) {
 
 func (m *Model) rebuildTree() {
 	m.nodes = buildTree(m.st, m.cfg, m.currentSession)
-	// Expand all repos by default
+	collapsed := make(map[string]bool)
+	for _, name := range m.st.Collapsed {
+		collapsed[name] = true
+	}
 	for _, node := range m.nodes {
 		if node.Kind == NodeRepo {
 			if _, ok := m.expanded[node.RepoName]; !ok {
-				m.expanded[node.RepoName] = true
+				m.expanded[node.RepoName] = !collapsed[node.RepoName]
 			}
 		}
 	}

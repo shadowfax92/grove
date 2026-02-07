@@ -13,6 +13,7 @@ type State struct {
 	Version    int         `json:"version"`
 	Workspaces []Workspace `json:"workspaces"`
 	LastActive string      `json:"last_active"`
+	Collapsed  []string    `json:"collapsed,omitempty"`
 }
 
 type Workspace struct {
