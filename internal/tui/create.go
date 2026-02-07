@@ -137,9 +137,9 @@ func (f CreateForm) createWorktree(branch string) tea.Msg {
 	for _, setupCmd := range f.repo.Setup {
 		c := exec.Command("sh", "-c", setupCmd)
 		c.Dir = worktreePath
-		c.Stdout = os.Stdout
-		c.Stderr = os.Stderr
-		_ = c.Run()
+		if err := c.Run(); err != nil {
+			return createErrorMsg{fmt.Errorf("setup %q failed: %w", setupCmd, err)}
+		}
 	}
 
 	if err := tmux.NewSession(sessionName, worktreePath); err != nil {
