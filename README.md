@@ -152,3 +152,7 @@ One notification per workspace — new notifications overwrite the previous one.
 ```
 
 Grove adds `.grove/` to the repo's `.gitignore` automatically.
+
+---
+
+> This is a personal tool I built for my own workflow. I'm sharing it in case it's useful to others, but I'm not actively seeking feature requests or contributions. Feel free to fork and adapt it to your needs.
