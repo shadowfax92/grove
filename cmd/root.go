@@ -7,9 +7,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var Version = "dev"
+
 var rootCmd = &cobra.Command{
-	Use:   "grove",
-	Short: "A tmux workspace manager built around git worktrees",
+	Use:     "grove",
+	Short:   "A tmux workspace manager built around git worktrees",
+	Version: Version,
 }
 
 func Execute() {
