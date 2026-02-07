@@ -24,7 +24,7 @@ var sidebarCmd = &cobra.Command{
 			return fmt.Errorf("grove sidebar must be run inside tmux")
 		}
 
-		cfg, err := config.Load()
+		cfg, err := config.LoadFast()
 		if err != nil {
 			return err
 		}
@@ -34,6 +34,13 @@ var sidebarCmd = &cobra.Command{
 			return err
 		}
 
-		return tui.RunSidebar(cfg, mgr)
+		st, err := mgr.Load()
+		if err != nil {
+			return err
+		}
+
+		cur, _ := tmux.CurrentSession()
+
+		return tui.RunSidebar(cfg, mgr, st, cur)
 	},
 }

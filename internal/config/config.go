@@ -44,6 +44,15 @@ func DefaultConfigPath() (string, error) {
 }
 
 func Load() (*Config, error) {
+	return load(true)
+}
+
+// LoadFast skips repo path validation — used by the sidebar for speed.
+func LoadFast() (*Config, error) {
+	return load(false)
+}
+
+func load(validate bool) (*Config, error) {
 	path, err := DefaultConfigPath()
 	if err != nil {
 		return nil, err
@@ -66,8 +75,10 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	if err := cfg.validate(); err != nil {
-		return nil, err
+	if validate {
+		if err := cfg.validate(); err != nil {
+			return nil, err
+		}
 	}
 
 	return &cfg, nil

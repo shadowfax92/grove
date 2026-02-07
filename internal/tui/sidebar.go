@@ -44,42 +44,47 @@ type Model struct {
 	err            error
 }
 
-func RunSidebar(cfg *config.Config, mgr *state.StateManager) error {
-	p := tea.NewProgram(initialModel(cfg, mgr), tea.WithoutCatchPanics())
+func RunSidebar(cfg *config.Config, mgr *state.StateManager, st *state.State, currentSession string) error {
+	m := initialModel(cfg, mgr, st, currentSession)
+	p := tea.NewProgram(m, tea.WithoutCatchPanics())
 	_, err := p.Run()
 	return err
 }
 
-func initialModel(cfg *config.Config, mgr *state.StateManager) Model {
+func initialModel(cfg *config.Config, mgr *state.StateManager, st *state.State, currentSession string) Model {
 	fi := textinput.New()
 	fi.Placeholder = "filter..."
 	fi.CharLimit = 64
 
-	return Model{
-		cfg:      cfg,
-		stateMgr: mgr,
-		expanded: make(map[string]bool),
-		styles:   DefaultStyles(),
-		filterInput: fi,
+	m := Model{
+		cfg:            cfg,
+		stateMgr:       mgr,
+		st:             st,
+		currentSession: currentSession,
+		expanded:       make(map[string]bool),
+		styles:         DefaultStyles(),
+		filterInput:    fi,
 	}
+	m.rebuildTree()
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
-	return m.loadState
+	return nil
 }
 
-type stateLoadedMsg struct {
-	st             *state.State
-	currentSession string
-}
-
-func (m Model) loadState() tea.Msg {
+func (m Model) reloadState() tea.Msg {
 	st, err := m.stateMgr.Load()
 	if err != nil {
 		return errMsg{err}
 	}
 	cur, _ := tmux.CurrentSession()
 	return stateLoadedMsg{st: st, currentSession: cur}
+}
+
+type stateLoadedMsg struct {
+	st             *state.State
+	currentSession string
 }
 
 type errMsg struct{ err error }
@@ -170,7 +175,7 @@ func (m Model) updateBrowse(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, textinput.Blink
 
 		case "r":
-			return m, m.loadState
+			return m, m.reloadState
 		}
 	}
 	return m, nil
