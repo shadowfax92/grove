@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"grove/internal/config"
@@ -74,15 +75,20 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) reloadState() tea.Msg {
+	cfg, err := config.LoadFast()
+	if err != nil {
+		return errMsg{err}
+	}
 	st, err := m.stateMgr.Load()
 	if err != nil {
 		return errMsg{err}
 	}
 	cur, _ := tmux.CurrentSession()
-	return stateLoadedMsg{st: st, currentSession: cur}
+	return stateLoadedMsg{cfg: cfg, st: st, currentSession: cur}
 }
 
 type stateLoadedMsg struct {
+	cfg            *config.Config
 	st             *state.State
 	currentSession string
 }
@@ -97,6 +103,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case stateLoadedMsg:
+		m.cfg = msg.cfg
 		m.st = msg.st
 		m.currentSession = msg.currentSession
 		m.rebuildTree()
@@ -262,6 +269,11 @@ func (m Model) selectWorkspace() (tea.Model, tea.Cmd) {
 	if node.Kind == NodeRepo {
 		return m.toggleExpand()
 	}
+
+	if node.Placeholder {
+		return m.createPlaceholderWorkspace(node)
+	}
+
 	if node.Workspace == nil {
 		return m, nil
 	}
@@ -285,6 +297,58 @@ func (m Model) selectWorkspace() (tea.Model, tea.Cmd) {
 	return m, tea.Sequence(
 		func() tea.Msg {
 			_ = tmux.SwitchClient(node.Workspace.SessionName)
+			return nil
+		},
+		tea.Quit,
+	)
+}
+
+func (m Model) createPlaceholderWorkspace(node TreeNode) (tea.Model, tea.Cmd) {
+	repo := m.cfg.FindRepo(node.RepoName)
+	if repo == nil {
+		m.err = fmt.Errorf("repo %q not found in config", node.RepoName)
+		return m, nil
+	}
+
+	branch := node.DisplayName
+	sessionName := fmt.Sprintf("grove/%s/%s", repo.Name, branch)
+
+	defaultBranch := repo.DefaultBranch
+	if defaultBranch == "" {
+		defaultBranch = "main"
+	}
+
+	// Default branch is already checked out at the repo root — use it directly
+	worktreePath := repo.Path
+	if branch != defaultBranch {
+		worktreePath = filepath.Join(repo.Path, ".grove", "worktrees", branch)
+		if err := git.AddWorktree(repo.Path, worktreePath, branch); err != nil {
+			m.err = fmt.Errorf("creating worktree: %w", err)
+			return m, nil
+		}
+	}
+
+	if err := tmux.NewSession(sessionName, worktreePath); err != nil {
+		m.err = fmt.Errorf("creating session: %w", err)
+		return m, nil
+	}
+
+	ws := state.Workspace{
+		Name:         fmt.Sprintf("%s/%s", repo.Name, branch),
+		Type:         "worktree",
+		Repo:         repo.Name,
+		RepoPath:     repo.Path,
+		WorktreePath: worktreePath,
+		Branch:       branch,
+		SessionName:  sessionName,
+	}
+	m.stateMgr.AddWorkspace(m.st, ws)
+	m.st.LastActive = sessionName
+	_ = m.stateMgr.Save(m.st)
+
+	return m, tea.Sequence(
+		func() tea.Msg {
+			_ = tmux.SwitchClient(sessionName)
 			return nil
 		},
 		tea.Quit,
@@ -546,7 +610,7 @@ func (m Model) View() string {
 	sep := m.styles.Separator.Render(strings.Repeat("─", max(m.width-2, 14)))
 	b.WriteString(" " + sep)
 	b.WriteString("\n")
-	help := " c new  d delete  R rename  C clear  / filter"
+	help := " c new  d delete  R rename  C clear  r reload  / filter"
 	b.WriteString(m.styles.HelpBar.Render(help))
 
 	return b.String()

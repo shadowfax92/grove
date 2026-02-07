@@ -20,6 +20,7 @@ type TreeNode struct {
 	RepoName    string
 	Workspace   *state.Workspace
 	DisplayName string
+	Placeholder bool
 }
 
 func (n TreeNode) IsRepo() bool {
@@ -39,21 +40,31 @@ func buildTree(st *state.State, cfg *config.Config, currentSession string) []Tre
 
 	for _, repo := range cfg.Repos {
 		wsList := repoWorkspaces[repo.Name]
-		if len(wsList) == 0 {
-			continue
-		}
 		nodes = append(nodes, TreeNode{
 			Kind:        NodeRepo,
 			RepoName:    repo.Name,
 			DisplayName: repo.Name,
 		})
-		for i := range wsList {
+		if len(wsList) == 0 {
+			branch := repo.DefaultBranch
+			if branch == "" {
+				branch = "main"
+			}
 			nodes = append(nodes, TreeNode{
 				Kind:        NodeWorkspace,
 				RepoName:    repo.Name,
-				Workspace:   &wsList[i],
-				DisplayName: wsList[i].Branch,
+				DisplayName: branch,
+				Placeholder: true,
 			})
+		} else {
+			for i := range wsList {
+				nodes = append(nodes, TreeNode{
+					Kind:        NodeWorkspace,
+					RepoName:    repo.Name,
+					Workspace:   &wsList[i],
+					DisplayName: wsList[i].Branch,
+				})
+			}
 		}
 	}
 
@@ -118,7 +129,13 @@ func renderTree(nodes []TreeNode, cursor int, expanded map[string]bool, currentS
 				badge = " " + styles.Notification.Render("★")
 			}
 
-			if isCursor {
+			if node.Placeholder {
+				if isCursor {
+					line = styles.Cursor.Render(fmt.Sprintf(">%s%s %s", prefix[1:], marker, label))
+				} else {
+					line = styles.Dim.Render(fmt.Sprintf("%s%s %s", prefix, marker, label))
+				}
+			} else if isCursor {
 				line = styles.Cursor.Render(fmt.Sprintf(">%s%s %s", prefix[1:], marker, label)) + badge
 			} else if isActive {
 				line = styles.Active.Render(fmt.Sprintf("%s%s %s", prefix, marker, label)) + badge

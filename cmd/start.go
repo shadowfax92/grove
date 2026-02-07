@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 
 	"grove/internal/config"
 	"grove/internal/state"
@@ -41,58 +40,26 @@ var startCmd = &cobra.Command{
 			return fmt.Errorf("loading state: %w", err)
 		}
 
-		// Process auto_start entries
-		for _, as := range cfg.AutoStart {
-			if as.Repo != "" {
-				repo := cfg.FindRepo(as.Repo)
-				if repo == nil {
-					fmt.Fprintf(os.Stderr, "warning: auto_start repo %q not found in config\n", as.Repo)
-					continue
-				}
-				for _, wt := range as.Worktrees {
-					sessionName := fmt.Sprintf("grove/%s/%s", repo.Name, wt)
-					if mgr.FindBySession(st, sessionName) != nil {
-						continue
-					}
-
-					var dir string
-					if wt == repo.DefaultBranch {
-						dir = repo.Path
-					} else {
-						dir = filepath.Join(repo.Path, ".grove", "worktrees", wt)
-					}
-
-					ws := state.Workspace{
-						Name:         fmt.Sprintf("%s/%s", repo.Name, wt),
-						Type:         "worktree",
-						Repo:         repo.Name,
-						RepoPath:     repo.Path,
-						WorktreePath: dir,
-						Branch:       wt,
-						SessionName:  sessionName,
-					}
-					mgr.AddWorkspace(st, ws)
-				}
-			} else if as.Workspace != "" {
-				sessionName := fmt.Sprintf("grove/%s", as.Workspace)
-				if mgr.FindBySession(st, sessionName) != nil {
-					continue
-				}
-
-				dir := as.Path
-				if dir == "" {
-					home, _ := os.UserHomeDir()
-					dir = home
-				}
-
-				ws := state.Workspace{
-					Name:        as.Workspace,
-					Type:        "plain",
-					Path:        dir,
-					SessionName: sessionName,
-				}
-				mgr.AddWorkspace(st, ws)
+		// Create default branch workspace for every repo in config
+		for _, repo := range cfg.Repos {
+			branch := repo.DefaultBranch
+			if branch == "" {
+				branch = "main"
 			}
+			sessionName := fmt.Sprintf("grove/%s/%s", repo.Name, branch)
+			if mgr.FindBySession(st, sessionName) != nil {
+				continue
+			}
+			ws := state.Workspace{
+				Name:         fmt.Sprintf("%s/%s", repo.Name, branch),
+				Type:         "worktree",
+				Repo:         repo.Name,
+				RepoPath:     repo.Path,
+				WorktreePath: repo.Path,
+				Branch:       branch,
+				SessionName:  sessionName,
+			}
+			mgr.AddWorkspace(st, ws)
 		}
 
 		// Reconcile: ensure tmux sessions exist for all workspaces

@@ -10,10 +10,9 @@ import (
 )
 
 type Config struct {
-	Prefix    string          `yaml:"prefix"`
-	Sidebar   SidebarConfig   `yaml:"sidebar"`
-	Repos     []RepoConfig    `yaml:"repos"`
-	AutoStart []AutoStartEntry `yaml:"auto_start"`
+	Prefix  string        `yaml:"prefix"`
+	Sidebar SidebarConfig `yaml:"sidebar"`
+	Repos   []RepoConfig  `yaml:"repos"`
 }
 
 type SidebarConfig struct {
@@ -26,13 +25,6 @@ type RepoConfig struct {
 	Name          string   `yaml:"name"`
 	DefaultBranch string   `yaml:"default_branch"`
 	Setup         []string `yaml:"setup"`
-}
-
-type AutoStartEntry struct {
-	Repo      string   `yaml:"repo,omitempty"`
-	Worktrees []string `yaml:"worktrees,omitempty"`
-	Workspace string   `yaml:"workspace,omitempty"`
-	Path      string   `yaml:"path,omitempty"`
 }
 
 func DefaultConfigPath() (string, error) {
@@ -97,12 +89,6 @@ func (c *Config) resolve() error {
 		}
 	}
 
-	for i := range c.AutoStart {
-		if c.AutoStart[i].Path != "" {
-			c.AutoStart[i].Path = expandTilde(c.AutoStart[i].Path, home)
-		}
-	}
-
 	if c.Prefix == "" {
 		c.Prefix = "C-s"
 	}
@@ -156,7 +142,6 @@ func createDefault(path string) (*Config, error) {
 			Position: "left",
 		},
 		Repos:     []RepoConfig{},
-		AutoStart: []AutoStartEntry{},
 	}
 
 	data, err := yaml.Marshal(cfg)
