@@ -1,0 +1,393 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+
+	"grove/internal/config"
+	"grove/internal/git"
+	"grove/internal/state"
+	"grove/internal/tmux"
+
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+type mode int
+
+const (
+	modeBrowse mode = iota
+	modeCreate
+	modeDelete
+	modeFilter
+)
+
+type Model struct {
+	cfg            *config.Config
+	stateMgr       *state.StateManager
+	st             *state.State
+	nodes          []TreeNode
+	cursor         int
+	expanded       map[string]bool
+	currentSession string
+	mode           mode
+	filterInput    textinput.Model
+	filterText     string
+	createForm     CreateForm
+	deleteTarget   *TreeNode
+	width          int
+	height         int
+	styles         Styles
+	err            error
+}
+
+func RunSidebar(cfg *config.Config, mgr *state.StateManager) error {
+	p := tea.NewProgram(initialModel(cfg, mgr), tea.WithoutCatchPanics())
+	_, err := p.Run()
+	return err
+}
+
+func initialModel(cfg *config.Config, mgr *state.StateManager) Model {
+	fi := textinput.New()
+	fi.Placeholder = "filter..."
+	fi.CharLimit = 64
+
+	return Model{
+		cfg:      cfg,
+		stateMgr: mgr,
+		expanded: make(map[string]bool),
+		styles:   DefaultStyles(),
+		filterInput: fi,
+	}
+}
+
+func (m Model) Init() tea.Cmd {
+	return m.loadState
+}
+
+type stateLoadedMsg struct {
+	st             *state.State
+	currentSession string
+}
+
+func (m Model) loadState() tea.Msg {
+	st, err := m.stateMgr.Load()
+	if err != nil {
+		return errMsg{err}
+	}
+	cur, _ := tmux.CurrentSession()
+	return stateLoadedMsg{st: st, currentSession: cur}
+}
+
+type errMsg struct{ err error }
+
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+
+	case stateLoadedMsg:
+		m.st = msg.st
+		m.currentSession = msg.currentSession
+		m.rebuildTree()
+		m.ensureCursorVisible()
+		return m, nil
+
+	case errMsg:
+		m.err = msg.err
+		return m, nil
+
+	case workspaceCreatedMsg:
+		m.stateMgr.AddWorkspace(m.st, msg.workspace)
+		_ = m.stateMgr.Save(m.st)
+		m.rebuildTree()
+		m.mode = modeBrowse
+		return m, nil
+
+	case createCancelledMsg:
+		m.mode = modeBrowse
+		return m, nil
+
+	case createErrorMsg:
+		m.createForm.err = msg.err
+		return m, nil
+	}
+
+	switch m.mode {
+	case modeBrowse:
+		return m.updateBrowse(msg)
+	case modeCreate:
+		return m.updateCreate(msg)
+	case modeDelete:
+		return m.updateDelete(msg)
+	case modeFilter:
+		return m.updateFilter(msg)
+	}
+
+	return m, nil
+}
+
+func (m Model) updateBrowse(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "q", "esc", "ctrl+s":
+			return m, tea.Quit
+
+		case "j", "down":
+			m.cursor = nextVisibleCursor(m.nodes, m.expanded, m.filterText, m.cursor, 1)
+			return m, nil
+
+		case "k", "up":
+			m.cursor = nextVisibleCursor(m.nodes, m.expanded, m.filterText, m.cursor, -1)
+			return m, nil
+
+		case "enter":
+			return m.selectWorkspace()
+
+		case "o":
+			return m.toggleExpand()
+
+		case "C":
+			return m.startCreate()
+
+		case "d":
+			return m.startDelete()
+
+		case "/":
+			m.mode = modeFilter
+			m.filterInput.Focus()
+			return m, textinput.Blink
+
+		case "r":
+			return m, m.loadState
+		}
+	}
+	return m, nil
+}
+
+func (m Model) updateCreate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	m.createForm, cmd = m.createForm.Update(msg)
+	return m, cmd
+}
+
+func (m Model) updateDelete(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "y", "Y":
+			return m.confirmDelete()
+		case "n", "N", "esc":
+			m.mode = modeBrowse
+			m.deleteTarget = nil
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+func (m Model) updateFilter(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "enter", "esc":
+			m.filterText = m.filterInput.Value()
+			m.mode = modeBrowse
+			m.filterInput.Blur()
+			if msg.String() == "esc" {
+				m.filterText = ""
+				m.filterInput.SetValue("")
+			}
+			m.ensureCursorVisible()
+			return m, nil
+		}
+	}
+
+	var cmd tea.Cmd
+	m.filterInput, cmd = m.filterInput.Update(msg)
+	m.filterText = m.filterInput.Value()
+	m.ensureCursorVisible()
+	return m, cmd
+}
+
+func (m Model) selectWorkspace() (tea.Model, tea.Cmd) {
+	if m.cursor >= len(m.nodes) {
+		return m, nil
+	}
+	node := m.nodes[m.cursor]
+	if node.Kind == NodeRepo {
+		return m.toggleExpand()
+	}
+	if node.Workspace == nil {
+		return m, nil
+	}
+
+	// Update last_active
+	m.st.LastActive = node.Workspace.SessionName
+	_ = m.stateMgr.Save(m.st)
+
+	// Recreate session if it doesn't exist
+	if !tmux.SessionExists(node.Workspace.SessionName) {
+		dir := node.Workspace.WorktreePath
+		if node.Workspace.Type == "plain" {
+			dir = node.Workspace.Path
+		}
+		_ = tmux.NewSession(node.Workspace.SessionName, dir)
+	}
+
+	return m, tea.Sequence(
+		func() tea.Msg {
+			_ = tmux.SwitchClient(node.Workspace.SessionName)
+			return nil
+		},
+		tea.Quit,
+	)
+}
+
+func (m Model) toggleExpand() (tea.Model, tea.Cmd) {
+	if m.cursor >= len(m.nodes) {
+		return m, nil
+	}
+	node := m.nodes[m.cursor]
+	repoName := node.RepoName
+	if repoName == "" {
+		return m, nil
+	}
+	m.expanded[repoName] = !m.expanded[repoName]
+	return m, nil
+}
+
+func (m Model) startCreate() (tea.Model, tea.Cmd) {
+	createMode := CreatePlain
+	repoName := ""
+
+	if m.cursor < len(m.nodes) {
+		node := m.nodes[m.cursor]
+		if node.RepoName != "" {
+			createMode = CreateWorktree
+			repoName = node.RepoName
+		}
+	}
+
+	m.mode = modeCreate
+	m.createForm = NewCreateForm(createMode, repoName, m.cfg, m.stateMgr, m.st)
+	return m, textinput.Blink
+}
+
+func (m Model) startDelete() (tea.Model, tea.Cmd) {
+	if m.cursor >= len(m.nodes) {
+		return m, nil
+	}
+	node := m.nodes[m.cursor]
+	if node.Kind != NodeWorkspace || node.Workspace == nil {
+		return m, nil
+	}
+	m.mode = modeDelete
+	m.deleteTarget = &node
+	return m, nil
+}
+
+func (m Model) confirmDelete() (tea.Model, tea.Cmd) {
+	if m.deleteTarget == nil || m.deleteTarget.Workspace == nil {
+		m.mode = modeBrowse
+		return m, nil
+	}
+
+	ws := m.deleteTarget.Workspace
+
+	if tmux.SessionExists(ws.SessionName) {
+		_ = tmux.KillSession(ws.SessionName)
+	}
+
+	if ws.Type == "worktree" && ws.WorktreePath != ws.RepoPath {
+		_ = git.RemoveWorktree(ws.RepoPath, ws.WorktreePath)
+	}
+
+	m.stateMgr.RemoveWorkspace(m.st, ws.SessionName)
+	_ = m.stateMgr.Save(m.st)
+
+	m.rebuildTree()
+	m.mode = modeBrowse
+	m.deleteTarget = nil
+	m.ensureCursorVisible()
+
+	return m, nil
+}
+
+func (m *Model) rebuildTree() {
+	m.nodes = buildTree(m.st, m.cfg, m.currentSession)
+	// Expand all repos by default
+	for _, node := range m.nodes {
+		if node.Kind == NodeRepo {
+			if _, ok := m.expanded[node.RepoName]; !ok {
+				m.expanded[node.RepoName] = true
+			}
+		}
+	}
+}
+
+func (m *Model) ensureCursorVisible() {
+	visible := visibleNodes(m.nodes, m.expanded, m.filterText)
+	if len(visible) == 0 {
+		return
+	}
+	for _, vn := range visible {
+		if vn.originalIdx == m.cursor {
+			return
+		}
+	}
+	m.cursor = visible[0].originalIdx
+}
+
+func (m Model) View() string {
+	if m.st == nil {
+		return "Loading..."
+	}
+
+	var b strings.Builder
+
+	b.WriteString(m.styles.Header.Render(" grove"))
+	b.WriteString("\n")
+
+	if m.mode == modeCreate {
+		b.WriteString(renderTree(m.nodes, -1, m.expanded, m.currentSession, m.filterText, m.styles))
+		b.WriteString("\n\n")
+		b.WriteString(m.createForm.View(m.styles))
+	} else if m.mode == modeDelete && m.deleteTarget != nil {
+		b.WriteString(renderTree(m.nodes, m.cursor, m.expanded, m.currentSession, m.filterText, m.styles))
+		b.WriteString("\n\n")
+		b.WriteString(m.styles.Error.Render(fmt.Sprintf(" Delete %s? (y/n)", m.deleteTarget.DisplayName)))
+	} else {
+		b.WriteString(renderTree(m.nodes, m.cursor, m.expanded, m.currentSession, m.filterText, m.styles))
+	}
+
+	if m.mode == modeFilter {
+		b.WriteString("\n\n")
+		b.WriteString(fmt.Sprintf(" / %s", m.filterInput.View()))
+	}
+
+	if m.err != nil {
+		b.WriteString("\n")
+		b.WriteString(m.styles.Error.Render(m.err.Error()))
+	}
+
+	// Help bar
+	b.WriteString("\n\n")
+	sep := m.styles.Separator.Render(strings.Repeat("─", max(m.width-2, 14)))
+	b.WriteString(" " + sep)
+	b.WriteString("\n")
+	help := " C new  d delete  / filter  ? help"
+	b.WriteString(m.styles.HelpBar.Render(help))
+
+	return b.String()
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
