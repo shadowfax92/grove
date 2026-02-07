@@ -73,6 +73,11 @@ func ListSessions() ([]string, error) {
 	return strings.Split(out, "\n"), nil
 }
 
+func RenameSession(oldName, newName string) error {
+	_, err := run("rename-session", "-t", oldName, newName)
+	return err
+}
+
 func CurrentSession() (string, error) {
 	return run("display-message", "-p", "#{session_name}")
 }

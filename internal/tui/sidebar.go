@@ -20,6 +20,7 @@ const (
 	modeCreate
 	modeDelete
 	modeFilter
+	modeRename
 )
 
 type Model struct {
@@ -35,6 +36,8 @@ type Model struct {
 	filterText     string
 	createForm     CreateForm
 	deleteTarget   *TreeNode
+	renameTarget   *state.Workspace
+	renameInput    textinput.Model
 	width          int
 	height         int
 	styles         Styles
@@ -124,6 +127,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateDelete(msg)
 	case modeFilter:
 		return m.updateFilter(msg)
+	case modeRename:
+		return m.updateRename(msg)
 	}
 
 	return m, nil
@@ -150,11 +155,14 @@ func (m Model) updateBrowse(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "o":
 			return m.toggleExpand()
 
-		case "C":
+		case "c":
 			return m.startCreate()
 
 		case "d":
 			return m.startDelete()
+
+		case "R":
+			return m.startRename()
 
 		case "/":
 			m.mode = modeFilter
@@ -317,6 +325,118 @@ func (m Model) confirmDelete() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) startRename() (tea.Model, tea.Cmd) {
+	if m.cursor >= len(m.nodes) {
+		return m, nil
+	}
+	node := m.nodes[m.cursor]
+	if node.Kind != NodeWorkspace || node.Workspace == nil {
+		return m, nil
+	}
+
+	ri := textinput.New()
+	ri.Focus()
+	ri.CharLimit = 64
+	ri.Width = 30
+	ri.SetValue(node.DisplayName)
+
+	m.mode = modeRename
+	m.renameTarget = node.Workspace
+	m.renameInput = ri
+	return m, textinput.Blink
+}
+
+func (m Model) updateRename(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "enter":
+			return m.confirmRename()
+		case "esc":
+			m.mode = modeBrowse
+			m.renameTarget = nil
+			return m, nil
+		}
+	}
+
+	var cmd tea.Cmd
+	m.renameInput, cmd = m.renameInput.Update(msg)
+	return m, cmd
+}
+
+func (m Model) confirmRename() (tea.Model, tea.Cmd) {
+	if m.renameTarget == nil {
+		m.mode = modeBrowse
+		return m, nil
+	}
+
+	newName := strings.TrimSpace(m.renameInput.Value())
+	currentName := m.renameTarget.Branch
+	if currentName == "" {
+		currentName = m.renameTarget.Name
+	}
+	if newName == "" || newName == currentName {
+		m.mode = modeBrowse
+		m.renameTarget = nil
+		return m, nil
+	}
+
+	ws := m.renameTarget
+	oldSessionName := ws.SessionName
+
+	// Build new session name
+	var newSessionName string
+	if ws.Type == "worktree" {
+		newSessionName = fmt.Sprintf("grove/%s/%s", ws.Repo, newName)
+	} else {
+		newSessionName = fmt.Sprintf("grove/%s", newName)
+	}
+
+	// Check for duplicates
+	if m.stateMgr.FindBySession(m.st, newSessionName) != nil {
+		m.err = fmt.Errorf("workspace %q already exists", newName)
+		m.mode = modeBrowse
+		m.renameTarget = nil
+		return m, nil
+	}
+
+	// Rename tmux session
+	if tmux.SessionExists(oldSessionName) {
+		if err := tmux.RenameSession(oldSessionName, newSessionName); err != nil {
+			m.err = fmt.Errorf("rename failed: %w", err)
+			m.mode = modeBrowse
+			m.renameTarget = nil
+			return m, nil
+		}
+	}
+
+	// Update state
+	for i := range m.st.Workspaces {
+		if m.st.Workspaces[i].SessionName == oldSessionName {
+			m.st.Workspaces[i].SessionName = newSessionName
+			if ws.Type == "worktree" {
+				m.st.Workspaces[i].Name = fmt.Sprintf("%s/%s", ws.Repo, newName)
+				m.st.Workspaces[i].Branch = newName
+			} else {
+				m.st.Workspaces[i].Name = newName
+			}
+			break
+		}
+	}
+
+	if m.st.LastActive == oldSessionName {
+		m.st.LastActive = newSessionName
+	}
+
+	_ = m.stateMgr.Save(m.st)
+	m.rebuildTree()
+	m.mode = modeBrowse
+	m.renameTarget = nil
+	m.ensureCursorVisible()
+
+	return m, nil
+}
+
 func (m *Model) rebuildTree() {
 	m.nodes = buildTree(m.st, m.cfg, m.currentSession)
 	// Expand all repos by default
@@ -360,6 +480,11 @@ func (m Model) View() string {
 		b.WriteString(renderTree(m.nodes, m.cursor, m.expanded, m.currentSession, m.filterText, m.styles))
 		b.WriteString("\n\n")
 		b.WriteString(m.styles.Error.Render(fmt.Sprintf(" Delete %s? (y/n)", m.deleteTarget.DisplayName)))
+	} else if m.mode == modeRename && m.renameTarget != nil {
+		b.WriteString(renderTree(m.nodes, m.cursor, m.expanded, m.currentSession, m.filterText, m.styles))
+		b.WriteString("\n\n")
+		b.WriteString(m.styles.Form.Render(" Rename") + "\n")
+		b.WriteString(fmt.Sprintf("  %s", m.renameInput.View()))
 	} else {
 		b.WriteString(renderTree(m.nodes, m.cursor, m.expanded, m.currentSession, m.filterText, m.styles))
 	}
@@ -379,7 +504,7 @@ func (m Model) View() string {
 	sep := m.styles.Separator.Render(strings.Repeat("─", max(m.width-2, 14)))
 	b.WriteString(" " + sep)
 	b.WriteString("\n")
-	help := " C new  d delete  / filter  ? help"
+	help := " c new  d delete  R rename  / filter"
 	b.WriteString(m.styles.HelpBar.Render(help))
 
 	return b.String()
