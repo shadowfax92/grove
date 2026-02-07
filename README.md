@@ -1,35 +1,22 @@
-# Grove
+<div align="center">
 
-A tmux workspace manager built around git worktrees.
+# 🌳 Grove
+
+**A tmux workspace manager built around git worktrees.**
+
+*One sidebar. All your repos, branches, and sessions.*
+
+![Grove sidebar popup](assets/grove.png)
+
+</div>
 
 You work across multiple repos, each with several worktrees for feature branches and agent tasks, plus standalone tmux sessions for scratch work. Navigating all of this is manual and chaotic. Grove gives you a single popup sidebar to see everything and switch instantly.
 
-```
-┌───────────────────────────────────────────────┐
-│ tmux session: grove/mono/feat-auth            │
-│                                               │
-│  ┌─────────┐                                  │
-│  │  grove   │                                 │
-│  │         │  Window 1: vim                   │
-│  │ ▾ mono  │  Window 2: shell                 │
-│  │   main  │  Window 3: tests                 │
-│  │  ●feat  │                                  │
-│  │ ▾ tools │                                  │
-│  │   main  │                                  │
-│  │ scratch │                                  │
-│  └─────────┘                                  │
-│                                               │
-│  Ctrl+S toggles the sidebar                   │
-└───────────────────────────────────────────────┘
-```
-
-**What it does:**
-
-- **One-key sidebar** (`Ctrl+S`) to see and switch between all workspaces
-- **Worktree lifecycle** — create and remove git worktrees with per-repo setup commands (`bun install`, etc.)
-- **Session persistence** — if a tmux session dies, grove recreates it on next start
-- **Auto-generated names** — press Enter with an empty name and get a random animal (`mono/beluga`, `workers/pangolin`)
-- **Plain workspaces** — standalone sessions for scratch, notes, anything not tied to a repo
+🔀 **One-key sidebar** (`Ctrl+S`) to see and switch between all workspaces
+🌿 **Worktree lifecycle** — create and remove git worktrees with per-repo setup commands
+🔄 **Session persistence** — if a tmux session dies, grove recreates it on next start
+🎲 **Auto-generated names** — empty name → random animal (`mono/beluga`, `workers/pangolin`)
+📁 **Plain workspaces** — standalone sessions for scratch, notes, anything
 
 ---
 
