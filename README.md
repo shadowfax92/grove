@@ -12,12 +12,12 @@
 
 You work across multiple repos, each with several worktrees for feature branches and agent tasks, plus standalone tmux sessions for scratch work. Navigating all of this is manual and chaotic. Grove gives you a single popup sidebar to see everything and switch instantly.
 
-🔀 **One-key sidebar** (`Ctrl+S`) to see and switch between all workspaces
-🌿 **Worktree lifecycle** — create and remove git worktrees with per-repo setup commands
-🔄 **Session persistence** — if a tmux session dies, grove recreates it on next start
-🎲 **Auto-generated names** — empty name → random animal (`mono/beluga`, `workers/pangolin`)
-📁 **Plain workspaces** — standalone sessions for scratch, notes, anything
-🔔 **Notifications** — any CLI in a grove session can send notifications to the sidebar
+- 🔀 **One-key sidebar** (`Ctrl+S`) to see and switch between all workspaces
+- 🌿 **Worktree lifecycle** — create and remove git worktrees with per-repo setup commands
+- 🔄 **Session persistence** — if a tmux session dies, grove recreates it on next start
+- 🎲 **Auto-generated names** — empty name → random animal (`mono/beluga`, `workers/pangolin`)
+- 📁 **Plain workspaces** — standalone sessions for scratch, notes, anything
+- 🔔 **Notifications** — any CLI in a grove session can send notifications to the sidebar
 
 ---
 
