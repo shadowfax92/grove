@@ -25,6 +25,7 @@ type Workspace struct {
 	Path         string `json:"path,omitempty"`
 	SessionName  string `json:"session_name"`
 	CreatedAt    string `json:"created_at"`
+	Notification string `json:"notification,omitempty"`
 }
 
 type StateManager struct {
@@ -138,4 +139,17 @@ func (m *StateManager) FindBySession(s *State, sessionName string) *Workspace {
 		}
 	}
 	return nil
+}
+
+func (m *StateManager) SetNotification(s *State, sessionName, message string) {
+	for i := range s.Workspaces {
+		if s.Workspaces[i].SessionName == sessionName {
+			s.Workspaces[i].Notification = message
+			return
+		}
+	}
+}
+
+func (m *StateManager) ClearNotification(s *State, sessionName string) {
+	m.SetNotification(s, sessionName, "")
 }

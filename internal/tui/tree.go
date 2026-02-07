@@ -101,6 +101,7 @@ func renderTree(nodes []TreeNode, cursor int, expanded map[string]bool, currentS
 
 		case NodeWorkspace:
 			isActive := node.Workspace != nil && node.Workspace.SessionName == currentSession
+			hasNotif := node.Workspace != nil && node.Workspace.Notification != ""
 			prefix := "  "
 			if node.RepoName != "" {
 				prefix = "    "
@@ -112,12 +113,17 @@ func renderTree(nodes []TreeNode, cursor int, expanded map[string]bool, currentS
 			}
 
 			label := node.DisplayName
+			badge := ""
+			if hasNotif {
+				badge = " " + styles.Notification.Render("★")
+			}
+
 			if isCursor {
-				line = styles.Cursor.Render(fmt.Sprintf(">%s%s %s", prefix[1:], marker, label))
+				line = styles.Cursor.Render(fmt.Sprintf(">%s%s %s", prefix[1:], marker, label)) + badge
 			} else if isActive {
-				line = styles.Active.Render(fmt.Sprintf("%s%s %s", prefix, marker, label))
+				line = styles.Active.Render(fmt.Sprintf("%s%s %s", prefix, marker, label)) + badge
 			} else {
-				line = styles.Workspace.Render(fmt.Sprintf("%s%s %s", prefix, marker, label))
+				line = styles.Workspace.Render(fmt.Sprintf("%s%s %s", prefix, marker, label)) + badge
 			}
 		}
 

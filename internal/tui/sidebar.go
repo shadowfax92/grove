@@ -226,6 +226,17 @@ func (m Model) updateFilter(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m Model) cursorNotification() string {
+	if m.cursor >= len(m.nodes) {
+		return ""
+	}
+	node := m.nodes[m.cursor]
+	if node.Kind != NodeWorkspace || node.Workspace == nil {
+		return ""
+	}
+	return node.Workspace.Notification
+}
+
 func (m Model) selectWorkspace() (tea.Model, tea.Cmd) {
 	if m.cursor >= len(m.nodes) {
 		return m, nil
@@ -237,6 +248,9 @@ func (m Model) selectWorkspace() (tea.Model, tea.Cmd) {
 	if node.Workspace == nil {
 		return m, nil
 	}
+
+	// Clear notification on switch
+	m.stateMgr.ClearNotification(m.st, node.Workspace.SessionName)
 
 	// Update last_active
 	m.st.LastActive = node.Workspace.SessionName
@@ -502,6 +516,12 @@ func (m Model) View() string {
 	if m.err != nil {
 		b.WriteString("\n")
 		b.WriteString(m.styles.Error.Render(m.err.Error()))
+	}
+
+	// Notification preview
+	if notif := m.cursorNotification(); notif != "" {
+		b.WriteString("\n\n")
+		b.WriteString(m.styles.Notification.Render(fmt.Sprintf(" ★ %s", notif)))
 	}
 
 	// Help bar

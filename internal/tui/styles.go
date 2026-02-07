@@ -3,16 +3,17 @@ package tui
 import "github.com/charmbracelet/lipgloss"
 
 type Styles struct {
-	Header    lipgloss.Style
-	Repo      lipgloss.Style
-	Workspace lipgloss.Style
-	Active    lipgloss.Style
-	Cursor    lipgloss.Style
-	HelpBar   lipgloss.Style
-	Error     lipgloss.Style
-	Form      lipgloss.Style
-	Dim       lipgloss.Style
-	Separator lipgloss.Style
+	Header       lipgloss.Style
+	Repo         lipgloss.Style
+	Workspace    lipgloss.Style
+	Active       lipgloss.Style
+	Cursor       lipgloss.Style
+	HelpBar      lipgloss.Style
+	Error        lipgloss.Style
+	Form         lipgloss.Style
+	Dim          lipgloss.Style
+	Separator    lipgloss.Style
+	Notification lipgloss.Style
 }
 
 func DefaultStyles() Styles {
@@ -43,5 +44,7 @@ func DefaultStyles() Styles {
 			Foreground(lipgloss.Color("8")),
 		Separator: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8")),
+		Notification: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("3")),
 	}
 }
