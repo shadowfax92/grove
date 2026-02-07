@@ -17,6 +17,7 @@ You work across multiple repos, each with several worktrees for feature branches
 🔄 **Session persistence** — if a tmux session dies, grove recreates it on next start
 🎲 **Auto-generated names** — empty name → random animal (`mono/beluga`, `workers/pangolin`)
 📁 **Plain workspaces** — standalone sessions for scratch, notes, anything
+🔔 **Notifications** — any CLI in a grove session can send notifications to the sidebar
 
 ---
 
@@ -79,19 +80,9 @@ repos:
     default_branch: main
     setup:
       - npm install
-
-auto_start:
-  - repo: mono
-    worktrees: [main]
-  - repo: workers
-    worktrees: [main]
-  - workspace: scratch
-    path: ~/
 ```
 
-**`repos`** — git repositories to manage. Each gets its own group in the sidebar. `setup` commands run in new worktrees after creation.
-
-**`auto_start`** — workspaces created automatically on `grove start`. Repo worktrees and plain workspaces.
+**`repos`** — git repositories to manage. Each gets its own group in the sidebar. On `grove start`, every repo automatically gets a workspace for its `default_branch` (defaults to `main`). `setup` commands run in new worktrees after creation.
 
 ## CLI
 
@@ -103,6 +94,10 @@ grove rm mono/feat-auth        # kill session + remove worktree
 grove list                     # show all workspaces and status
 grove config                   # open config in $EDITOR
 grove config --path            # print config file path
+grove notify "build done"      # send notification to current session
+grove notify --session grove/mono/main "deployed"
+grove notify clear             # clear notification for current session
+grove --version                # print version
 ```
 
 ## Sidebar Keybindings
@@ -110,13 +105,14 @@ grove config --path            # print config file path
 | Key | Action |
 |-----|--------|
 | `j` / `k` | Move cursor down / up |
-| `Enter` | Switch to workspace |
+| `Enter` | Switch to workspace (clears notification) |
 | `c` | Create new workspace |
 | `d` | Delete workspace (with confirmation) |
 | `R` | Rename workspace |
-| `o` | Collapse/expand repo group |
+| `C` | Clear notification on workspace |
+| `o` | Collapse/expand repo group (remembered across sessions) |
 | `/` | Filter workspaces |
-| `r` | Refresh |
+| `r` | Reload state and config |
 | `q` / `Esc` / `Ctrl+S` | Close sidebar |
 
 ## How It Works
@@ -130,7 +126,19 @@ grove config --path            # print config file path
 
 **State** lives at `~/.local/state/grove/state.json`. This is the source of truth for what workspaces exist. It's locked with `flock()` to prevent corruption from concurrent commands.
 
-**On startup**, grove reads config and state, creates any missing tmux sessions, binds the sidebar keybinding, and attaches. If a session was killed externally, grove recreates it — the worktree on disk is unaffected.
+**On startup**, grove reads config and state, creates default branch workspaces for all repos, creates any missing tmux sessions, binds the sidebar keybinding, and attaches. If a session was killed externally, grove recreates it — the worktree on disk is unaffected.
+
+## Notifications
+
+Any process running inside a grove tmux session can send a notification:
+
+```sh
+grove notify "build complete"
+```
+
+The sidebar shows a `★` badge next to workspaces with notifications. Hovering the cursor over a workspace shows the notification message in the footer. Switching to a workspace (`Enter`) or pressing `C` clears its notification.
+
+One notification per workspace — new notifications overwrite the previous one.
 
 ## Worktree Layout
 
