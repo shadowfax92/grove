@@ -169,6 +169,9 @@ func (m Model) updateBrowse(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "R":
 			return m.startRename()
 
+		case "C":
+			return m.clearCursorNotification()
+
 		case "/":
 			m.mode = modeFilter
 			m.filterInput.Focus()
@@ -224,6 +227,20 @@ func (m Model) updateFilter(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.filterText = m.filterInput.Value()
 	m.ensureCursorVisible()
 	return m, cmd
+}
+
+func (m Model) clearCursorNotification() (tea.Model, tea.Cmd) {
+	if m.cursor >= len(m.nodes) {
+		return m, nil
+	}
+	node := m.nodes[m.cursor]
+	if node.Kind != NodeWorkspace || node.Workspace == nil || node.Workspace.Notification == "" {
+		return m, nil
+	}
+	m.stateMgr.ClearNotification(m.st, node.Workspace.SessionName)
+	_ = m.stateMgr.Save(m.st)
+	m.rebuildTree()
+	return m, nil
 }
 
 func (m Model) cursorNotification() string {
@@ -529,7 +546,7 @@ func (m Model) View() string {
 	sep := m.styles.Separator.Render(strings.Repeat("─", max(m.width-2, 14)))
 	b.WriteString(" " + sep)
 	b.WriteString("\n")
-	help := " c new  d delete  R rename  / filter"
+	help := " c new  d delete  R rename  C clear  / filter"
 	b.WriteString(m.styles.HelpBar.Render(help))
 
 	return b.String()
