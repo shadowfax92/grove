@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"grove/internal/git"
@@ -19,11 +20,14 @@ func init() {
 }
 
 var rmCmd = &cobra.Command{
-	Use:   "rm <workspace>",
+	Use:   "rm [workspace]",
 	Short: "Remove a workspace",
-	Args:  cobra.ExactArgs(1),
+	Long: `Remove a workspace, its tmux session, and worktree (if applicable).
+
+  grove rm             — pick workspace via fzf
+  grove rm <workspace> — remove specific workspace`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		name := args[0]
 		force, _ := cmd.Flags().GetBool("force")
 
 		mgr, err := state.NewManager()
@@ -40,9 +44,21 @@ var rmCmd = &cobra.Command{
 			return err
 		}
 
-		ws := mgr.FindWorkspace(st, name)
-		if ws == nil {
-			return fmt.Errorf("workspace %q not found", name)
+		var ws *state.Workspace
+		if len(args) == 1 {
+			ws = mgr.FindWorkspace(st, args[0])
+			if ws == nil {
+				return fmt.Errorf("workspace %q not found", args[0])
+			}
+		} else {
+			picked, err := pickWorkspaceFzf(st)
+			if err != nil {
+				return err
+			}
+			ws = mgr.FindBySession(st, picked)
+			if ws == nil {
+				return fmt.Errorf("workspace not found")
+			}
 		}
 
 		if !force {
@@ -75,4 +91,29 @@ var rmCmd = &cobra.Command{
 		fmt.Printf("Removed workspace %q\n", ws.Name)
 		return nil
 	},
+}
+
+func pickWorkspaceFzf(st *state.State) (string, error) {
+	if len(st.Workspaces) == 0 {
+		return "", fmt.Errorf("no workspaces to remove")
+	}
+
+	var lines []string
+	for _, ws := range st.Workspaces {
+		lines = append(lines, ws.SessionName)
+	}
+
+	fzfCmd := exec.Command("fzf", "--prompt", "remove > ", "--height", "~40%", "--reverse")
+	fzfCmd.Stdin = strings.NewReader(strings.Join(lines, "\n"))
+	fzfCmd.Stderr = os.Stderr
+
+	out, err := fzfCmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 130 {
+			return "", fmt.Errorf("cancelled")
+		}
+		return "", fmt.Errorf("fzf failed: %w (is fzf installed?)", err)
+	}
+
+	return strings.TrimSpace(string(out)), nil
 }
