@@ -17,6 +17,7 @@ type Config struct {
 
 type SidebarConfig struct {
 	Width    string `yaml:"width"`
+	Height   string `yaml:"height"`
 	Position string `yaml:"position"`
 }
 
@@ -95,8 +96,11 @@ func (c *Config) resolve() error {
 	if c.Sidebar.Width == "" {
 		c.Sidebar.Width = "30%"
 	}
+	if c.Sidebar.Height == "" {
+		c.Sidebar.Height = "50%"
+	}
 	if c.Sidebar.Position == "" {
-		c.Sidebar.Position = "left"
+		c.Sidebar.Position = "center"
 	}
 
 	return nil
@@ -139,7 +143,8 @@ func createDefault(path string) (*Config, error) {
 		Prefix: "C-s",
 		Sidebar: SidebarConfig{
 			Width:    "30%",
-			Position: "left",
+			Height:   "50%",
+			Position: "center",
 		},
 		Repos:     []RepoConfig{},
 	}

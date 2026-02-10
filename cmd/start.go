@@ -86,16 +86,25 @@ var startCmd = &cobra.Command{
 
 		// Bind sidebar keybinding
 		sidebarCmd := fmt.Sprintf("grove sidebar")
-		popupArgs := []string{
-			"-n", cfg.Prefix,
-			"display-popup", "-x", "0", "-y", "0",
-			"-w", cfg.Sidebar.Width, "-h", "100%", "-E", sidebarCmd,
-		}
-		if cfg.Sidebar.Position == "right" {
+		var popupArgs []string
+		switch cfg.Sidebar.Position {
+		case "left":
+			popupArgs = []string{
+				"-n", cfg.Prefix,
+				"display-popup", "-x", "0", "-y", "0",
+				"-w", cfg.Sidebar.Width, "-h", cfg.Sidebar.Height, "-E", sidebarCmd,
+			}
+		case "right":
 			popupArgs = []string{
 				"-n", cfg.Prefix,
 				"display-popup", "-y", "0",
-				"-w", cfg.Sidebar.Width, "-h", "100%", "-E", sidebarCmd,
+				"-w", cfg.Sidebar.Width, "-h", cfg.Sidebar.Height, "-E", sidebarCmd,
+			}
+		default: // center
+			popupArgs = []string{
+				"-n", cfg.Prefix,
+				"display-popup",
+				"-w", cfg.Sidebar.Width, "-h", cfg.Sidebar.Height, "-E", sidebarCmd,
 			}
 		}
 		if err := tmux.BindKeyRaw(popupArgs...); err != nil {
