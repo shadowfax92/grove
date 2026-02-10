@@ -59,7 +59,7 @@ func createPlainWorkspace(cmd *cobra.Command, args []string, cfg *config.Config,
 		return fmt.Errorf("usage: grove new --plain <name>")
 	}
 	name := args[0]
-	sessionName := fmt.Sprintf("grove/%s", name)
+	sessionName := fmt.Sprintf("g/%s", name)
 
 	if mgr.FindBySession(st, sessionName) != nil {
 		return fmt.Errorf("workspace %q already exists", name)
@@ -106,7 +106,7 @@ func createWorktreeWorkspace(cmd *cobra.Command, args []string, cfg *config.Conf
 		return fmt.Errorf("repo %q not found in config", repoName)
 	}
 
-	sessionName := fmt.Sprintf("grove/%s/%s", repo.Name, branch)
+	sessionName := fmt.Sprintf("g/%s/%s", repo.Name, branch)
 	if mgr.FindBySession(st, sessionName) != nil {
 		return fmt.Errorf("workspace %q already exists", repo.Name+"/"+branch)
 	}

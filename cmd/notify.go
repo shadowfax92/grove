@@ -68,7 +68,7 @@ func resolveSession(flag string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("not in a tmux session (use --session to specify): %w", err)
 	}
-	if !strings.HasPrefix(session, "grove/") {
+	if !strings.HasPrefix(session, "g/") {
 		return "", fmt.Errorf("current session %q is not a grove workspace (use --session to specify)", session)
 	}
 	return session, nil

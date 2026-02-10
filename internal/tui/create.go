@@ -121,7 +121,7 @@ func (f CreateForm) createWorktree(branch string) tea.Msg {
 		branch = names.Generate(existing)
 	}
 
-	sessionName := fmt.Sprintf("grove/%s/%s", f.repoName, branch)
+	sessionName := fmt.Sprintf("g/%s/%s", f.repoName, branch)
 	if f.stateMgr.FindBySession(f.st, sessionName) != nil {
 		return createErrorMsg{fmt.Errorf("workspace %s/%s already exists", f.repoName, branch)}
 	}
@@ -165,7 +165,7 @@ func (f CreateForm) createPlain(name string) tea.Msg {
 		name = names.Generate(existing)
 	}
 
-	sessionName := fmt.Sprintf("grove/%s", name)
+	sessionName := fmt.Sprintf("g/%s", name)
 	if f.stateMgr.FindBySession(f.st, sessionName) != nil {
 		return createErrorMsg{fmt.Errorf("workspace %q already exists", name)}
 	}

@@ -46,7 +46,7 @@ var startCmd = &cobra.Command{
 			if branch == "" {
 				branch = "main"
 			}
-			sessionName := fmt.Sprintf("grove/%s/%s", repo.Name, branch)
+			sessionName := fmt.Sprintf("g/%s/%s", repo.Name, branch)
 			if mgr.FindBySession(st, sessionName) != nil {
 				continue
 			}

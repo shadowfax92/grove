@@ -311,7 +311,7 @@ func (m Model) createPlaceholderWorkspace(node TreeNode) (tea.Model, tea.Cmd) {
 	}
 
 	branch := node.DisplayName
-	sessionName := fmt.Sprintf("grove/%s/%s", repo.Name, branch)
+	sessionName := fmt.Sprintf("g/%s/%s", repo.Name, branch)
 
 	defaultBranch := repo.DefaultBranch
 	if defaultBranch == "" {
@@ -499,9 +499,9 @@ func (m Model) confirmRename() (tea.Model, tea.Cmd) {
 	// Build new session name
 	var newSessionName string
 	if ws.Type == "worktree" {
-		newSessionName = fmt.Sprintf("grove/%s/%s", ws.Repo, newName)
+		newSessionName = fmt.Sprintf("g/%s/%s", ws.Repo, newName)
 	} else {
-		newSessionName = fmt.Sprintf("grove/%s", newName)
+		newSessionName = fmt.Sprintf("g/%s", newName)
 	}
 
 	// Check for duplicates

@@ -124,7 +124,7 @@ func (m *StateManager) RemoveWorkspace(s *State, sessionName string) {
 }
 
 func (m *StateManager) FindWorkspace(s *State, name string) *Workspace {
-	sessionName := "grove/" + name
+	sessionName := "g/" + name
 	for i := range s.Workspaces {
 		if s.Workspaces[i].SessionName == sessionName || s.Workspaces[i].Name == name {
 			return &s.Workspaces[i]
