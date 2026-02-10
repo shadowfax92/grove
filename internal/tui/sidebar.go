@@ -170,6 +170,9 @@ func (m Model) updateBrowse(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "c":
 			return m.startCreate()
 
+		case "p":
+			return m.startCreatePlain()
+
 		case "d":
 			return m.startDelete()
 
@@ -378,6 +381,12 @@ func (m Model) saveCollapsed() {
 	}
 	m.st.Collapsed = collapsed
 	_ = m.stateMgr.Save(m.st)
+}
+
+func (m Model) startCreatePlain() (tea.Model, tea.Cmd) {
+	m.mode = modeCreate
+	m.createForm = NewCreateForm(CreatePlain, "", m.cfg, m.stateMgr, m.st)
+	return m, textinput.Blink
 }
 
 func (m Model) startCreate() (tea.Model, tea.Cmd) {
@@ -625,7 +634,7 @@ func (m Model) View() string {
 	sep := m.styles.Separator.Render(strings.Repeat("─", max(m.width-2, 14)))
 	b.WriteString(" " + sep)
 	b.WriteString("\n")
-	help := " c new  d delete  R rename  C clear  r reload  / filter"
+	help := " c new  p plain  d delete  R rename  C clear  r reload  / filter"
 	b.WriteString(m.styles.HelpBar.Render(help))
 
 	return b.String()
