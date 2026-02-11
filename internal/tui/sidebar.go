@@ -626,7 +626,7 @@ func (m Model) View() string {
 	// Notification preview
 	if notif := m.cursorNotification(); notif != "" {
 		b.WriteString("\n\n")
-		b.WriteString(m.styles.Notification.Render(fmt.Sprintf(" ★ %s", notif)))
+		b.WriteString(m.styles.Notification.Render(wrapText(" ★ "+notif, max(m.width, 10))))
 	}
 
 	// Help bar
@@ -645,4 +645,31 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func wrapText(text string, width int) string {
+	if width <= 0 || len(text) <= width {
+		return text
+	}
+
+	var b strings.Builder
+	words := strings.Fields(text)
+	lineLen := 0
+
+	for i, word := range words {
+		if i == 0 {
+			b.WriteString(word)
+			lineLen = len(word)
+			continue
+		}
+		if lineLen+1+len(word) > width {
+			b.WriteString("\n " + word)
+			lineLen = 1 + len(word)
+		} else {
+			b.WriteString(" " + word)
+			lineLen += 1 + len(word)
+		}
+	}
+
+	return b.String()
 }
