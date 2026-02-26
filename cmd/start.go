@@ -17,8 +17,9 @@ func init() {
 }
 
 var startCmd = &cobra.Command{
-	Use:   "start",
-	Short: "Start grove — create sessions, bind keys, and attach",
+	Use:     "start",
+	Annotations: map[string]string{"group": "Setup:"},
+	Short:       "Start grove — create sessions, bind keys, and attach",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {

@@ -20,8 +20,10 @@ func init() {
 }
 
 var rmCmd = &cobra.Command{
-	Use:   "rm [workspace]",
-	Short: "Remove a workspace",
+	Use:     "rm [workspace]",
+	Aliases:     []string{"remove"},
+	Annotations: map[string]string{"group": "Workspaces:"},
+	Short:       "Remove a workspace",
 	Long: `Remove a workspace, its tmux session, and worktree (if applicable).
 
   grove rm             — pick workspace via fzf
@@ -110,7 +112,7 @@ func pickWorkspaceFzf(st *state.State) (string, error) {
 	out, err := fzfCmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 130 {
-			return "", fmt.Errorf("cancelled")
+			return "", ErrCancelled
 		}
 		return "", fmt.Errorf("fzf failed: %w (is fzf installed?)", err)
 	}

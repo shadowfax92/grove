@@ -8,7 +8,18 @@ import (
 	"grove/internal/state"
 	"grove/internal/tmux"
 
+	"github.com/fatih/color"
 	"github.com/spf13/cobra"
+)
+
+var (
+	listHeaderColor  = color.New(color.Bold, color.Faint)
+	listRepoColor    = color.New(color.FgCyan)
+	listBranchColor  = color.New(color.FgHiGreen)
+	listSessionColor = color.New(color.Faint)
+	listRunningColor = color.New(color.FgGreen, color.Bold)
+	listStoppedColor = color.New(color.Faint)
+	listPlainColor   = color.New(color.FgYellow)
 )
 
 func init() {
@@ -16,8 +27,10 @@ func init() {
 }
 
 var listCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List all grove-managed workspaces",
+	Use:         "list",
+	Aliases:     []string{"ls", "l"},
+	Annotations: map[string]string{"group": "Workspaces:"},
+	Short:       "List all workspaces",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		mgr, err := state.NewManager()
 		if err != nil {
@@ -35,22 +48,33 @@ var listCmd = &cobra.Command{
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(w, "REPO\tWORKTREE\tSESSION\tSTATUS")
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+			listHeaderColor.Sprint("REPO"),
+			listHeaderColor.Sprint("WORKTREE"),
+			listHeaderColor.Sprint("SESSION"),
+			listHeaderColor.Sprint("STATUS"),
+		)
 
 		for _, ws := range st.Workspaces {
-			repo := "—"
+			repo := listPlainColor.Sprint("—")
 			worktree := ws.Name
 			if ws.Type == "worktree" {
-				repo = ws.Repo
-				worktree = ws.Branch
+				repo = listRepoColor.Sprint(ws.Repo)
+				worktree = listBranchColor.Sprint(ws.Branch)
+			} else {
+				worktree = listPlainColor.Sprint(ws.Name)
 			}
 
-			status := "stopped"
+			session := listSessionColor.Sprint(ws.SessionName)
+
+			var status string
 			if tmux.SessionExists(ws.SessionName) {
-				status = "running"
+				status = listRunningColor.Sprint("running")
+			} else {
+				status = listStoppedColor.Sprint("stopped")
 			}
 
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", repo, worktree, ws.SessionName, status)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", repo, worktree, session, status)
 		}
 
 		return w.Flush()

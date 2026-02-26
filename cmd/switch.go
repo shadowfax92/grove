@@ -17,8 +17,10 @@ func init() {
 }
 
 var switchCmd = &cobra.Command{
-	Use:   "switch [workspace]",
-	Short: "Switch to a workspace",
+	Use:     "switch [workspace]",
+	Aliases:     []string{"s", "sw"},
+	Annotations: map[string]string{"group": "Workspaces:"},
+	Short:       "Switch to a workspace",
 	Long: `Switch to a workspace session.
 
   grove switch             — pick workspace via fzf
@@ -89,7 +91,7 @@ func pickSessionFzf(st *state.State) (string, error) {
 	out, err := fzfCmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 130 {
-			return "", fmt.Errorf("cancelled")
+			return "", ErrCancelled
 		}
 		return "", fmt.Errorf("fzf failed: %w (is fzf installed?)", err)
 	}

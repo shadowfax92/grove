@@ -20,22 +20,27 @@ func init() {
 	newCmd.Flags().BoolP("plain", "p", false, "Create a plain workspace (not tied to a repo)")
 	newCmd.Flags().String("path", "", "Working directory for plain workspace (default: $HOME)")
 	newCmd.Flags().Bool("no-switch", false, "Don't switch to the new session after creation")
+	newCmd.Flags().Bool("cd", false, "Create workspace, print path (no tmux session)")
 	rootCmd.AddCommand(newCmd)
 }
 
 var newCmd = &cobra.Command{
-	Use:   "new [repo] [branch] | --plain [name]",
-	Short: "Create a new workspace",
+	Use:     "new [repo] [branch] | --plain [name]",
+	Aliases:     []string{"n"},
+	Annotations: map[string]string{"group": "Workspaces:"},
+	Short:       "Create a new workspace",
 	Long: `Create a new workspace and switch to it.
 
-  grove new              — pick repo via fzf, random branch name
-  grove new <repo>       — random branch name in repo
+  grove new              — pick repo via fzf, pick or auto-generate branch
+  grove new <repo>       — pick or auto-generate branch in repo
   grove new <repo> <br>  — specific branch in repo
-  grove new -p           — plain session with random name
-  grove new -p <name>    — plain session with given name`,
+  grove new -p           — plain session, pick or auto-generate name
+  grove new -p <name>    — plain session with given name
+  grove new --cd         — create worktree, print path: cd (grove n --cd)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		plain, _ := cmd.Flags().GetBool("plain")
 		noSwitch, _ := cmd.Flags().GetBool("no-switch")
+		dirOnly, _ := cmd.Flags().GetBool("cd")
 
 		cfg, err := config.Load()
 		if err != nil {
@@ -57,13 +62,13 @@ var newCmd = &cobra.Command{
 		}
 
 		if plain {
-			return createPlainWorkspace(cmd, args, cfg, mgr, st, noSwitch)
+			return createPlainWorkspace(cmd, args, cfg, mgr, st, noSwitch, dirOnly)
 		}
-		return createWorktreeWorkspace(cmd, args, cfg, mgr, st, noSwitch)
+		return createWorktreeWorkspace(cmd, args, cfg, mgr, st, noSwitch, dirOnly)
 	},
 }
 
-func createPlainWorkspace(cmd *cobra.Command, args []string, _ *config.Config, mgr *state.StateManager, st *state.State, noSwitch bool) error {
+func createPlainWorkspace(cmd *cobra.Command, args []string, _ *config.Config, mgr *state.StateManager, st *state.State, noSwitch, dirOnly bool) error {
 	var name string
 	if len(args) >= 1 {
 		name = args[0]
@@ -90,6 +95,11 @@ func createPlainWorkspace(cmd *cobra.Command, args []string, _ *config.Config, m
 		dir, _ = os.UserHomeDir()
 	}
 
+	if dirOnly {
+		fmt.Println(dir)
+		return nil
+	}
+
 	if err := tmux.NewSession(sessionName, dir); err != nil {
 		return fmt.Errorf("creating session: %w", err)
 	}
@@ -114,7 +124,7 @@ func createPlainWorkspace(cmd *cobra.Command, args []string, _ *config.Config, m
 	return nil
 }
 
-func createWorktreeWorkspace(_ *cobra.Command, args []string, cfg *config.Config, mgr *state.StateManager, st *state.State, noSwitch bool) error {
+func createWorktreeWorkspace(_ *cobra.Command, args []string, cfg *config.Config, mgr *state.StateManager, st *state.State, noSwitch, dirOnly bool) error {
 	var repoName, branch string
 
 	switch len(args) {
@@ -188,6 +198,11 @@ func createWorktreeWorkspace(_ *cobra.Command, args []string, cfg *config.Config
 		}
 	}
 
+	if dirOnly {
+		fmt.Println(worktreePath)
+		return nil
+	}
+
 	if err := tmux.NewSession(sessionName, worktreePath); err != nil {
 		return fmt.Errorf("creating session: %w", err)
 	}
@@ -235,7 +250,7 @@ func pickRepoFzf(cfg *config.Config) (string, error) {
 	out, err := fzfCmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 130 {
-			return "", fmt.Errorf("cancelled")
+			return "", ErrCancelled
 		}
 		return "", fmt.Errorf("fzf failed: %w (is fzf installed?)", err)
 	}
@@ -260,7 +275,7 @@ func promptNameFzf(prompt, header string, options []string) (string, error) {
 
 	out, err := fzfCmd.Output()
 	if err != nil && len(out) == 0 {
-		return "", fmt.Errorf("cancelled")
+		return "", ErrCancelled
 	}
 
 	outputLines := strings.Split(strings.TrimSpace(string(out)), "\n")

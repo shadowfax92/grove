@@ -16,8 +16,10 @@ func init() {
 }
 
 var configCmd = &cobra.Command{
-	Use:   "config",
-	Short: "Open grove config in $EDITOR",
+	Use:     "config",
+	Aliases:     []string{"cfg"},
+	Annotations: map[string]string{"group": "Setup:"},
+	Short:       "Open grove config in $EDITOR",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		path, err := config.DefaultConfigPath()
 		if err != nil {
