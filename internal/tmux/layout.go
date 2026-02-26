@@ -19,18 +19,51 @@ func CreateSessionWithLayout(name, startDir string, layout *config.LayoutConfig)
 	return applyLayout(name, startDir, layout.Windows)
 }
 
-// ApplyLayoutToCurrentSession applies a layout to an existing session.
+// ApplyLayoutToCurrentSession creates new windows with the layout in an existing session.
 func ApplyLayoutToCurrentSession(sessionName, startDir string, layout *config.LayoutConfig) error {
 	if layout == nil || len(layout.Windows) == 0 {
 		return fmt.Errorf("layout has no windows")
 	}
-	return applyLayout(sessionName, startDir, layout.Windows)
+	return addWindows(sessionName, startDir, layout.Windows)
 }
 
+func baseIndex() int {
+	out, err := run("show-option", "-gv", "base-index")
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(out))
+	return n
+}
+
+// addWindows creates all layout windows as new windows (never touches existing windows).
+func addWindows(sessionName, startDir string, windows []config.WindowConfig) error {
+	for _, win := range windows {
+		if _, err := run("new-window", "-t", sessionName, "-n", win.Name, "-c", startDir); err != nil {
+			return fmt.Errorf("creating window %s: %w", win.Name, err)
+		}
+		// Get the index of the window we just created (it's the active one)
+		out, err := run("display-message", "-t", sessionName, "-p", "#{window_index}")
+		if err != nil {
+			return fmt.Errorf("getting window index: %w", err)
+		}
+		winIdx, _ := strconv.Atoi(strings.TrimSpace(out))
+
+		if err := applyPanes(sessionName, winIdx, startDir, win); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// applyLayout is used for new sessions where window 0 (base-index) is the initial empty window.
 func applyLayout(sessionName, startDir string, windows []config.WindowConfig) error {
+	base := baseIndex()
+
 	for i, win := range windows {
+		winTarget := fmt.Sprintf("%s:%d", sessionName, base+i)
 		if i == 0 {
-			if _, err := run("rename-window", "-t", sessionName+":0", win.Name); err != nil {
+			if _, err := run("rename-window", "-t", winTarget, win.Name); err != nil {
 				return fmt.Errorf("renaming window: %w", err)
 			}
 		} else {
@@ -39,13 +72,14 @@ func applyLayout(sessionName, startDir string, windows []config.WindowConfig) er
 			}
 		}
 
-		if err := applyPanes(sessionName, i, startDir, win); err != nil {
+		if err := applyPanes(sessionName, base+i, startDir, win); err != nil {
 			return err
 		}
 	}
 
-	run("select-window", "-t", sessionName+":0")
-	run("select-pane", "-t", sessionName+":0.0")
+	firstWin := fmt.Sprintf("%s:%d", sessionName, base)
+	run("select-window", "-t", firstWin)
+	run("select-pane", "-t", firstWin+".0")
 
 	return nil
 }

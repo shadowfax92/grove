@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -75,9 +76,6 @@ func pickLayoutFzf(cfg *config.Config) (string, error) {
 	if len(names) == 0 {
 		return "", fmt.Errorf("no layouts defined in config")
 	}
-	if len(names) == 1 {
-		return names[0], nil
-	}
 
 	fzfCmd := exec.Command("fzf",
 		"--prompt", "layout > ",
@@ -86,6 +84,7 @@ func pickLayoutFzf(cfg *config.Config) (string, error) {
 		"--reverse",
 	)
 	fzfCmd.Stdin = strings.NewReader(strings.Join(names, "\n"))
+	fzfCmd.Stderr = os.Stderr
 
 	out, err := fzfCmd.Output()
 	if err != nil {
