@@ -18,6 +18,7 @@ import (
 
 func init() {
 	newCmd.Flags().Bool("no-switch", false, "Don't switch to the new session after creation")
+	newCmd.Flags().Bool("no-prepare", false, "Skip prepare commands before worktree creation")
 	newCmd.Flags().Bool("cd", false, "Create workspace, print path (no tmux session)")
 	rootCmd.AddCommand(newCmd)
 }
@@ -36,6 +37,7 @@ var newCmd = &cobra.Command{
   grove new --cd         — create workspace, print path: cd (gv n --cd)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		noSwitch, _ := cmd.Flags().GetBool("no-switch")
+		noPrepare, _ := cmd.Flags().GetBool("no-prepare")
 		dirOnly, _ := cmd.Flags().GetBool("cd")
 
 		cfg, err := config.Load()
@@ -74,7 +76,7 @@ var newCmd = &cobra.Command{
 
 		repo := cfg.FindRepo(name)
 		if repo != nil {
-			return createWorktree(repo, branch, cfg, mgr, st, noSwitch, dirOnly)
+			return createWorktree(repo, branch, cfg, mgr, st, noSwitch, noPrepare, dirOnly)
 		}
 		return createPlain(name, mgr, st, noSwitch, dirOnly)
 	},
@@ -117,7 +119,7 @@ func createPlain(name string, mgr *state.StateManager, st *state.State, noSwitch
 	return nil
 }
 
-func createWorktree(repo *config.RepoConfig, branch string, cfg *config.Config, mgr *state.StateManager, st *state.State, noSwitch, dirOnly bool) error {
+func createWorktree(repo *config.RepoConfig, branch string, cfg *config.Config, mgr *state.StateManager, st *state.State, noSwitch, noPrepare, dirOnly bool) error {
 	if branch == "" {
 		existing := existingWorktreeNames(st, repo.Name)
 
@@ -150,6 +152,19 @@ func createWorktree(repo *config.RepoConfig, branch string, cfg *config.Config, 
 	}
 
 	worktreePath := filepath.Join(repo.Path, ".grove", "worktrees", branch)
+
+	if !noPrepare {
+		for _, prepCmd := range repo.Prepare {
+			fmt.Printf("Preparing: %s\n", prepCmd)
+			c := exec.Command("sh", "-c", prepCmd)
+			c.Dir = repo.Path
+			c.Stdout = os.Stdout
+			c.Stderr = os.Stderr
+			if err := c.Run(); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: prepare command failed: %v\n", err)
+			}
+		}
+	}
 
 	if err := git.EnsureGitignore(repo.Path); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not update .gitignore: %v\n", err)

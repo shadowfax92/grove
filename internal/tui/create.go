@@ -128,6 +128,14 @@ func (f CreateForm) createWorktree(branch string) tea.Msg {
 
 	worktreePath := filepath.Join(f.repo.Path, ".grove", "worktrees", branch)
 
+	for _, prepCmd := range f.repo.Prepare {
+		c := exec.Command("sh", "-c", prepCmd)
+		c.Dir = f.repo.Path
+		if err := c.Run(); err != nil {
+			return createErrorMsg{fmt.Errorf("prepare %q failed: %w", prepCmd, err)}
+		}
+	}
+
 	_ = git.EnsureGitignore(f.repo.Path)
 
 	if err := git.AddWorktree(f.repo.Path, worktreePath, branch); err != nil {
