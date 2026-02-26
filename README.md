@@ -2,7 +2,7 @@
 
 # 🌳 Grove
 
-**A tmux workspace manager built around git worktrees.**
+**Tmux workspaces powered by git worktrees.**
 
 *One sidebar. All your repos, branches, and sessions.*
 
@@ -23,7 +23,7 @@ You work across multiple repos, each with several worktrees for feature branches
 
 ## Install
 
-Requires Go 1.21+ and tmux 3.3+.
+Requires Go 1.21+, tmux 3.3+, and [fzf](https://github.com/junegunn/fzf).
 
 ```sh
 git clone <repo-url> grove
@@ -38,6 +38,12 @@ Make sure `~/bin` is on your `PATH`. Then disable terminal flow control so `Ctrl
 stty -ixon
 ```
 
+**Fish shell helper** — install the `gv` wrapper function for shorter commands and `--cd` support:
+
+```sh
+make fish       # copies gv.fish to ~/.config/fish/functions/
+```
+
 Optionally, add the sidebar keybinding to `~/.tmux.conf` so it survives config reloads without needing to re-run `grove start`:
 
 ```tmux
@@ -50,8 +56,12 @@ bind-key -n C-s display-popup -x 0 -y 0 -w "30%" -h "100%" -E "grove sidebar"
 # 1. Edit config to add your repos
 grove config
 
-# 2. Start grove — creates sessions, binds Ctrl+S, attaches to tmux
+# 2. Start grove — binds Ctrl+S and attaches to tmux
 grove start
+
+# 3. Create workspaces
+grove new mono feat-auth    # worktree in mono repo
+grove new notes             # plain session (name doesn't match a repo)
 ```
 
 Once attached, press `Ctrl+S` to open the sidebar.
@@ -70,35 +80,39 @@ sidebar:
 repos:
   - path: ~/code/mono
     name: mono
-    default_branch: main
     setup:
       - bun install
       - cp .env.example .env
 
   - path: ~/code/workers
     name: workers
-    default_branch: main
     setup:
       - npm install
 ```
 
-**`repos`** — git repositories to manage. Each gets its own group in the sidebar. On `grove start`, every repo automatically gets a workspace for its `default_branch` (defaults to `main`). `setup` commands run in new worktrees after creation.
+**`repos`** — git repositories to manage. Each gets its own group in the sidebar. `setup` commands run in new worktrees after creation. Repos only appear in the sidebar once they have at least one workspace.
 
 ## CLI
 
 ```sh
-grove start                    # start grove, attach to tmux
-grove new mono feat-auth       # create worktree + session in mono
-grove new --plain notes        # create standalone session
+grove start                    # bind keys, reconcile sessions, attach to tmux
+grove new                      # pick repo or type session name via fzf
+grove new mono                 # pick or auto-generate branch in mono
+grove new mono feat-auth       # worktree + session for specific branch
+grove new notes                # plain session (name doesn't match a repo)
+grove new --cd mono feat-auth  # create worktree, print path (no session)
 grove rm mono/feat-auth        # kill session + remove worktree
 grove list                     # show all workspaces and status
+grove switch                   # pick workspace via fzf and switch to it
 grove config                   # open config in $EDITOR
 grove config --path            # print config file path
 grove notify "build done"      # send notification to current session
-grove notify --session grove/mono/main "deployed"
+grove notify --session g/mono/main "deployed"
 grove notify clear             # clear notification for current session
 grove --version                # print version
 ```
+
+Most commands have short aliases: `new`→`n`, `list`→`ls`/`l`, `switch`→`s`/`sw`, `rm`→`remove`, `config`→`cfg`.
 
 ## Sidebar Keybindings
 
@@ -122,11 +136,11 @@ grove --version                # print version
 - **Repo workspace** — tied to a git worktree. Created under `<repo>/.grove/worktrees/<name>/`. The tmux session starts in the worktree directory.
 - **Plain workspace** — standalone session at any directory. Not tied to a repo.
 
-**Session names** follow the pattern `grove/<repo>/<branch>` for repo workspaces and `grove/<name>` for plain workspaces.
+**Session names** follow the pattern `g/<repo>/<branch>` for repo workspaces and `g/<name>` for plain workspaces.
 
 **State** lives at `~/.local/state/grove/state.json`. This is the source of truth for what workspaces exist. It's locked with `flock()` to prevent corruption from concurrent commands.
 
-**On startup**, grove reads config and state, creates default branch workspaces for all repos, creates any missing tmux sessions, binds the sidebar keybinding, and attaches. If a session was killed externally, grove recreates it — the worktree on disk is unaffected.
+**On startup**, grove reads config and state, recreates any missing tmux sessions for existing workspaces, binds the sidebar keybinding, and attaches. If a session was killed externally, grove recreates it — the worktree on disk is unaffected.
 
 ## Notifications
 
