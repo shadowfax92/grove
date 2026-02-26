@@ -7,6 +7,7 @@ build:
 
 install: build
 	cp grove $(PREFIX)/grove
+	codesign --force --sign - $(PREFIX)/grove
 
 fish:
 	mkdir -p $(FISH_FUNCTIONS)
