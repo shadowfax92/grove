@@ -81,6 +81,34 @@ func ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
 	return worktrees, nil
 }
 
+func ListBranches(repoPath string) ([]string, error) {
+	cmd := exec.Command("git", "branch", "-a", "--format", "%(refname:short)")
+	cmd.Dir = repoPath
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	var branches []string
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		name := line
+		if strings.HasPrefix(name, "origin/") {
+			name = name[len("origin/"):]
+		}
+		if name == "" || name == "HEAD" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		branches = append(branches, name)
+	}
+	return branches, nil
+}
+
 func EnsureGitignore(repoPath string) error {
 	gitignorePath := filepath.Join(repoPath, ".gitignore")
 	entry := ".grove/"

@@ -68,8 +68,16 @@ func createPlainWorkspace(cmd *cobra.Command, args []string, _ *config.Config, m
 	if len(args) >= 1 {
 		name = args[0]
 	} else {
-		existing := existingPlainNames(st)
-		name = names.Generate(existing)
+		prompted, err := promptNameFzf("name > ", "Type a name or enter for random", nil)
+		if err != nil {
+			return err
+		}
+		if prompted != "" {
+			name = prompted
+		} else {
+			existing := existingPlainNames(st)
+			name = names.Generate(existing)
+		}
 	}
 
 	sessionName := fmt.Sprintf("g/%s", name)
@@ -130,7 +138,28 @@ func createWorktreeWorkspace(_ *cobra.Command, args []string, cfg *config.Config
 
 	if branch == "" {
 		existing := existingWorktreeNames(st, repoName)
-		branch = names.Generate(existing)
+
+		branches, _ := git.ListBranches(repo.Path)
+		usedSet := make(map[string]bool)
+		for _, e := range existing {
+			usedSet[e] = true
+		}
+		var available []string
+		for _, b := range branches {
+			if !usedSet[b] {
+				available = append(available, b)
+			}
+		}
+
+		prompted, err := promptNameFzf("branch > ", "Select branch, type new name, or enter for random", available)
+		if err != nil {
+			return err
+		}
+		if prompted != "" {
+			branch = prompted
+		} else {
+			branch = names.Generate(existing)
+		}
 	}
 
 	sessionName := fmt.Sprintf("g/%s/%s", repo.Name, branch)
@@ -212,6 +241,41 @@ func pickRepoFzf(cfg *config.Config) (string, error) {
 	}
 
 	return strings.TrimSpace(string(out)), nil
+}
+
+const autoGenerateLabel = "(auto-generate)"
+
+func promptNameFzf(prompt, header string, options []string) (string, error) {
+	lines := append([]string{autoGenerateLabel}, options...)
+
+	fzfCmd := exec.Command("fzf",
+		"--prompt", prompt,
+		"--header", header,
+		"--print-query",
+		"--height", "~40%",
+		"--reverse",
+	)
+	fzfCmd.Stdin = strings.NewReader(strings.Join(lines, "\n"))
+	fzfCmd.Stderr = os.Stderr
+
+	out, err := fzfCmd.Output()
+	if err != nil && len(out) == 0 {
+		return "", fmt.Errorf("cancelled")
+	}
+
+	outputLines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	result := ""
+	if len(outputLines) >= 2 && outputLines[1] != "" {
+		result = outputLines[1]
+	} else if len(outputLines) >= 1 {
+		result = outputLines[0]
+	}
+	result = strings.TrimSpace(result)
+
+	if result == autoGenerateLabel || result == "" {
+		return "", nil
+	}
+	return result, nil
 }
 
 func existingPlainNames(st *state.State) []string {
