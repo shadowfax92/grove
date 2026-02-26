@@ -17,28 +17,24 @@ import (
 )
 
 func init() {
-	newCmd.Flags().BoolP("plain", "p", false, "Create a plain workspace (not tied to a repo)")
-	newCmd.Flags().String("path", "", "Working directory for plain workspace (default: $HOME)")
 	newCmd.Flags().Bool("no-switch", false, "Don't switch to the new session after creation")
 	newCmd.Flags().Bool("cd", false, "Create workspace, print path (no tmux session)")
 	rootCmd.AddCommand(newCmd)
 }
 
 var newCmd = &cobra.Command{
-	Use:     "new [repo] [branch] | --plain [name]",
+	Use:         "new [name] [branch]",
 	Aliases:     []string{"n"},
 	Annotations: map[string]string{"group": "Workspaces:"},
 	Short:       "Create a new workspace",
 	Long: `Create a new workspace and switch to it.
 
-  grove new              — pick repo via fzf, pick or auto-generate branch
+  grove new              — pick repo or type session name via fzf
   grove new <repo>       — pick or auto-generate branch in repo
   grove new <repo> <br>  — specific branch in repo
-  grove new -p           — plain session, pick or auto-generate name
-  grove new -p <name>    — plain session with given name
-  grove new --cd         — create worktree, print path: cd (grove n --cd)`,
+  grove new <name>       — plain session (if name doesn't match a repo)
+  grove new --cd         — create workspace, print path: cd (gv n --cd)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		plain, _ := cmd.Flags().GetBool("plain")
 		noSwitch, _ := cmd.Flags().GetBool("no-switch")
 		dirOnly, _ := cmd.Flags().GetBool("cd")
 
@@ -61,39 +57,36 @@ var newCmd = &cobra.Command{
 			return err
 		}
 
-		if plain {
-			return createPlainWorkspace(cmd, args, cfg, mgr, st, noSwitch, dirOnly)
+		var name, branch string
+		switch len(args) {
+		case 0:
+			picked, err := pickRepoOrNameFzf(cfg)
+			if err != nil {
+				return err
+			}
+			name = picked
+		case 1:
+			name = args[0]
+		default:
+			name = args[0]
+			branch = args[1]
 		}
-		return createWorktreeWorkspace(cmd, args, cfg, mgr, st, noSwitch, dirOnly)
+
+		repo := cfg.FindRepo(name)
+		if repo != nil {
+			return createWorktree(repo, branch, cfg, mgr, st, noSwitch, dirOnly)
+		}
+		return createPlain(name, mgr, st, noSwitch, dirOnly)
 	},
 }
 
-func createPlainWorkspace(cmd *cobra.Command, args []string, _ *config.Config, mgr *state.StateManager, st *state.State, noSwitch, dirOnly bool) error {
-	var name string
-	if len(args) >= 1 {
-		name = args[0]
-	} else {
-		prompted, err := promptNameFzf("name > ", "Type a name or enter for random", nil)
-		if err != nil {
-			return err
-		}
-		if prompted != "" {
-			name = prompted
-		} else {
-			existing := existingPlainNames(st)
-			name = names.Generate(existing)
-		}
-	}
-
+func createPlain(name string, mgr *state.StateManager, st *state.State, noSwitch, dirOnly bool) error {
 	sessionName := fmt.Sprintf("g/%s", name)
 	if mgr.FindBySession(st, sessionName) != nil {
 		return fmt.Errorf("workspace %q already exists", name)
 	}
 
-	dir, _ := cmd.Flags().GetString("path")
-	if dir == "" {
-		dir, _ = os.UserHomeDir()
-	}
+	dir, _ := os.UserHomeDir()
 
 	if dirOnly {
 		fmt.Println(dir)
@@ -116,7 +109,7 @@ func createPlainWorkspace(cmd *cobra.Command, args []string, _ *config.Config, m
 		return err
 	}
 
-	fmt.Printf("Created plain workspace %q\n", name)
+	fmt.Printf("Created workspace %q\n", name)
 
 	if !noSwitch && tmux.IsInsideTmux() {
 		return tmux.SwitchClient(sessionName)
@@ -124,30 +117,9 @@ func createPlainWorkspace(cmd *cobra.Command, args []string, _ *config.Config, m
 	return nil
 }
 
-func createWorktreeWorkspace(_ *cobra.Command, args []string, cfg *config.Config, mgr *state.StateManager, st *state.State, noSwitch, dirOnly bool) error {
-	var repoName, branch string
-
-	switch len(args) {
-	case 0:
-		picked, err := pickRepoFzf(cfg)
-		if err != nil {
-			return err
-		}
-		repoName = picked
-	case 1:
-		repoName = args[0]
-	default:
-		repoName = args[0]
-		branch = args[1]
-	}
-
-	repo := cfg.FindRepo(repoName)
-	if repo == nil {
-		return fmt.Errorf("repo %q not found in config", repoName)
-	}
-
+func createWorktree(repo *config.RepoConfig, branch string, _ *config.Config, mgr *state.StateManager, st *state.State, noSwitch, dirOnly bool) error {
 	if branch == "" {
-		existing := existingWorktreeNames(st, repoName)
+		existing := existingWorktreeNames(st, repo.Name)
 
 		branches, _ := git.ListBranches(repo.Path)
 		usedSet := make(map[string]bool)
@@ -230,32 +202,40 @@ func createWorktreeWorkspace(_ *cobra.Command, args []string, cfg *config.Config
 	return nil
 }
 
-func pickRepoFzf(cfg *config.Config) (string, error) {
-	if len(cfg.Repos) == 0 {
-		return "", fmt.Errorf("no repos configured")
-	}
-	if len(cfg.Repos) == 1 {
-		return cfg.Repos[0].Name, nil
-	}
-
+func pickRepoOrNameFzf(cfg *config.Config) (string, error) {
 	var repoNames []string
 	for _, r := range cfg.Repos {
 		repoNames = append(repoNames, r.Name)
 	}
 
-	fzfCmd := exec.Command("fzf", "--prompt", "repo > ", "--height", "~40%", "--reverse")
+	fzfCmd := exec.Command("fzf",
+		"--prompt", "repo or name > ",
+		"--header", "Pick a repo or type a session name",
+		"--print-query",
+		"--height", "~40%",
+		"--reverse",
+	)
 	fzfCmd.Stdin = strings.NewReader(strings.Join(repoNames, "\n"))
 	fzfCmd.Stderr = os.Stderr
 
 	out, err := fzfCmd.Output()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 130 {
-			return "", ErrCancelled
-		}
-		return "", fmt.Errorf("fzf failed: %w (is fzf installed?)", err)
+	if err != nil && len(out) == 0 {
+		return "", ErrCancelled
 	}
 
-	return strings.TrimSpace(string(out)), nil
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	result := ""
+	if len(lines) >= 2 && lines[1] != "" {
+		result = lines[1]
+	} else if len(lines) >= 1 {
+		result = lines[0]
+	}
+	result = strings.TrimSpace(result)
+
+	if result == "" {
+		return "", ErrCancelled
+	}
+	return result, nil
 }
 
 const autoGenerateLabel = "(auto-generate)"
@@ -291,16 +271,6 @@ func promptNameFzf(prompt, header string, options []string) (string, error) {
 		return "", nil
 	}
 	return result, nil
-}
-
-func existingPlainNames(st *state.State) []string {
-	var result []string
-	for _, ws := range st.Workspaces {
-		if ws.Type == "plain" {
-			result = append(result, ws.Name)
-		}
-	}
-	return result
 }
 
 func existingWorktreeNames(st *state.State, repoName string) []string {
