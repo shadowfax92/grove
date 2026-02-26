@@ -21,17 +21,31 @@ func AddWorktree(repoPath, destPath, branch string) error {
 		return fmt.Errorf("creating worktree parent dir: %w", err)
 	}
 
+	// Try creating a new branch
 	cmd := exec.Command("git", "worktree", "add", destPath, "-b", branch)
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+
+	outStr := strings.TrimSpace(string(out))
+
+	// Branch already checked out in another worktree
+	if strings.Contains(outStr, "is already used by worktree") || strings.Contains(outStr, "is already checked out") {
+		return fmt.Errorf("branch %q is already checked out in another worktree", branch)
+	}
+
+	// Branch might already exist — try without -b
+	cmd = exec.Command("git", "worktree", "add", destPath, branch)
+	cmd.Dir = repoPath
+	out, err = cmd.CombinedOutput()
 	if err != nil {
-		// Branch might already exist — try without -b
-		cmd = exec.Command("git", "worktree", "add", destPath, branch)
-		cmd.Dir = repoPath
-		out, err = cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("git worktree add: %s (%w)", strings.TrimSpace(string(out)), err)
+		outStr = strings.TrimSpace(string(out))
+		if strings.Contains(outStr, "is already used by worktree") || strings.Contains(outStr, "is already checked out") {
+			return fmt.Errorf("branch %q is already checked out in another worktree", branch)
 		}
+		return fmt.Errorf("git worktree add: %s (%w)", outStr, err)
 	}
 	return nil
 }
