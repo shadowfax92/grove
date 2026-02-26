@@ -17,6 +17,7 @@ You work across multiple repos, each with several worktrees for feature branches
 - 🔄 **Session persistence** — if a tmux session dies, grove recreates it on next start
 - 🎲 **Auto-generated names** — empty name → random animal (`mono/beluga`, `workers/pangolin`)
 - 📁 **Plain workspaces** — standalone sessions for scratch, notes, anything
+- 🖥️ **Session layouts** — define tmux windows and pane splits per repo, applied automatically
 - 🔔 **Notifications** — any CLI in a grove session can send notifications to the sidebar
 
 ---
@@ -77,9 +78,26 @@ sidebar:
   width: "30%"
   position: "left"    # left | right
 
+layouts:
+  dev:
+    windows:
+      - name: code
+        split: horizontal
+        panes:
+          - name: editor
+            size: 70%
+            cmd: nvim .
+          - name: terminal
+            size: 30%
+      - name: server
+        panes:
+          - name: app
+            cmd: bun run dev
+
 repos:
   - path: ~/code/mono
     name: mono
+    layout: dev
     setup:
       - bun install
       - cp .env.example .env
@@ -90,7 +108,15 @@ repos:
       - npm install
 ```
 
-**`repos`** — git repositories to manage. Each gets its own group in the sidebar. `setup` commands run in new worktrees after creation. Repos only appear in the sidebar once they have at least one workspace.
+**`layouts`** — named tmux session layouts. Each layout has one or more `windows`, each with named `panes`. Options:
+
+- **`split`** — `horizontal` (side by side, default) or `vertical` (stacked)
+- **`size`** — percentage of the window (e.g. `70%`). Unspecified panes split remaining space equally.
+- **`cmd`** — command to run in the pane. Empty = shell prompt.
+
+Layouts are applied when creating workspaces (`grove new`) and when recreating dead sessions (`grove start`). The `setup` commands (like `bun install`) run once during worktree creation, before the layout is applied. Pane `cmd` commands run inside tmux every time the session is created.
+
+**`repos`** — git repositories to manage. Each gets its own group in the sidebar. Set `layout` to reference a named layout. `setup` commands run in new worktrees after creation. Repos only appear in the sidebar once they have at least one workspace.
 
 ## CLI
 
@@ -101,6 +127,8 @@ grove new mono                 # pick or auto-generate branch in mono
 grove new mono feat-auth       # worktree + session for specific branch
 grove new notes                # plain session (name doesn't match a repo)
 grove new --cd mono feat-auth  # create worktree, print path (no session)
+grove layout                   # pick layout via fzf, apply to current session
+grove layout dev               # apply named layout to current session
 grove rm mono/feat-auth        # kill session + remove worktree
 grove list                     # show all workspaces and status
 grove switch                   # pick workspace via fzf and switch to it
@@ -112,7 +140,7 @@ grove notify clear             # clear notification for current session
 grove --version                # print version
 ```
 
-Most commands have short aliases: `new`→`n`, `list`→`ls`/`l`, `switch`→`s`/`sw`, `rm`→`remove`, `config`→`cfg`.
+Most commands have short aliases: `new`→`n`, `list`→`ls`/`l`, `switch`→`s`/`sw`, `layout`→`lo`, `rm`→`remove`, `config`→`cfg`.
 
 ## Sidebar Keybindings
 
