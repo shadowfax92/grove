@@ -117,7 +117,7 @@ func createPlain(name string, mgr *state.StateManager, st *state.State, noSwitch
 	return nil
 }
 
-func createWorktree(repo *config.RepoConfig, branch string, _ *config.Config, mgr *state.StateManager, st *state.State, noSwitch, dirOnly bool) error {
+func createWorktree(repo *config.RepoConfig, branch string, cfg *config.Config, mgr *state.StateManager, st *state.State, noSwitch, dirOnly bool) error {
 	if branch == "" {
 		existing := existingWorktreeNames(st, repo.Name)
 
@@ -175,7 +175,8 @@ func createWorktree(repo *config.RepoConfig, branch string, _ *config.Config, mg
 		return nil
 	}
 
-	if err := tmux.NewSession(sessionName, worktreePath); err != nil {
+	layout := cfg.FindLayout(repo.Layout)
+	if err := tmux.CreateSessionWithLayout(sessionName, worktreePath, layout); err != nil {
 		return fmt.Errorf("creating session: %w", err)
 	}
 

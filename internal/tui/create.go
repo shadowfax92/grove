@@ -142,7 +142,8 @@ func (f CreateForm) createWorktree(branch string) tea.Msg {
 		}
 	}
 
-	if err := tmux.NewSession(sessionName, worktreePath); err != nil {
+	layout := f.cfg.FindLayout(f.repo.Layout)
+	if err := tmux.CreateSessionWithLayout(sessionName, worktreePath, layout); err != nil {
 		return createErrorMsg{fmt.Errorf("creating session: %w", err)}
 	}
 

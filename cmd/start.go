@@ -54,7 +54,13 @@ var startCmd = &cobra.Command{
 				home, _ := os.UserHomeDir()
 				dir = home
 			}
-			if err := tmux.NewSession(ws.SessionName, dir); err != nil {
+			var layout *config.LayoutConfig
+			if ws.Type == "worktree" {
+				if repo := cfg.FindRepo(ws.Repo); repo != nil {
+					layout = cfg.FindLayout(repo.Layout)
+				}
+			}
+			if err := tmux.CreateSessionWithLayout(ws.SessionName, dir, layout); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: failed to create session %s: %v\n", ws.SessionName, err)
 			}
 		}
