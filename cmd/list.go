@@ -43,7 +43,7 @@ var listCmd = &cobra.Command{
 		}
 
 		if len(st.Workspaces) == 0 {
-			fmt.Println("No workspaces. Run 'grove start' or 'grove new' to create one.")
+			fmt.Println("No workspaces. Run 'grove new' to create one.")
 			return nil
 		}
 

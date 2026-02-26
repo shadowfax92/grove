@@ -41,28 +41,6 @@ var startCmd = &cobra.Command{
 			return fmt.Errorf("loading state: %w", err)
 		}
 
-		// Create default branch workspace for every repo in config
-		for _, repo := range cfg.Repos {
-			branch := repo.DefaultBranch
-			if branch == "" {
-				branch = "main"
-			}
-			sessionName := fmt.Sprintf("g/%s/%s", repo.Name, branch)
-			if mgr.FindBySession(st, sessionName) != nil {
-				continue
-			}
-			ws := state.Workspace{
-				Name:         fmt.Sprintf("%s/%s", repo.Name, branch),
-				Type:         "worktree",
-				Repo:         repo.Name,
-				RepoPath:     repo.Path,
-				WorktreePath: repo.Path,
-				Branch:       branch,
-				SessionName:  sessionName,
-			}
-			mgr.AddWorkspace(st, ws)
-		}
-
 		// Reconcile: ensure tmux sessions exist for all workspaces
 		for _, ws := range st.Workspaces {
 			if tmux.SessionExists(ws.SessionName) {

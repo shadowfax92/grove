@@ -30,7 +30,6 @@ func (n TreeNode) IsRepo() bool {
 func buildTree(st *state.State, cfg *config.Config, currentSession string) []TreeNode {
 	var nodes []TreeNode
 
-	// Group worktree workspaces by repo, in config order
 	repoWorkspaces := make(map[string][]state.Workspace)
 	for _, ws := range st.Workspaces {
 		if ws.Type == "worktree" {
@@ -40,36 +39,23 @@ func buildTree(st *state.State, cfg *config.Config, currentSession string) []Tre
 
 	for _, repo := range cfg.Repos {
 		wsList := repoWorkspaces[repo.Name]
+		if len(wsList) == 0 {
+			continue
+		}
 		nodes = append(nodes, TreeNode{
 			Kind:        NodeRepo,
 			RepoName:    repo.Name,
 			DisplayName: repo.Name,
 		})
-		if len(wsList) == 0 {
-			branch := repo.DefaultBranch
-			if branch == "" {
-				branch = "main"
-			}
+		for i := range wsList {
 			nodes = append(nodes, TreeNode{
 				Kind:        NodeWorkspace,
 				RepoName:    repo.Name,
-				DisplayName: branch,
-				Placeholder: true,
+				Workspace:   &wsList[i],
+				DisplayName: wsList[i].Branch,
 			})
-		} else {
-			for i := range wsList {
-				nodes = append(nodes, TreeNode{
-					Kind:        NodeWorkspace,
-					RepoName:    repo.Name,
-					Workspace:   &wsList[i],
-					DisplayName: wsList[i].Branch,
-				})
-			}
 		}
 	}
-
-	// Also include repos from state that might not be in config order
-	// (already handled above via config order)
 
 	// Plain workspaces at the bottom
 	for i := range st.Workspaces {
