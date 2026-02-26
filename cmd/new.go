@@ -161,7 +161,7 @@ func createWorktree(repo *config.RepoConfig, branch string, cfg *config.Config, 
 			c.Stdout = os.Stdout
 			c.Stderr = os.Stderr
 			if err := c.Run(); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: prepare command failed: %v\n", err)
+				return fmt.Errorf("prepare command %q failed: %w", prepCmd, err)
 			}
 		}
 	}

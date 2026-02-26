@@ -21,32 +21,66 @@ func AddWorktree(repoPath, destPath, branch string) error {
 		return fmt.Errorf("creating worktree parent dir: %w", err)
 	}
 
-	// Try checking out an existing branch (local or remote tracking)
+	if localBranchExists(repoPath, branch) {
+		return worktreeAddExisting(repoPath, destPath, branch)
+	}
+
+	if remoteBranchExists(repoPath, branch) {
+		return worktreeAddTracking(repoPath, destPath, branch)
+	}
+
+	// New branch from HEAD
+	return worktreeAddNew(repoPath, destPath, branch)
+}
+
+func worktreeAddExisting(repoPath, destPath, branch string) error {
 	cmd := exec.Command("git", "worktree", "add", destPath, branch)
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
-	if err == nil {
-		return nil
+	if err != nil {
+		return worktreeError(branch, out, err)
 	}
+	return nil
+}
 
+func worktreeAddTracking(repoPath, destPath, branch string) error {
+	cmd := exec.Command("git", "worktree", "add", destPath, "--track", "-b", branch, "origin/"+branch)
+	cmd.Dir = repoPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return worktreeError(branch, out, err)
+	}
+	return nil
+}
+
+func worktreeAddNew(repoPath, destPath, branch string) error {
+	cmd := exec.Command("git", "worktree", "add", destPath, "-b", branch)
+	cmd.Dir = repoPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return worktreeError(branch, out, err)
+	}
+	return nil
+}
+
+func worktreeError(branch string, out []byte, err error) error {
 	outStr := strings.TrimSpace(string(out))
-
 	if strings.Contains(outStr, "is already used by worktree") || strings.Contains(outStr, "is already checked out") {
 		return fmt.Errorf("branch %q is already checked out in another worktree", branch)
 	}
+	return fmt.Errorf("git worktree add: %s (%w)", outStr, err)
+}
 
-	// Branch doesn't exist — create a new one from HEAD
-	cmd = exec.Command("git", "worktree", "add", destPath, "-b", branch)
+func localBranchExists(repoPath, branch string) bool {
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
 	cmd.Dir = repoPath
-	out, err = cmd.CombinedOutput()
-	if err != nil {
-		outStr = strings.TrimSpace(string(out))
-		if strings.Contains(outStr, "is already used by worktree") || strings.Contains(outStr, "is already checked out") {
-			return fmt.Errorf("branch %q is already checked out in another worktree", branch)
-		}
-		return fmt.Errorf("git worktree add: %s (%w)", outStr, err)
-	}
-	return nil
+	return cmd.Run() == nil
+}
+
+func remoteBranchExists(repoPath, branch string) bool {
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+branch)
+	cmd.Dir = repoPath
+	return cmd.Run() == nil
 }
 
 func RemoveWorktree(repoPath, worktreePath string) error {
