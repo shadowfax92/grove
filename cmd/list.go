@@ -20,6 +20,8 @@ var (
 	listRunningColor = color.New(color.FgGreen, color.Bold)
 	listStoppedColor = color.New(color.Faint)
 	listPlainColor   = color.New(color.FgYellow)
+	listDimColor     = color.New(color.Faint)
+	listNotifColor   = color.New(color.FgYellow, color.Bold)
 )
 
 func init() {
@@ -48,11 +50,12 @@ var listCmd = &cobra.Command{
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			listHeaderColor.Sprint("REPO"),
 			listHeaderColor.Sprint("WORKTREE"),
 			listHeaderColor.Sprint("SESSION"),
 			listHeaderColor.Sprint("STATUS"),
+			listHeaderColor.Sprint("LAST USED"),
 		)
 
 		for _, ws := range st.Workspaces {
@@ -67,14 +70,22 @@ var listCmd = &cobra.Command{
 
 			session := listSessionColor.Sprint(ws.SessionName)
 
-			var status string
+			var statusCol string
 			if tmux.SessionExists(ws.SessionName) {
-				status = listRunningColor.Sprint("running")
+				statusCol = listRunningColor.Sprint("running")
 			} else {
-				status = listStoppedColor.Sprint("stopped")
+				statusCol = listStoppedColor.Sprint("stopped")
 			}
 
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", repo, worktree, session, status)
+			lastUsed := listDimColor.Sprint("—")
+			if ws.LastUsedAt != "" {
+				lastUsed = listDimColor.Sprint(state.RelativeTime(ws.LastUsedAt) + " ago")
+			}
+			if len(ws.Notifications) > 0 {
+				lastUsed += " " + listNotifColor.Sprint("★")
+			}
+
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", repo, worktree, session, statusCol, lastUsed)
 		}
 
 		return w.Flush()

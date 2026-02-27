@@ -20,15 +20,15 @@ func init() {
 }
 
 var rmCmd = &cobra.Command{
-	Use:     "rm [workspace]",
+	Use:     "rm [workspace...]",
 	Aliases:     []string{"remove"},
 	Annotations: map[string]string{"group": "Workspaces:"},
-	Short:       "Remove a workspace",
-	Long: `Remove a workspace, its tmux session, and worktree (if applicable).
+	Short:       "Remove one or more workspaces",
+	Long: `Remove workspaces, their tmux sessions, and worktrees (if applicable).
 
-  grove rm             — pick workspace via fzf
-  grove rm <workspace> — remove specific workspace`,
-	Args: cobra.MaximumNArgs(1),
+  grove rm                    — pick workspaces via fzf (Tab to multi-select)
+  grove rm <ws1> <ws2> ...    — remove specific workspaces`,
+	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		force, _ := cmd.Flags().GetBool("force")
 
@@ -46,25 +46,39 @@ var rmCmd = &cobra.Command{
 			return err
 		}
 
-		var ws *state.Workspace
-		if len(args) == 1 {
-			ws = mgr.FindWorkspace(st, args[0])
-			if ws == nil {
-				return fmt.Errorf("workspace %q not found", args[0])
+		var targets []*state.Workspace
+		if len(args) > 0 {
+			for _, arg := range args {
+				ws := mgr.FindWorkspace(st, arg)
+				if ws == nil {
+					return fmt.Errorf("workspace %q not found", arg)
+				}
+				targets = append(targets, ws)
 			}
 		} else {
-			picked, err := pickWorkspaceFzf(st)
+			picked, err := pickWorkspacesFzf(st)
 			if err != nil {
 				return err
 			}
-			ws = mgr.FindBySession(st, picked)
-			if ws == nil {
-				return fmt.Errorf("workspace not found")
+			for _, sessionName := range picked {
+				ws := mgr.FindBySession(st, sessionName)
+				if ws == nil {
+					return fmt.Errorf("workspace not found for session %q", sessionName)
+				}
+				targets = append(targets, ws)
 			}
 		}
 
 		if !force {
-			fmt.Printf("Remove workspace %q? [y/N] ", ws.Name)
+			if len(targets) == 1 {
+				fmt.Printf("Remove workspace %q? [y/N] ", targets[0].Name)
+			} else {
+				fmt.Printf("Remove %d workspaces?\n", len(targets))
+				for _, ws := range targets {
+					fmt.Printf("  %s\n", ws.Name)
+				}
+				fmt.Print("[y/N] ")
+			}
 			reader := bufio.NewReader(os.Stdin)
 			answer, _ := reader.ReadString('\n')
 			if strings.TrimSpace(strings.ToLower(answer)) != "y" {
@@ -73,31 +87,30 @@ var rmCmd = &cobra.Command{
 			}
 		}
 
-		if tmux.SessionExists(ws.SessionName) {
-			if err := tmux.KillSession(ws.SessionName); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: failed to kill session: %v\n", err)
+		for _, ws := range targets {
+			if tmux.SessionExists(ws.SessionName) {
+				if err := tmux.KillSession(ws.SessionName); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to kill session %s: %v\n", ws.SessionName, err)
+				}
 			}
-		}
 
-		if ws.Type == "worktree" && ws.WorktreePath != ws.RepoPath {
-			if err := git.RemoveWorktree(ws.RepoPath, ws.WorktreePath); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: failed to remove worktree: %v\n", err)
+			if ws.Type == "worktree" && ws.WorktreePath != ws.RepoPath {
+				if err := git.RemoveWorktree(ws.RepoPath, ws.WorktreePath); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to remove worktree: %v\n", err)
+				}
 			}
+
+			mgr.RemoveWorkspace(st, ws.SessionName)
+			fmt.Printf("Removed workspace %q\n", ws.Name)
 		}
 
-		mgr.RemoveWorkspace(st, ws.SessionName)
-		if err := mgr.Save(st); err != nil {
-			return err
-		}
-
-		fmt.Printf("Removed workspace %q\n", ws.Name)
-		return nil
+		return mgr.Save(st)
 	},
 }
 
-func pickWorkspaceFzf(st *state.State) (string, error) {
+func pickWorkspacesFzf(st *state.State) ([]string, error) {
 	if len(st.Workspaces) == 0 {
-		return "", fmt.Errorf("no workspaces to remove")
+		return nil, fmt.Errorf("no workspaces to remove")
 	}
 
 	var lines []string
@@ -105,17 +118,29 @@ func pickWorkspaceFzf(st *state.State) (string, error) {
 		lines = append(lines, ws.SessionName)
 	}
 
-	fzfCmd := exec.Command("fzf", "--prompt", "remove > ", "--height", "~40%", "--reverse")
+	fzfCmd := exec.Command("fzf", "--multi", "--prompt", "remove > ", "--height", "~40%", "--reverse")
 	fzfCmd.Stdin = strings.NewReader(strings.Join(lines, "\n"))
 	fzfCmd.Stderr = os.Stderr
 
 	out, err := fzfCmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 130 {
-			return "", ErrCancelled
+			return nil, ErrCancelled
 		}
-		return "", fmt.Errorf("fzf failed: %w (is fzf installed?)", err)
+		return nil, fmt.Errorf("fzf failed: %w (is fzf installed?)", err)
 	}
 
-	return strings.TrimSpace(string(out)), nil
+	var selected []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			selected = append(selected, line)
+		}
+	}
+
+	if len(selected) == 0 {
+		return nil, ErrCancelled
+	}
+
+	return selected, nil
 }

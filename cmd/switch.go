@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"grove/internal/state"
@@ -67,6 +68,21 @@ var switchCmd = &cobra.Command{
 			}
 		}
 
+		// Update state: clear notifications, touch, set last active
+		if err := mgr.Lock(); err != nil {
+			return err
+		}
+		st, err = mgr.Load()
+		if err != nil {
+			mgr.Unlock()
+			return err
+		}
+		mgr.ClearNotifications(st, ws.SessionName)
+		mgr.TouchWorkspace(st, ws.SessionName)
+		st.LastActive = ws.SessionName
+		_ = mgr.Save(st)
+		mgr.Unlock()
+
 		if tmux.IsInsideTmux() {
 			return tmux.SwitchClient(ws.SessionName)
 		}
@@ -79,12 +95,49 @@ func pickSessionFzf(st *state.State) (string, error) {
 		return "", fmt.Errorf("no workspaces")
 	}
 
+	// Sort by LastUsedAt descending
+	sorted := make([]state.Workspace, len(st.Workspaces))
+	copy(sorted, st.Workspaces)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].LastUsedAt == "" && sorted[j].LastUsedAt == "" {
+			return false
+		}
+		if sorted[i].LastUsedAt == "" {
+			return false
+		}
+		if sorted[j].LastUsedAt == "" {
+			return true
+		}
+		return sorted[i].LastUsedAt > sorted[j].LastUsedAt
+	})
+
+	exe, _ := os.Executable()
+
 	var lines []string
-	for _, ws := range st.Workspaces {
-		lines = append(lines, ws.SessionName)
+	for _, ws := range sorted {
+		badge := "  "
+		if len(ws.Notifications) > 0 {
+			badge = "★ "
+		}
+		age := ""
+		if ws.LastUsedAt != "" {
+			age = state.RelativeTime(ws.LastUsedAt)
+		}
+		display := fmt.Sprintf("%s\t%s%-30s %s", ws.SessionName, badge, ws.Name, age)
+		lines = append(lines, display)
 	}
 
-	fzfCmd := exec.Command("fzf", "--prompt", "switch > ", "--height", "~40%", "--reverse")
+	fzfArgs := []string{
+		"--prompt", "switch > ",
+		"--height", "~40%",
+		"--reverse",
+		"--delimiter", "\t",
+		"--with-nth", "2",
+		"--preview", fmt.Sprintf("%s notify --session '{1}' 2>/dev/null", exe),
+		"--preview-window", "bottom:3:wrap:nohidden",
+	}
+
+	fzfCmd := exec.Command("fzf", fzfArgs...)
 	fzfCmd.Stdin = strings.NewReader(strings.Join(lines, "\n"))
 	fzfCmd.Stderr = os.Stderr
 
@@ -96,5 +149,10 @@ func pickSessionFzf(st *state.State) (string, error) {
 		return "", fmt.Errorf("fzf failed: %w (is fzf installed?)", err)
 	}
 
-	return strings.TrimSpace(string(out)), nil
+	// fzf returns the full line; extract session name before the tab
+	line := strings.TrimSpace(string(out))
+	if idx := strings.Index(line, "\t"); idx >= 0 {
+		return line[:idx], nil
+	}
+	return line, nil
 }

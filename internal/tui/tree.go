@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"grove/internal/config"
@@ -42,6 +43,18 @@ func buildTree(st *state.State, cfg *config.Config, currentSession string) []Tre
 		if len(wsList) == 0 {
 			continue
 		}
+		sort.Slice(wsList, func(i, j int) bool {
+			if wsList[i].LastUsedAt == "" && wsList[j].LastUsedAt == "" {
+				return false
+			}
+			if wsList[i].LastUsedAt == "" {
+				return false
+			}
+			if wsList[j].LastUsedAt == "" {
+				return true
+			}
+			return wsList[i].LastUsedAt > wsList[j].LastUsedAt
+		})
 		nodes = append(nodes, TreeNode{
 			Kind:        NodeRepo,
 			RepoName:    repo.Name,
@@ -57,16 +70,31 @@ func buildTree(st *state.State, cfg *config.Config, currentSession string) []Tre
 		}
 	}
 
-	// Plain workspaces at the bottom
+	// Plain workspaces at the bottom, sorted by LastUsedAt
+	var plainWs []*state.Workspace
 	for i := range st.Workspaces {
-		ws := &st.Workspaces[i]
-		if ws.Type == "plain" {
-			nodes = append(nodes, TreeNode{
-				Kind:        NodeWorkspace,
-				Workspace:   ws,
-				DisplayName: ws.Name,
-			})
+		if st.Workspaces[i].Type == "plain" {
+			plainWs = append(plainWs, &st.Workspaces[i])
 		}
+	}
+	sort.Slice(plainWs, func(i, j int) bool {
+		if plainWs[i].LastUsedAt == "" && plainWs[j].LastUsedAt == "" {
+			return false
+		}
+		if plainWs[i].LastUsedAt == "" {
+			return false
+		}
+		if plainWs[j].LastUsedAt == "" {
+			return true
+		}
+		return plainWs[i].LastUsedAt > plainWs[j].LastUsedAt
+	})
+	for _, ws := range plainWs {
+		nodes = append(nodes, TreeNode{
+			Kind:        NodeWorkspace,
+			Workspace:   ws,
+			DisplayName: ws.Name,
+		})
 	}
 
 	return nodes
@@ -98,7 +126,7 @@ func renderTree(nodes []TreeNode, cursor int, expanded map[string]bool, currentS
 
 		case NodeWorkspace:
 			isActive := node.Workspace != nil && node.Workspace.SessionName == currentSession
-			hasNotif := node.Workspace != nil && node.Workspace.Notification != ""
+			hasNotif := node.Workspace != nil && len(node.Workspace.Notifications) > 0
 			prefix := "  "
 			if node.RepoName != "" {
 				prefix = "    "

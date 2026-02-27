@@ -16,17 +16,23 @@ type State struct {
 	Collapsed  []string    `json:"collapsed,omitempty"`
 }
 
+type Notification struct {
+	Message   string `json:"message"`
+	CreatedAt string `json:"created_at"`
+}
+
 type Workspace struct {
-	Name         string `json:"name"`
-	Type         string `json:"type"` // "worktree" or "plain"
-	Repo         string `json:"repo,omitempty"`
-	RepoPath     string `json:"repo_path,omitempty"`
-	WorktreePath string `json:"worktree_path,omitempty"`
-	Branch       string `json:"branch,omitempty"`
-	Path         string `json:"path,omitempty"`
-	SessionName  string `json:"session_name"`
-	CreatedAt    string `json:"created_at"`
-	Notification string `json:"notification,omitempty"`
+	Name          string         `json:"name"`
+	Type          string         `json:"type"` // "worktree" or "plain"
+	Repo          string         `json:"repo,omitempty"`
+	RepoPath      string         `json:"repo_path,omitempty"`
+	WorktreePath  string         `json:"worktree_path,omitempty"`
+	Branch        string         `json:"branch,omitempty"`
+	Path          string         `json:"path,omitempty"`
+	SessionName   string         `json:"session_name"`
+	CreatedAt     string         `json:"created_at"`
+	LastUsedAt    string         `json:"last_used_at,omitempty"`
+	Notifications []Notification `json:"notifications,omitempty"`
 }
 
 type StateManager struct {
@@ -107,8 +113,12 @@ func (m *StateManager) Save(s *State) error {
 }
 
 func (m *StateManager) AddWorkspace(s *State, w Workspace) {
+	now := time.Now().UTC().Format(time.RFC3339)
 	if w.CreatedAt == "" {
-		w.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+		w.CreatedAt = now
+	}
+	if w.LastUsedAt == "" {
+		w.LastUsedAt = now
 	}
 	s.Workspaces = append(s.Workspaces, w)
 }
@@ -142,15 +152,50 @@ func (m *StateManager) FindBySession(s *State, sessionName string) *Workspace {
 	return nil
 }
 
-func (m *StateManager) SetNotification(s *State, sessionName, message string) {
+func (m *StateManager) AppendNotification(s *State, sessionName, message string) {
 	for i := range s.Workspaces {
 		if s.Workspaces[i].SessionName == sessionName {
-			s.Workspaces[i].Notification = message
+			s.Workspaces[i].Notifications = append(s.Workspaces[i].Notifications, Notification{
+				Message:   message,
+				CreatedAt: time.Now().UTC().Format(time.RFC3339),
+			})
 			return
 		}
 	}
 }
 
-func (m *StateManager) ClearNotification(s *State, sessionName string) {
-	m.SetNotification(s, sessionName, "")
+func (m *StateManager) ClearNotifications(s *State, sessionName string) {
+	for i := range s.Workspaces {
+		if s.Workspaces[i].SessionName == sessionName {
+			s.Workspaces[i].Notifications = nil
+			return
+		}
+	}
+}
+
+func (m *StateManager) TouchWorkspace(s *State, sessionName string) {
+	for i := range s.Workspaces {
+		if s.Workspaces[i].SessionName == sessionName {
+			s.Workspaces[i].LastUsedAt = time.Now().UTC().Format(time.RFC3339)
+			return
+		}
+	}
+}
+
+func RelativeTime(rfc3339 string) string {
+	t, err := time.Parse(time.RFC3339, rfc3339)
+	if err != nil {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
 }

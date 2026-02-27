@@ -107,6 +107,12 @@ var startCmd = &cobra.Command{
 			return nil
 		}
 
+		mgr.TouchWorkspace(st, target)
+		st.LastActive = target
+		if err := mgr.Save(st); err != nil {
+			return fmt.Errorf("saving state: %w", err)
+		}
+
 		// Must unlock before attaching since attach blocks
 		mgr.Unlock()
 

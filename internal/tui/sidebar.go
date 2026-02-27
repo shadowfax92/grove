@@ -244,24 +244,29 @@ func (m Model) clearCursorNotification() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	node := m.nodes[m.cursor]
-	if node.Kind != NodeWorkspace || node.Workspace == nil || node.Workspace.Notification == "" {
+	if node.Kind != NodeWorkspace || node.Workspace == nil || len(node.Workspace.Notifications) == 0 {
 		return m, nil
 	}
-	m.stateMgr.ClearNotification(m.st, node.Workspace.SessionName)
+	m.stateMgr.ClearNotifications(m.st, node.Workspace.SessionName)
 	_ = m.stateMgr.Save(m.st)
 	m.rebuildTree()
 	return m, nil
 }
 
-func (m Model) cursorNotification() string {
+func (m Model) cursorNotifications() string {
 	if m.cursor >= len(m.nodes) {
 		return ""
 	}
 	node := m.nodes[m.cursor]
-	if node.Kind != NodeWorkspace || node.Workspace == nil {
+	if node.Kind != NodeWorkspace || node.Workspace == nil || len(node.Workspace.Notifications) == 0 {
 		return ""
 	}
-	return node.Workspace.Notification
+	var lines []string
+	for _, n := range node.Workspace.Notifications {
+		age := state.RelativeTime(n.CreatedAt)
+		lines = append(lines, fmt.Sprintf(" ★ %-30s %s ago", n.Message, age))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) selectWorkspace() (tea.Model, tea.Cmd) {
@@ -281,10 +286,8 @@ func (m Model) selectWorkspace() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Clear notification on switch
-	m.stateMgr.ClearNotification(m.st, node.Workspace.SessionName)
-
-	// Update last_active
+	m.stateMgr.ClearNotifications(m.st, node.Workspace.SessionName)
+	m.stateMgr.TouchWorkspace(m.st, node.Workspace.SessionName)
 	m.st.LastActive = node.Workspace.SessionName
 	_ = m.stateMgr.Save(m.st)
 
@@ -353,6 +356,7 @@ func (m Model) createPlaceholderWorkspace(node TreeNode) (tea.Model, tea.Cmd) {
 		SessionName:  sessionName,
 	}
 	m.stateMgr.AddWorkspace(m.st, ws)
+	m.stateMgr.TouchWorkspace(m.st, sessionName)
 	m.st.LastActive = sessionName
 	_ = m.stateMgr.Save(m.st)
 
@@ -631,9 +635,9 @@ func (m Model) View() string {
 	}
 
 	// Notification preview
-	if notif := m.cursorNotification(); notif != "" {
+	if notifs := m.cursorNotifications(); notifs != "" {
 		b.WriteString("\n\n")
-		b.WriteString(m.styles.Notification.Render(wrapText(" ★ "+notif, max(m.width, 10))))
+		b.WriteString(m.styles.Notification.Render(notifs))
 	}
 
 	// Help bar
