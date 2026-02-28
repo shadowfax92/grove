@@ -25,8 +25,10 @@ func init() {
 }
 
 var notifyCmd = &cobra.Command{
-	Use:   "notify [message | clear]",
-	Short: "Show or send notifications for a workspace",
+	Use:         "notify [message | clear]",
+	Aliases:     []string{"notif", "no"},
+	Annotations: map[string]string{"group": "Workspaces:"},
+	Short:       "Show or send notifications for a workspace",
 	Long: `Manage notifications for a grove workspace.
 
   grove notify              — show notifications for current session
