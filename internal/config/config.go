@@ -12,7 +12,12 @@ import (
 type Config struct {
 	Prefix  string        `yaml:"prefix"`
 	Sidebar SidebarConfig `yaml:"sidebar"`
+	Notify  NotifyConfig  `yaml:"notify"`
 	Repos   []RepoConfig  `yaml:"repos"`
+}
+
+type NotifyConfig struct {
+	Forward []string `yaml:"forward"`
 }
 
 type SidebarConfig struct {

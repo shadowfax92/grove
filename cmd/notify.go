@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 
+	"grove/internal/config"
 	"grove/internal/state"
 	"grove/internal/tmux"
 
@@ -115,10 +117,23 @@ var notifyCmd = &cobra.Command{
 			message := strings.Join(args, " ")
 			mgr.AppendNotification(st, sessionName, message)
 			fmt.Printf("%s %s\n", notifBadgeColor.Sprint("★"), notifMsgColor.Sprint(message))
+			forwardNotify(sessionName, message)
 		}
 
 		return mgr.Save(st)
 	},
+}
+
+func forwardNotify(sessionName, message string) {
+	cfg, err := config.LoadFast()
+	if err != nil || len(cfg.Notify.Forward) == 0 {
+		return
+	}
+	r := strings.NewReplacer("$SESSION", sessionName, "$MESSAGE", message)
+	for _, tmpl := range cfg.Notify.Forward {
+		cmd := r.Replace(tmpl)
+		_ = exec.Command("sh", "-c", cmd).Run()
+	}
 }
 
 func resolveSession(flag string) (string, error) {
