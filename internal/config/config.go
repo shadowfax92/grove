@@ -4,33 +4,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Prefix  string                  `yaml:"prefix"`
-	Sidebar SidebarConfig           `yaml:"sidebar"`
-	Layouts map[string]LayoutConfig `yaml:"layouts"`
-	Repos   []RepoConfig            `yaml:"repos"`
-}
-
-type LayoutConfig struct {
-	Windows []WindowConfig `yaml:"windows"`
-}
-
-type WindowConfig struct {
-	Name  string       `yaml:"name"`
-	Split string       `yaml:"split"` // "horizontal" (side by side, default) or "vertical" (stacked)
-	Panes []PaneConfig `yaml:"panes"`
-}
-
-type PaneConfig struct {
-	Name string `yaml:"name"`
-	Cmd  string `yaml:"cmd"`
-	Size string `yaml:"size"` // e.g. "70%"
+	Prefix  string        `yaml:"prefix"`
+	Sidebar SidebarConfig `yaml:"sidebar"`
+	Repos   []RepoConfig  `yaml:"repos"`
 }
 
 type SidebarConfig struct {
@@ -127,31 +109,6 @@ func (c *Config) resolve() error {
 }
 
 func (c *Config) validate() error {
-	for name, layout := range c.Layouts {
-		if len(layout.Windows) == 0 {
-			return fmt.Errorf("layout %s: must have at least one window", name)
-		}
-		for _, win := range layout.Windows {
-			if win.Name == "" {
-				return fmt.Errorf("layout %s: window name is required", name)
-			}
-			if win.Split != "" && win.Split != "horizontal" && win.Split != "vertical" {
-				return fmt.Errorf("layout %s: window %s: split must be \"horizontal\" or \"vertical\"", name, win.Name)
-			}
-			if len(win.Panes) == 0 {
-				return fmt.Errorf("layout %s: window %s: must have at least one pane", name, win.Name)
-			}
-			for j, pane := range win.Panes {
-				if pane.Size != "" {
-					s := strings.TrimSuffix(strings.TrimSpace(pane.Size), "%")
-					if _, err := strconv.Atoi(s); err != nil {
-						return fmt.Errorf("layout %s: window %s: pane %d: invalid size %q", name, win.Name, j, pane.Size)
-					}
-				}
-			}
-		}
-	}
-
 	seen := make(map[string]bool)
 	for _, r := range c.Repos {
 		if seen[r.Name] {
@@ -166,10 +123,6 @@ func (c *Config) validate() error {
 		if !info.IsDir() {
 			return fmt.Errorf("repo %s: path %s is not a directory", r.Name, r.Path)
 		}
-
-		if r.Layout != "" && c.FindLayout(r.Layout) == nil {
-			return fmt.Errorf("repo %s: layout %q not found", r.Name, r.Layout)
-		}
 	}
 	return nil
 }
@@ -181,24 +134,6 @@ func (c *Config) FindRepo(name string) *RepoConfig {
 		}
 	}
 	return nil
-}
-
-func (c *Config) FindLayout(name string) *LayoutConfig {
-	if c.Layouts == nil || name == "" {
-		return nil
-	}
-	if l, ok := c.Layouts[name]; ok {
-		return &l
-	}
-	return nil
-}
-
-func (c *Config) LayoutNames() []string {
-	var names []string
-	for name := range c.Layouts {
-		names = append(names, name)
-	}
-	return names
 }
 
 func createDefault(path string) (*Config, error) {

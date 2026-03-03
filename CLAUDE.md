@@ -17,7 +17,7 @@ There are no tests. The module name is `grove` (not a URL-style module path).
 
 ## Architecture
 
-**CLI layer** (`cmd/`): Cobra commands — `start`, `new`, `rm`, `list`, `config`, `notify`, `sidebar`. Each file registers its command via `init()` → `rootCmd.AddCommand()`.
+**CLI layer** (`cmd/`): Cobra commands — `start`, `new`, `rm`, `list`, `config`, `notify`, `sidebar`. Each file registers its command via `init()` → `rootCmd.AddCommand()`. Layouts are managed by the separate `layouts` CLI — grove shells out to `layouts new <session> <layout> -d <dir>` when creating sessions with layouts.
 
 **Internal packages** (`internal/`):
 - `config/` — YAML config at `~/.config/grove/config.yaml`. `Load()` validates repo paths; `LoadFast()` skips validation (used by sidebar for speed).

@@ -308,13 +308,13 @@ func (m Model) selectWorkspace() (tea.Model, tea.Cmd) {
 		if node.Workspace.Type == "plain" {
 			dir = node.Workspace.Path
 		}
-		var layout *config.LayoutConfig
+		var layoutName string
 		if node.Workspace.Type == "worktree" {
 			if repo := m.cfg.FindRepo(node.Workspace.Repo); repo != nil {
-				layout = m.cfg.FindLayout(repo.Layout)
+				layoutName = repo.Layout
 			}
 		}
-		_ = tmux.CreateSessionWithLayout(node.Workspace.SessionName, dir, layout)
+		_ = tmux.CreateSessionWithLayout(node.Workspace.SessionName, dir, layoutName)
 	}
 
 	return m, tea.Sequence(
@@ -351,8 +351,7 @@ func (m Model) createPlaceholderWorkspace(node TreeNode) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	layout := m.cfg.FindLayout(repo.Layout)
-	if err := tmux.CreateSessionWithLayout(sessionName, worktreePath, layout); err != nil {
+	if err := tmux.CreateSessionWithLayout(sessionName, worktreePath, repo.Layout); err != nil {
 		m.err = fmt.Errorf("creating session: %w", err)
 		return m, nil
 	}
