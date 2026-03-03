@@ -95,6 +95,10 @@ type stateLoadedMsg struct {
 
 type errMsg struct{ err error }
 
+type deleteCleanupFailedMsg struct {
+	workspace state.Workspace
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -119,6 +123,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		_ = m.stateMgr.Save(m.st)
 		m.rebuildTree()
 		m.mode = modeBrowse
+		return m, nil
+
+	case deleteCleanupFailedMsg:
+		m.stateMgr.AddWorkspace(m.st, msg.workspace)
+		_ = m.stateMgr.Save(m.st)
+		m.rebuildTree()
+		m.ensureCursorVisible()
 		return m, nil
 
 	case createCancelledMsg:
@@ -436,17 +447,9 @@ func (m Model) confirmDelete() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	ws := m.deleteTarget.Workspace
+	wsCopy := *m.deleteTarget.Workspace
 
-	if tmux.SessionExists(ws.SessionName) {
-		_ = tmux.KillSession(ws.SessionName)
-	}
-
-	if ws.Type == "worktree" && ws.WorktreePath != ws.RepoPath {
-		_ = git.RemoveWorktree(ws.RepoPath, ws.WorktreePath)
-	}
-
-	m.stateMgr.RemoveWorkspace(m.st, ws.SessionName)
+	m.stateMgr.RemoveWorkspace(m.st, wsCopy.SessionName)
 	_ = m.stateMgr.Save(m.st)
 
 	m.rebuildTree()
@@ -454,7 +457,17 @@ func (m Model) confirmDelete() (tea.Model, tea.Cmd) {
 	m.deleteTarget = nil
 	m.ensureCursorVisible()
 
-	return m, nil
+	return m, func() tea.Msg {
+		if tmux.SessionExists(wsCopy.SessionName) {
+			_ = tmux.KillSession(wsCopy.SessionName)
+		}
+		if wsCopy.Type == "worktree" && wsCopy.WorktreePath != wsCopy.RepoPath {
+			if err := git.RemoveWorktree(wsCopy.RepoPath, wsCopy.WorktreePath); err != nil {
+				return deleteCleanupFailedMsg{workspace: wsCopy}
+			}
+		}
+		return nil
+	}
 }
 
 func (m Model) startRename() (tea.Model, tea.Cmd) {

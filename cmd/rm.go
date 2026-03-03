@@ -87,24 +87,36 @@ var rmCmd = &cobra.Command{
 			}
 		}
 
-		for _, ws := range targets {
-			if tmux.SessionExists(ws.SessionName) {
-				if err := tmux.KillSession(ws.SessionName); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: failed to kill session %s: %v\n", ws.SessionName, err)
-				}
-			}
-
-			if ws.Type == "worktree" && ws.WorktreePath != ws.RepoPath {
-				if err := git.RemoveWorktree(ws.RepoPath, ws.WorktreePath); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: failed to remove worktree: %v\n", err)
-				}
-			}
-
+		copies := make([]state.Workspace, len(targets))
+		for i, ws := range targets {
+			copies[i] = *ws
 			mgr.RemoveWorkspace(st, ws.SessionName)
 			fmt.Printf("Removed workspace %q\n", ws.Name)
 		}
+		if err := mgr.Save(st); err != nil {
+			return err
+		}
 
-		return mgr.Save(st)
+		var failed []state.Workspace
+		for _, ws := range copies {
+			if tmux.SessionExists(ws.SessionName) {
+				_ = tmux.KillSession(ws.SessionName)
+			}
+			if ws.Type == "worktree" && ws.WorktreePath != ws.RepoPath {
+				if err := git.RemoveWorktree(ws.RepoPath, ws.WorktreePath); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to remove worktree %s: %v\n", ws.WorktreePath, err)
+					failed = append(failed, ws)
+				}
+			}
+		}
+
+		if len(failed) > 0 {
+			for _, ws := range failed {
+				mgr.AddWorkspace(st, ws)
+			}
+			return mgr.Save(st)
+		}
+		return nil
 	},
 }
 
