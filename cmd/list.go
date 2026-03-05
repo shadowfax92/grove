@@ -50,22 +50,17 @@ var listCmd = &cobra.Command{
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-			listHeaderColor.Sprint("REPO"),
-			listHeaderColor.Sprint("WORKTREE"),
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+			listHeaderColor.Sprint("NAME"),
 			listHeaderColor.Sprint("SESSION"),
 			listHeaderColor.Sprint("STATUS"),
 			listHeaderColor.Sprint("LAST USED"),
 		)
 
 		for _, ws := range st.Workspaces {
-			repo := listPlainColor.Sprint("—")
-			worktree := ws.Name
+			name := listPlainColor.Sprint(ws.Name)
 			if ws.Type == "worktree" {
-				repo = listRepoColor.Sprint(ws.Repo)
-				worktree = listBranchColor.Sprint(ws.Branch)
-			} else {
-				worktree = listPlainColor.Sprint(ws.Name)
+				name = listRepoColor.Sprint(ws.Repo) + "/" + listBranchColor.Sprint(ws.Branch)
 			}
 
 			session := listSessionColor.Sprint(ws.SessionName)
@@ -85,7 +80,7 @@ var listCmd = &cobra.Command{
 				lastUsed += " " + listNotifColor.Sprint("★")
 			}
 
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", repo, worktree, session, statusCol, lastUsed)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", name, session, statusCol, lastUsed)
 		}
 
 		return w.Flush()

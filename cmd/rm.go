@@ -103,9 +103,11 @@ var rmCmd = &cobra.Command{
 				_ = tmux.KillSession(ws.SessionName)
 			}
 			if ws.Type == "worktree" && ws.WorktreePath != ws.RepoPath {
-				if err := git.RemoveWorktree(ws.RepoPath, ws.WorktreePath); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: failed to remove worktree %s: %v\n", ws.WorktreePath, err)
-					failed = append(failed, ws)
+				if _, statErr := os.Stat(ws.WorktreePath); statErr == nil {
+					if err := git.RemoveWorktree(ws.RepoPath, ws.WorktreePath); err != nil {
+						fmt.Fprintf(os.Stderr, "warning: failed to remove worktree %s: %v\n", ws.WorktreePath, err)
+						failed = append(failed, ws)
+					}
 				}
 			}
 		}

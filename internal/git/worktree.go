@@ -88,7 +88,11 @@ func RemoveWorktree(repoPath, worktreePath string) error {
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("git worktree remove: %s (%w)", strings.TrimSpace(string(out)), err)
+		outStr := strings.TrimSpace(string(out))
+		if strings.Contains(outStr, "is not a working tree") {
+			return os.RemoveAll(worktreePath)
+		}
+		return fmt.Errorf("git worktree remove: %s (%w)", outStr, err)
 	}
 	return nil
 }

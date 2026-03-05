@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -461,8 +462,10 @@ func (m Model) confirmDelete() (tea.Model, tea.Cmd) {
 			_ = tmux.KillSession(wsCopy.SessionName)
 		}
 		if wsCopy.Type == "worktree" && wsCopy.WorktreePath != wsCopy.RepoPath {
-			if err := git.RemoveWorktree(wsCopy.RepoPath, wsCopy.WorktreePath); err != nil {
-				return deleteCleanupFailedMsg{workspace: wsCopy}
+			if _, statErr := os.Stat(wsCopy.WorktreePath); statErr == nil {
+				if err := git.RemoveWorktree(wsCopy.RepoPath, wsCopy.WorktreePath); err != nil {
+					return deleteCleanupFailedMsg{workspace: wsCopy}
+				}
 			}
 		}
 		return nil
