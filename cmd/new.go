@@ -76,6 +76,9 @@ var newCmd = &cobra.Command{
 
 		repo := cfg.FindRepo(name)
 		if repo != nil {
+			if repo.Type == "dir" {
+				return createDirWorkspace(repo, branch, mgr, st, noSwitch, dirOnly)
+			}
 			return createWorktree(repo, branch, cfg, mgr, st, noSwitch, noPrepare, dirOnly)
 		}
 		return createPlain(name, mgr, st, noSwitch, dirOnly)
@@ -215,6 +218,69 @@ func createWorktree(repo *config.RepoConfig, branch string, _ *config.Config, mg
 		return tmux.SwitchClient(sessionName)
 	}
 	return nil
+}
+
+func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State, noSwitch, dirOnly bool) error {
+	if name == "" {
+		existing := existingDirNames(st, repo.Name)
+		prompted, err := promptNameFzf("name > ", "Type a name or enter for random", nil)
+		if err != nil {
+			return err
+		}
+		if prompted != "" {
+			name = prompted
+		} else {
+			name = names.Generate(existing)
+		}
+	}
+
+	sessionName := fmt.Sprintf("g/%s/%s", repo.Name, name)
+	if mgr.FindBySession(st, sessionName) != nil {
+		return fmt.Errorf("workspace %q already exists", repo.Name+"/"+name)
+	}
+
+	if dirOnly {
+		fmt.Println(repo.Path)
+		return nil
+	}
+
+	if err := tmux.CreateSessionWithLayout(sessionName, repo.Path, repo.Layout); err != nil {
+		return fmt.Errorf("creating session: %w", err)
+	}
+
+	ws := state.Workspace{
+		Name:        fmt.Sprintf("%s/%s", repo.Name, name),
+		Type:        "dir",
+		Repo:        repo.Name,
+		RepoPath:    repo.Path,
+		Path:        repo.Path,
+		SessionName: sessionName,
+	}
+	mgr.AddWorkspace(st, ws)
+
+	if err := mgr.Save(st); err != nil {
+		return err
+	}
+
+	fmt.Printf("Created dir workspace %s/%s\n", repo.Name, name)
+
+	if !noSwitch && tmux.IsInsideTmux() {
+		return tmux.SwitchClient(sessionName)
+	}
+	return nil
+}
+
+func existingDirNames(st *state.State, repoName string) []string {
+	var result []string
+	for _, ws := range st.Workspaces {
+		if ws.Type == "dir" && ws.Repo == repoName {
+			parts := strings.SplitN(ws.Name, "/", 2)
+			if len(parts) == 2 {
+				result = append(result, parts[1])
+			}
+		}
+	}
+	return result
 }
 
 func pickRepoOrNameFzf(cfg *config.Config) (string, error) {

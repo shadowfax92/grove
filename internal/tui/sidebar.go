@@ -306,11 +306,11 @@ func (m Model) selectWorkspace() (tea.Model, tea.Cmd) {
 	// Recreate session if it doesn't exist
 	if !tmux.SessionExists(node.Workspace.SessionName) {
 		dir := node.Workspace.WorktreePath
-		if node.Workspace.Type == "plain" {
+		if node.Workspace.Type == "plain" || node.Workspace.Type == "dir" {
 			dir = node.Workspace.Path
 		}
 		var layoutName string
-		if node.Workspace.Type == "worktree" {
+		if node.Workspace.Type == "worktree" || node.Workspace.Type == "dir" {
 			if repo := m.cfg.FindRepo(node.Workspace.Repo); repo != nil {
 				layoutName = repo.Layout
 			}
@@ -334,6 +334,10 @@ func (m Model) createPlaceholderWorkspace(node TreeNode) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if repo.Type == "dir" {
+		return m.createDirPlaceholder(repo, node)
+	}
+
 	branch := node.DisplayName
 	sessionName := fmt.Sprintf("g/%s/%s", repo.Name, branch)
 
@@ -342,7 +346,6 @@ func (m Model) createPlaceholderWorkspace(node TreeNode) (tea.Model, tea.Cmd) {
 		defaultBranch = "main"
 	}
 
-	// Default branch is already checked out at the repo root — use it directly
 	worktreePath := repo.Path
 	if branch != defaultBranch {
 		worktreePath = filepath.Join(repo.Path, ".grove", "worktrees", branch)
@@ -365,6 +368,37 @@ func (m Model) createPlaceholderWorkspace(node TreeNode) (tea.Model, tea.Cmd) {
 		WorktreePath: worktreePath,
 		Branch:       branch,
 		SessionName:  sessionName,
+	}
+	m.stateMgr.AddWorkspace(m.st, ws)
+	m.stateMgr.TouchWorkspace(m.st, sessionName)
+	m.st.LastActive = sessionName
+	_ = m.stateMgr.Save(m.st)
+
+	return m, tea.Sequence(
+		func() tea.Msg {
+			_ = tmux.SwitchClient(sessionName)
+			return nil
+		},
+		tea.Quit,
+	)
+}
+
+func (m Model) createDirPlaceholder(repo *config.RepoConfig, node TreeNode) (tea.Model, tea.Cmd) {
+	name := node.DisplayName
+	sessionName := fmt.Sprintf("g/%s/%s", repo.Name, name)
+
+	if err := tmux.CreateSessionWithLayout(sessionName, repo.Path, repo.Layout); err != nil {
+		m.err = fmt.Errorf("creating session: %w", err)
+		return m, nil
+	}
+
+	ws := state.Workspace{
+		Name:        fmt.Sprintf("%s/%s", repo.Name, name),
+		Type:        "dir",
+		Repo:        repo.Name,
+		RepoPath:    repo.Path,
+		Path:        repo.Path,
+		SessionName: sessionName,
 	}
 	m.stateMgr.AddWorkspace(m.st, ws)
 	m.stateMgr.TouchWorkspace(m.st, sessionName)
@@ -418,8 +452,12 @@ func (m Model) startCreate() (tea.Model, tea.Cmd) {
 	if m.cursor < len(m.nodes) {
 		node := m.nodes[m.cursor]
 		if node.RepoName != "" {
-			createMode = CreateWorktree
 			repoName = node.RepoName
+			if repo := m.cfg.FindRepo(repoName); repo != nil && repo.Type == "dir" {
+				createMode = CreateDir
+			} else {
+				createMode = CreateWorktree
+			}
 		}
 	}
 
@@ -521,6 +559,11 @@ func (m Model) confirmRename() (tea.Model, tea.Cmd) {
 	currentName := m.renameTarget.Branch
 	if currentName == "" {
 		currentName = m.renameTarget.Name
+		if m.renameTarget.Repo != "" {
+			if parts := strings.SplitN(currentName, "/", 2); len(parts) == 2 {
+				currentName = parts[1]
+			}
+		}
 	}
 	if newName == "" || newName == currentName {
 		m.mode = modeBrowse
@@ -533,7 +576,7 @@ func (m Model) confirmRename() (tea.Model, tea.Cmd) {
 
 	// Build new session name
 	var newSessionName string
-	if ws.Type == "worktree" {
+	if ws.Type == "worktree" || ws.Type == "dir" {
 		newSessionName = fmt.Sprintf("g/%s/%s", ws.Repo, newName)
 	} else {
 		newSessionName = fmt.Sprintf("g/%s", newName)
@@ -561,9 +604,11 @@ func (m Model) confirmRename() (tea.Model, tea.Cmd) {
 	for i := range m.st.Workspaces {
 		if m.st.Workspaces[i].SessionName == oldSessionName {
 			m.st.Workspaces[i].SessionName = newSessionName
-			if ws.Type == "worktree" {
+			if ws.Type == "worktree" || ws.Type == "dir" {
 				m.st.Workspaces[i].Name = fmt.Sprintf("%s/%s", ws.Repo, newName)
-				m.st.Workspaces[i].Branch = newName
+				if ws.Type == "worktree" {
+					m.st.Workspaces[i].Branch = newName
+				}
 			} else {
 				m.st.Workspaces[i].Name = newName
 			}

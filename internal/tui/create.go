@@ -21,6 +21,7 @@ type CreateMode int
 const (
 	CreateWorktree CreateMode = iota
 	CreatePlain
+	CreateDir
 )
 
 type CreateForm struct {
@@ -48,10 +49,14 @@ func NewCreateForm(mode CreateMode, repoName string, cfg *config.Config, stateMg
 	ti.Width = 30
 
 	var repo *config.RepoConfig
-	if mode == CreateWorktree {
+	switch mode {
+	case CreateWorktree:
 		ti.Placeholder = "branch name (empty = random)"
 		repo = cfg.FindRepo(repoName)
-	} else {
+	case CreateDir:
+		ti.Placeholder = "workspace name (empty = random)"
+		repo = cfg.FindRepo(repoName)
+	default:
 		ti.Placeholder = "workspace name (empty = random)"
 	}
 
@@ -85,9 +90,12 @@ func (f CreateForm) Update(msg tea.Msg) (CreateForm, tea.Cmd) {
 func (f CreateForm) View(styles Styles) string {
 	header := "New workspace"
 	prompt := "Name"
-	if f.mode == CreateWorktree {
+	switch f.mode {
+	case CreateWorktree:
 		header = fmt.Sprintf("New worktree in %s", f.repoName)
 		prompt = "Branch"
+	case CreateDir:
+		header = fmt.Sprintf("New workspace in %s", f.repoName)
 	}
 
 	s := styles.Form.Render(header) + "\n"
@@ -104,10 +112,14 @@ func (f CreateForm) submit() tea.Cmd {
 	return func() tea.Msg {
 		name := f.input.Value()
 
-		if f.mode == CreateWorktree {
+		switch f.mode {
+		case CreateWorktree:
 			return f.createWorktree(name)
+		case CreateDir:
+			return f.createDir(name)
+		default:
+			return f.createPlain(name)
 		}
-		return f.createPlain(name)
 	}
 }
 
@@ -162,6 +174,37 @@ func (f CreateForm) createWorktree(branch string) tea.Msg {
 		WorktreePath: worktreePath,
 		Branch:       branch,
 		SessionName:  sessionName,
+	}
+
+	return workspaceCreatedMsg{workspace: ws}
+}
+
+func (f CreateForm) createDir(name string) tea.Msg {
+	if f.repo == nil {
+		return createErrorMsg{fmt.Errorf("repo %q not found", f.repoName)}
+	}
+
+	if name == "" {
+		existing := existingNames(f.st, f.repoName)
+		name = names.Generate(existing)
+	}
+
+	sessionName := fmt.Sprintf("g/%s/%s", f.repoName, name)
+	if f.stateMgr.FindBySession(f.st, sessionName) != nil {
+		return createErrorMsg{fmt.Errorf("workspace %s/%s already exists", f.repoName, name)}
+	}
+
+	if err := tmux.CreateSessionWithLayout(sessionName, f.repo.Path, f.repo.Layout); err != nil {
+		return createErrorMsg{fmt.Errorf("creating session: %w", err)}
+	}
+
+	ws := state.Workspace{
+		Name:        fmt.Sprintf("%s/%s", f.repoName, name),
+		Type:        "dir",
+		Repo:        f.repoName,
+		RepoPath:    f.repo.Path,
+		Path:        f.repo.Path,
+		SessionName: sessionName,
 	}
 
 	return workspaceCreatedMsg{workspace: ws}

@@ -23,7 +23,7 @@ type Notification struct {
 
 type Workspace struct {
 	Name          string         `json:"name"`
-	Type          string         `json:"type"` // "worktree" or "plain"
+	Type          string         `json:"type"` // "worktree", "dir", or "plain"
 	Repo          string         `json:"repo,omitempty"`
 	RepoPath      string         `json:"repo_path,omitempty"`
 	WorktreePath  string         `json:"worktree_path,omitempty"`

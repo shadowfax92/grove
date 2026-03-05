@@ -29,6 +29,7 @@ type SidebarConfig struct {
 type RepoConfig struct {
 	Path          string   `yaml:"path"`
 	Name          string   `yaml:"name"`
+	Type          string   `yaml:"type"`
 	DefaultBranch string   `yaml:"default_branch"`
 	Layout        string   `yaml:"layout"`
 	Prepare       []string `yaml:"prepare"`
@@ -94,6 +95,9 @@ func (c *Config) resolve() error {
 		c.Repos[i].Path = expandTilde(c.Repos[i].Path, home)
 		if c.Repos[i].Name == "" {
 			c.Repos[i].Name = filepath.Base(c.Repos[i].Path)
+		}
+		if c.Repos[i].Type == "" {
+			c.Repos[i].Type = "worktree"
 		}
 	}
 

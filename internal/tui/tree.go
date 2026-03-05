@@ -33,7 +33,7 @@ func buildTree(st *state.State, cfg *config.Config, currentSession string) []Tre
 
 	repoWorkspaces := make(map[string][]state.Workspace)
 	for _, ws := range st.Workspaces {
-		if ws.Type == "worktree" {
+		if ws.Type == "worktree" || ws.Type == "dir" {
 			repoWorkspaces[ws.Repo] = append(repoWorkspaces[ws.Repo], ws)
 		}
 	}
@@ -61,11 +61,20 @@ func buildTree(st *state.State, cfg *config.Config, currentSession string) []Tre
 			DisplayName: repo.Name,
 		})
 		for i := range wsList {
+			displayName := wsList[i].Branch
+			if displayName == "" {
+				parts := strings.SplitN(wsList[i].Name, "/", 2)
+				if len(parts) == 2 {
+					displayName = parts[1]
+				} else {
+					displayName = wsList[i].Name
+				}
+			}
 			nodes = append(nodes, TreeNode{
 				Kind:        NodeWorkspace,
 				RepoName:    repo.Name,
 				Workspace:   &wsList[i],
-				DisplayName: wsList[i].Branch,
+				DisplayName: displayName,
 			})
 		}
 	}
