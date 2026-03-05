@@ -86,11 +86,14 @@ const usageTemplate = `{{helpHeader "Usage:"}}{{if .Runnable}}
 `
 
 var rootCmd = &cobra.Command{
-	Use:          "grove",
-	Short:        "Tmux workspaces powered by git worktrees",
-	Version:      Version,
+	Use:           "grove",
+	Short:         "Tmux workspaces powered by git worktrees",
+	Version:       Version,
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return listCmd.RunE(cmd, args)
+	},
 }
 
 func init() {
