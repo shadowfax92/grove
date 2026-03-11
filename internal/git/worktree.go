@@ -23,11 +23,11 @@ func AddWorktree(repoPath, destPath, branch string) error {
 		return fmt.Errorf("creating worktree parent dir: %w", err)
 	}
 
-	if localBranchExists(repoPath, branch) {
+	if LocalBranchExists(repoPath, branch) {
 		return worktreeAddExisting(repoPath, destPath, branch)
 	}
 
-	if remoteBranchExists(repoPath, branch) {
+	if RemoteBranchExists(repoPath, branch) {
 		return worktreeAddTracking(repoPath, destPath, branch)
 	}
 
@@ -73,13 +73,13 @@ func worktreeError(branch string, out []byte, err error) error {
 	return fmt.Errorf("git worktree add: %s (%w)", outStr, err)
 }
 
-func localBranchExists(repoPath, branch string) bool {
+func LocalBranchExists(repoPath, branch string) bool {
 	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
 	cmd.Dir = repoPath
 	return cmd.Run() == nil
 }
 
-func remoteBranchExists(repoPath, branch string) bool {
+func RemoteBranchExists(repoPath, branch string) bool {
 	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+branch)
 	cmd.Dir = repoPath
 	return cmd.Run() == nil

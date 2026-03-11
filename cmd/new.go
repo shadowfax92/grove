@@ -141,11 +141,14 @@ func createWorktree(repo *config.RepoConfig, branch string, _ *config.Config, mg
 			}
 		}
 
-		prompted, err := promptNameFzf("branch > ", "Select branch, type new name, or enter for random", available)
+		prompted, selected, err := promptNameFzf("branch > ", "Select branch, type new name, or enter for random", available)
 		if err != nil {
 			return err
 		}
 		if prompted != "" {
+			if !selected && (git.LocalBranchExists(repo.Path, prompted) || git.RemoteBranchExists(repo.Path, prompted)) {
+				return fmt.Errorf("branch %q already exists — select it from the list to use it", prompted)
+			}
 			branch = prompted
 		} else {
 			branch = names.Generate(existing)
@@ -226,7 +229,7 @@ func createWorktree(repo *config.RepoConfig, branch string, _ *config.Config, mg
 func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State, noSwitch, dirOnly bool) error {
 	if name == "" {
 		existing := existingDirNames(st, repo.Name)
-		prompted, err := promptNameFzf("name > ", "Type a name or enter for random", nil)
+		prompted, _, err := promptNameFzf("name > ", "Type a name or enter for random", nil)
 		if err != nil {
 			return err
 		}
@@ -276,7 +279,7 @@ func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateMa
 func createPlainRepo(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State, noSwitch, dirOnly bool) error {
 	if name == "" {
 		existing := existingDirNames(st, repo.Name)
-		prompted, err := promptNameFzf("name > ", "Type a name or enter for random", nil)
+		prompted, _, err := promptNameFzf("name > ", "Type a name or enter for random", nil)
 		if err != nil {
 			return err
 		}
@@ -375,7 +378,8 @@ func pickRepoOrNameFzf(cfg *config.Config) (string, error) {
 
 const autoGenerateLabel = "(auto-generate)"
 
-func promptNameFzf(prompt, header string, options []string) (string, error) {
+// promptNameFzf returns (name, selectedFromList, error).
+func promptNameFzf(prompt, header string, options []string) (string, bool, error) {
 	lines := append([]string{autoGenerateLabel}, options...)
 
 	fzfCmd := exec.Command("fzf",
@@ -390,22 +394,24 @@ func promptNameFzf(prompt, header string, options []string) (string, error) {
 
 	out, err := fzfCmd.Output()
 	if err != nil && len(out) == 0 {
-		return "", ErrCancelled
+		return "", false, ErrCancelled
 	}
 
 	outputLines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	selected := false
 	result := ""
 	if len(outputLines) >= 2 && outputLines[1] != "" {
 		result = outputLines[1]
+		selected = true
 	} else if len(outputLines) >= 1 {
 		result = outputLines[0]
 	}
 	result = strings.TrimSpace(result)
 
 	if result == autoGenerateLabel || result == "" {
-		return "", nil
+		return "", false, nil
 	}
-	return result, nil
+	return result, selected, nil
 }
 
 func existingWorktreeNames(st *state.State, repoName string) []string {
