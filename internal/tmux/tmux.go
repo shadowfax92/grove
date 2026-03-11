@@ -21,7 +21,7 @@ func IsInsideTmux() bool {
 }
 
 func SessionExists(name string) bool {
-	_, err := run("has-session", "-t", name)
+	_, err := run("has-session", "-t", "="+name)
 	return err == nil
 }
 
@@ -31,17 +31,17 @@ func NewSession(name, startDir string) error {
 }
 
 func KillSession(name string) error {
-	_, err := run("kill-session", "-t", name)
+	_, err := run("kill-session", "-t", "="+name)
 	return err
 }
 
 func SwitchClient(target string) error {
-	_, err := run("switch-client", "-t", target)
+	_, err := run("switch-client", "-t", "="+target)
 	return err
 }
 
 func Attach(target string) error {
-	cmd := exec.Command("tmux", "attach-session", "-t", target)
+	cmd := exec.Command("tmux", "attach-session", "-t", "="+target)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -74,7 +74,7 @@ func ListSessions() ([]string, error) {
 }
 
 func RenameSession(oldName, newName string) error {
-	_, err := run("rename-session", "-t", oldName, newName)
+	_, err := run("rename-session", "-t", "="+oldName, newName)
 	return err
 }
 

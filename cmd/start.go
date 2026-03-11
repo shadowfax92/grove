@@ -125,7 +125,7 @@ var startCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("tmux not found: %w", err)
 		}
-		return execSyscall(tmuxPath, []string{"tmux", "attach-session", "-t", target}, os.Environ())
+		return execSyscall(tmuxPath, []string{"tmux", "attach-session", "-t", "=" + target}, os.Environ())
 	},
 }
 
