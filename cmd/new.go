@@ -129,7 +129,7 @@ func createWorktree(repo *config.RepoConfig, branch string, _ *config.Config, mg
 	if branch == "" {
 		existing := existingWorktreeNames(st, repo.Name)
 
-		branches, _ := git.ListBranches(repo.Path)
+		branches, _ := git.ListRecentBranches(repo.Path, 7)
 		usedSet := make(map[string]bool)
 		for _, e := range existing {
 			usedSet[e] = true

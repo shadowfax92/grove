@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type WorktreeInfo struct {
@@ -132,8 +134,13 @@ func ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
 	return worktrees, nil
 }
 
-func ListBranches(repoPath string) ([]string, error) {
-	cmd := exec.Command("git", "branch", "-a", "--format", "%(refname:short)")
+func ListRecentBranches(repoPath string, days int) ([]string, error) {
+	cutoff := time.Now().AddDate(0, 0, -days).Unix()
+
+	cmd := exec.Command("git", "for-each-ref",
+		"--sort=-committerdate",
+		"--format=%(committerdate:unix) %(refname:short)",
+		"refs/heads/", "refs/remotes/origin/")
 	cmd.Dir = repoPath
 	out, err := cmd.Output()
 	if err != nil {
@@ -143,11 +150,15 @@ func ListBranches(repoPath string) ([]string, error) {
 	var branches []string
 	seen := make(map[string]bool)
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) != 2 {
 			continue
 		}
-		name := line
+		ts, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil || ts < cutoff {
+			continue
+		}
+		name := parts[1]
 		if strings.HasPrefix(name, "origin/") {
 			name = name[len("origin/"):]
 		}
