@@ -20,7 +20,7 @@ func init() {
 }
 
 var rmCmd = &cobra.Command{
-	Use:     "rm [workspace...]",
+	Use:         "rm [workspace...]",
 	Aliases:     []string{"remove"},
 	Annotations: map[string]string{"group": "Workspaces:"},
 	Short:       "Remove one or more workspaces",
@@ -46,27 +46,17 @@ var rmCmd = &cobra.Command{
 			return err
 		}
 
-		var targets []*state.Workspace
-		if len(args) > 0 {
-			for _, arg := range args {
-				ws := mgr.FindWorkspace(st, arg)
-				if ws == nil {
-					return fmt.Errorf("workspace %q not found", arg)
-				}
-				targets = append(targets, ws)
-			}
-		} else {
-			picked, err := pickWorkspacesFzf(st)
+		var picked []string
+		if len(args) == 0 {
+			picked, err = pickWorkspacesFzf(st)
 			if err != nil {
 				return err
 			}
-			for _, sessionName := range picked {
-				ws := mgr.FindBySession(st, sessionName)
-				if ws == nil {
-					return fmt.Errorf("workspace not found for session %q", sessionName)
-				}
-				targets = append(targets, ws)
-			}
+		}
+
+		targets, err := resolveRemoveTargets(mgr, st, args, picked)
+		if err != nil {
+			return err
 		}
 
 		if !force {
@@ -87,9 +77,7 @@ var rmCmd = &cobra.Command{
 			}
 		}
 
-		copies := make([]state.Workspace, len(targets))
-		for i, ws := range targets {
-			copies[i] = *ws
+		for _, ws := range targets {
 			mgr.RemoveWorkspace(st, ws.SessionName)
 			fmt.Printf("Removed workspace %q\n", ws.Name)
 		}
@@ -98,7 +86,7 @@ var rmCmd = &cobra.Command{
 		}
 
 		var failed []state.Workspace
-		for _, ws := range copies {
+		for _, ws := range targets {
 			if tmux.SessionExists(ws.SessionName) {
 				_ = tmux.KillSession(ws.SessionName)
 			}
@@ -157,4 +145,27 @@ func pickWorkspacesFzf(st *state.State) ([]string, error) {
 	}
 
 	return selected, nil
+}
+
+func resolveRemoveTargets(mgr *state.StateManager, st *state.State, args, picked []string) ([]state.Workspace, error) {
+	var targets []state.Workspace
+	if len(args) > 0 {
+		for _, arg := range args {
+			ws := mgr.FindWorkspace(st, arg)
+			if ws == nil {
+				return nil, fmt.Errorf("workspace %q not found", arg)
+			}
+			targets = append(targets, *ws)
+		}
+		return targets, nil
+	}
+
+	for _, sessionName := range picked {
+		ws := mgr.FindBySession(st, sessionName)
+		if ws == nil {
+			return nil, fmt.Errorf("workspace not found for session %q", sessionName)
+		}
+		targets = append(targets, *ws)
+	}
+	return targets, nil
 }
