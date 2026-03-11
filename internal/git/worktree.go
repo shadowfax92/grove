@@ -86,13 +86,13 @@ func remoteBranchExists(repoPath, branch string) bool {
 func RemoveWorktree(repoPath, worktreePath string) error {
 	cmd := exec.Command("git", "worktree", "remove", worktreePath, "--force")
 	cmd.Dir = repoPath
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		outStr := strings.TrimSpace(string(out))
-		if strings.Contains(outStr, "is not a working tree") {
-			return os.RemoveAll(worktreePath)
+	if _, err := cmd.CombinedOutput(); err != nil {
+		if err := os.RemoveAll(worktreePath); err != nil {
+			return fmt.Errorf("removing worktree directory: %w", err)
 		}
-		return fmt.Errorf("git worktree remove: %s (%w)", outStr, err)
+		pruneCmd := exec.Command("git", "worktree", "prune")
+		pruneCmd.Dir = repoPath
+		_ = pruneCmd.Run()
 	}
 	return nil
 }
