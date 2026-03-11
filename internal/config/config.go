@@ -125,6 +125,10 @@ func (c *Config) validate() error {
 		}
 		seen[r.Name] = true
 
+		if r.Type == "plain" {
+			continue
+		}
+
 		info, err := os.Stat(r.Path)
 		if err != nil {
 			return fmt.Errorf("repo %s: path %s does not exist", r.Name, r.Path)

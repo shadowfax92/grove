@@ -22,6 +22,7 @@ const (
 	CreateWorktree CreateMode = iota
 	CreatePlain
 	CreateDir
+	CreatePlainRepo
 )
 
 type CreateForm struct {
@@ -53,7 +54,7 @@ func NewCreateForm(mode CreateMode, repoName string, cfg *config.Config, stateMg
 	case CreateWorktree:
 		ti.Placeholder = "branch name (empty = random)"
 		repo = cfg.FindRepo(repoName)
-	case CreateDir:
+	case CreateDir, CreatePlainRepo:
 		ti.Placeholder = "workspace name (empty = random)"
 		repo = cfg.FindRepo(repoName)
 	default:
@@ -94,7 +95,7 @@ func (f CreateForm) View(styles Styles) string {
 	case CreateWorktree:
 		header = fmt.Sprintf("New worktree in %s", f.repoName)
 		prompt = "Branch"
-	case CreateDir:
+	case CreateDir, CreatePlainRepo:
 		header = fmt.Sprintf("New workspace in %s", f.repoName)
 	}
 
@@ -117,6 +118,8 @@ func (f CreateForm) submit() tea.Cmd {
 			return f.createWorktree(name)
 		case CreateDir:
 			return f.createDir(name)
+		case CreatePlainRepo:
+			return f.createPlainRepo(name)
 		default:
 			return f.createPlain(name)
 		}
@@ -204,6 +207,37 @@ func (f CreateForm) createDir(name string) tea.Msg {
 		Repo:        f.repoName,
 		RepoPath:    f.repo.Path,
 		Path:        f.repo.Path,
+		SessionName: sessionName,
+	}
+
+	return workspaceCreatedMsg{workspace: ws}
+}
+
+func (f CreateForm) createPlainRepo(name string) tea.Msg {
+	if f.repo == nil {
+		return createErrorMsg{fmt.Errorf("repo %q not found", f.repoName)}
+	}
+
+	if name == "" {
+		existing := existingNames(f.st, f.repoName)
+		name = names.Generate(existing)
+	}
+
+	sessionName := fmt.Sprintf("g/%s/%s", f.repoName, name)
+	if f.stateMgr.FindBySession(f.st, sessionName) != nil {
+		return createErrorMsg{fmt.Errorf("workspace %s/%s already exists", f.repoName, name)}
+	}
+
+	home, _ := os.UserHomeDir()
+	if err := tmux.NewSession(sessionName, home); err != nil {
+		return createErrorMsg{fmt.Errorf("creating session: %w", err)}
+	}
+
+	ws := state.Workspace{
+		Name:        fmt.Sprintf("%s/%s", f.repoName, name),
+		Type:        "plain",
+		Repo:        f.repoName,
+		Path:        home,
 		SessionName: sessionName,
 	}
 

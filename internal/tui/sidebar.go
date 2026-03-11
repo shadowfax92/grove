@@ -453,10 +453,15 @@ func (m Model) startCreate() (tea.Model, tea.Cmd) {
 		node := m.nodes[m.cursor]
 		if node.RepoName != "" {
 			repoName = node.RepoName
-			if repo := m.cfg.FindRepo(repoName); repo != nil && repo.Type == "dir" {
-				createMode = CreateDir
-			} else {
-				createMode = CreateWorktree
+			if repo := m.cfg.FindRepo(repoName); repo != nil {
+				switch repo.Type {
+				case "dir":
+					createMode = CreateDir
+				case "plain":
+					createMode = CreatePlainRepo
+				default:
+					createMode = CreateWorktree
+				}
 			}
 		}
 	}

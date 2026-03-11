@@ -33,7 +33,7 @@ func buildTree(st *state.State, cfg *config.Config, currentSession string) []Tre
 
 	repoWorkspaces := make(map[string][]state.Workspace)
 	for _, ws := range st.Workspaces {
-		if ws.Type == "worktree" || ws.Type == "dir" {
+		if ws.Repo != "" {
 			repoWorkspaces[ws.Repo] = append(repoWorkspaces[ws.Repo], ws)
 		}
 	}
@@ -79,10 +79,10 @@ func buildTree(st *state.State, cfg *config.Config, currentSession string) []Tre
 		}
 	}
 
-	// Plain workspaces at the bottom, sorted by LastUsedAt
+	// Standalone plain workspaces at the bottom, sorted by LastUsedAt
 	var plainWs []*state.Workspace
 	for i := range st.Workspaces {
-		if st.Workspaces[i].Type == "plain" {
+		if st.Workspaces[i].Type == "plain" && st.Workspaces[i].Repo == "" {
 			plainWs = append(plainWs, &st.Workspaces[i])
 		}
 	}

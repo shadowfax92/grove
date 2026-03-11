@@ -76,6 +76,9 @@ var newCmd = &cobra.Command{
 
 		repo := cfg.FindRepo(name)
 		if repo != nil {
+			if repo.Type == "plain" {
+				return createPlainRepo(repo, branch, mgr, st, noSwitch, dirOnly)
+			}
 			if repo.Type == "dir" {
 				return createDirWorkspace(repo, branch, mgr, st, noSwitch, dirOnly)
 			}
@@ -263,6 +266,57 @@ func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateMa
 	}
 
 	fmt.Printf("Created dir workspace %s/%s\n", repo.Name, name)
+
+	if !noSwitch && tmux.IsInsideTmux() {
+		return tmux.SwitchClient(sessionName)
+	}
+	return nil
+}
+
+func createPlainRepo(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State, noSwitch, dirOnly bool) error {
+	if name == "" {
+		existing := existingDirNames(st, repo.Name)
+		prompted, err := promptNameFzf("name > ", "Type a name or enter for random", nil)
+		if err != nil {
+			return err
+		}
+		if prompted != "" {
+			name = prompted
+		} else {
+			name = names.Generate(existing)
+		}
+	}
+
+	sessionName := fmt.Sprintf("g/%s/%s", repo.Name, name)
+	if mgr.FindBySession(st, sessionName) != nil {
+		return fmt.Errorf("workspace %q already exists", repo.Name+"/"+name)
+	}
+
+	home, _ := os.UserHomeDir()
+
+	if dirOnly {
+		fmt.Println(home)
+		return nil
+	}
+
+	if err := tmux.NewSession(sessionName, home); err != nil {
+		return fmt.Errorf("creating session: %w", err)
+	}
+
+	ws := state.Workspace{
+		Name:        fmt.Sprintf("%s/%s", repo.Name, name),
+		Type:        "plain",
+		Repo:        repo.Name,
+		Path:        home,
+		SessionName: sessionName,
+	}
+	mgr.AddWorkspace(st, ws)
+
+	if err := mgr.Save(st); err != nil {
+		return err
+	}
+
+	fmt.Printf("Created plain workspace %s/%s\n", repo.Name, name)
 
 	if !noSwitch && tmux.IsInsideTmux() {
 		return tmux.SwitchClient(sessionName)
