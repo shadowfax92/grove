@@ -11,7 +11,6 @@ import (
 	"grove/internal/tmux"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/lipgloss/table"
 	"github.com/spf13/cobra"
 )
 
@@ -87,34 +86,27 @@ func showAllNotifications(st *state.State) error {
 	sessionStyle := lipgloss.NewStyle().Foreground(clrCyan).Bold(true)
 	badgeStyle := lipgloss.NewStyle().Foreground(clrYellow).Bold(true)
 
-	var rows [][]string
+	found := false
 	for _, ws := range st.Workspaces {
 		if len(ws.Notifications) == 0 {
 			continue
 		}
-		for i, n := range ws.Notifications {
-			session := ""
-			if i == 0 {
-				session = badgeStyle.Render("★") + " " + sessionStyle.Render(ws.SessionName)
+		found = true
+		fmt.Printf("%s %s\n", badgeStyle.Render("★"), sessionStyle.Render(ws.SessionName))
+		for _, n := range ws.Notifications {
+			age := state.RelativeTime(n.CreatedAt) + " ago"
+			msg := n.Message
+			const maxMsg = 80
+			if len(msg) > maxMsg {
+				msg = msg[:maxMsg-3] + "..."
 			}
-			age := dim.Render(state.RelativeTime(n.CreatedAt) + " ago")
-			rows = append(rows, []string{session, n.Message, age})
+			fmt.Printf("    %-*s  %s\n", maxMsg, msg, dim.Render(age))
 		}
 	}
 
-	if len(rows) == 0 {
+	if !found {
 		fmt.Println(dim.Render("No notifications."))
-		return nil
 	}
-
-	t := table.New().
-		Border(lipgloss.HiddenBorder()).
-		Rows(rows...).
-		StyleFunc(func(row, col int) lipgloss.Style {
-			return lipgloss.NewStyle().PaddingRight(2)
-		})
-
-	fmt.Println(t)
 	return nil
 }
 
