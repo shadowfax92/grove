@@ -2,26 +2,20 @@ package cmd
 
 import (
 	"fmt"
-	"os"
-	"text/tabwriter"
 
 	"grove/internal/state"
 	"grove/internal/tmux"
 
-	"github.com/fatih/color"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 	"github.com/spf13/cobra"
 )
 
 var (
-	listHeaderColor  = color.New(color.Bold, color.Faint)
-	listRepoColor    = color.New(color.FgCyan)
-	listBranchColor  = color.New(color.FgHiGreen)
-	listSessionColor = color.New(color.Faint)
-	listRunningColor = color.New(color.FgGreen, color.Bold)
-	listStoppedColor = color.New(color.Faint)
-	listPlainColor   = color.New(color.FgYellow)
-	listDimColor     = color.New(color.Faint)
-	listNotifColor   = color.New(color.FgYellow, color.Bold)
+	clrCyan    = lipgloss.Color("6")
+	clrHiGreen = lipgloss.Color("10")
+	clrYellow  = lipgloss.Color("11")
+	clrGreen   = lipgloss.Color("2")
 )
 
 func init() {
@@ -49,40 +43,50 @@ var listCmd = &cobra.Command{
 			return nil
 		}
 
-		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-			listHeaderColor.Sprint("NAME"),
-			listHeaderColor.Sprint("SESSION"),
-			listHeaderColor.Sprint("STATUS"),
-			listHeaderColor.Sprint("LAST USED"),
-		)
+		dim := lipgloss.NewStyle().Faint(true)
 
+		var rows [][]string
 		for _, ws := range st.Workspaces {
-			name := listPlainColor.Sprint(ws.Name)
+			name := lipgloss.NewStyle().Foreground(clrYellow).Render(ws.Name)
 			if ws.Type == "worktree" {
-				name = listRepoColor.Sprint(ws.Repo) + "/" + listBranchColor.Sprint(ws.Branch)
+				name = lipgloss.NewStyle().Foreground(clrCyan).Render(ws.Repo) +
+					"/" +
+					lipgloss.NewStyle().Foreground(clrHiGreen).Render(ws.Branch)
 			}
 
-			session := listSessionColor.Sprint(ws.SessionName)
+			session := dim.Render(ws.SessionName)
 
-			var statusCol string
+			var status string
 			if tmux.SessionExists(ws.SessionName) {
-				statusCol = listRunningColor.Sprint("running")
+				status = lipgloss.NewStyle().Foreground(clrGreen).Bold(true).Render("running")
 			} else {
-				statusCol = listStoppedColor.Sprint("stopped")
+				status = dim.Render("stopped")
 			}
 
-			lastUsed := listDimColor.Sprint("—")
+			lastUsed := dim.Render("—")
 			if ws.LastUsedAt != "" {
-				lastUsed = listDimColor.Sprint(state.RelativeTime(ws.LastUsedAt) + " ago")
+				lastUsed = dim.Render(state.RelativeTime(ws.LastUsedAt) + " ago")
 			}
 			if len(ws.Notifications) > 0 {
-				lastUsed += " " + listNotifColor.Sprint("★")
+				lastUsed += " " + lipgloss.NewStyle().Foreground(clrYellow).Bold(true).Render("★")
 			}
 
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", name, session, statusCol, lastUsed)
+			rows = append(rows, []string{name, session, status, lastUsed})
 		}
 
-		return w.Flush()
+		t := table.New().
+			Border(lipgloss.HiddenBorder()).
+			Headers("NAME", "SESSION", "STATUS", "LAST USED").
+			Rows(rows...).
+			StyleFunc(func(row, col int) lipgloss.Style {
+				s := lipgloss.NewStyle().PaddingRight(2)
+				if row == table.HeaderRow {
+					return s.Bold(true).Faint(true)
+				}
+				return s
+			})
+
+		fmt.Println(t)
+		return nil
 	},
 }
