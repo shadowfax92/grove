@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/fatih/color"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 )
 
@@ -14,18 +14,17 @@ var Version = "dev"
 
 var ErrCancelled = errors.New("")
 
-var (
-	helpHeaderColor = color.New(color.Bold, color.FgCyan)
-	helpCmdColor    = color.New(color.FgHiGreen)
-	helpAliasColor  = color.New(color.FgYellow)
-	helpHintColor   = color.New(color.Faint)
-)
-
-func helpHeader(s string) string  { return helpHeaderColor.Sprint(s) }
-func helpCmdCol(s string) string  { return helpCmdColor.Sprint(s) }
-func helpHint(s string) string    { return helpHintColor.Sprint(s) }
+func helpHeader(s string) string {
+	return lipgloss.NewStyle().Bold(true).Foreground(clrCyan).Render(s)
+}
+func helpCmdCol(s string) string {
+	return lipgloss.NewStyle().Foreground(clrHiGreen).Render(s)
+}
+func helpHint(s string) string {
+	return lipgloss.NewStyle().Faint(true).Render(s)
+}
 func helpAliases(aliases []string) string {
-	return helpAliasColor.Sprintf("(aliases: %s)", strings.Join(aliases, ", "))
+	return lipgloss.NewStyle().Foreground(clrYellow).Render(fmt.Sprintf("(aliases: %s)", strings.Join(aliases, ", ")))
 }
 
 var groupOrder = []string{

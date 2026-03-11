@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -9,16 +10,9 @@ import (
 	"grove/internal/state"
 	"grove/internal/tmux"
 
-	"github.com/fatih/color"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 	"github.com/spf13/cobra"
-)
-
-var (
-	notifBadgeColor   = color.New(color.FgYellow, color.Bold)
-	notifSessionColor = color.New(color.FgCyan, color.Bold)
-	notifMsgColor     = color.New(color.FgWhite)
-	notifAgeColor     = color.New(color.Faint)
-	notifDimColor     = color.New(color.Faint)
 )
 
 func init() {
@@ -33,9 +27,9 @@ var notifyCmd = &cobra.Command{
 	Short:       "Show or send notifications for a workspace",
 	Long: `Manage notifications for a grove workspace.
 
-  grove notify              — show notifications for current session
-  grove notify <message>    — append a notification
-  grove notify clear        — clear all notifications`,
+  grove notify              — show all notifications
+  grove notify <message>    — append a notification to current session
+  grove notify clear        — pick sessions via fzf and clear their notifications`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sessionFlag, _ := cmd.Flags().GetString("session")
 
@@ -44,53 +38,21 @@ var notifyCmd = &cobra.Command{
 			return err
 		}
 
-		// Show mode: no args
+		// Show mode: no args — always show all notifications
 		if len(args) == 0 {
 			st, err := mgr.Load()
 			if err != nil {
 				return err
 			}
-
-			// If --session given or inside a grove tmux session, show that session
-			// Otherwise show all notifications across workspaces
-			sessionName, sessionErr := resolveSession(sessionFlag)
-			if sessionErr == nil {
-				ws := mgr.FindBySession(st, sessionName)
-				if ws == nil {
-					return fmt.Errorf("no grove workspace for session %q", sessionName)
-				}
-				if len(ws.Notifications) == 0 {
-					fmt.Println(notifDimColor.Sprint("No notifications."))
-					return nil
-				}
-				fmt.Printf("%s %s\n", notifBadgeColor.Sprint("★"), notifSessionColor.Sprint(sessionName))
-				for _, n := range ws.Notifications {
-					age := state.RelativeTime(n.CreatedAt)
-					fmt.Printf("  %-40s %s\n", notifMsgColor.Sprint(n.Message), notifAgeColor.Sprintf("%s ago", age))
-				}
-				return nil
-			}
-
-			// No session context — show all
-			found := false
-			for _, ws := range st.Workspaces {
-				if len(ws.Notifications) == 0 {
-					continue
-				}
-				found = true
-				fmt.Printf("%s %s\n", notifBadgeColor.Sprint("★"), notifSessionColor.Sprint(ws.SessionName))
-				for _, n := range ws.Notifications {
-					age := state.RelativeTime(n.CreatedAt)
-					fmt.Printf("  %-40s %s\n", notifMsgColor.Sprint(n.Message), notifAgeColor.Sprintf("%s ago", age))
-				}
-			}
-			if !found {
-				fmt.Println(notifDimColor.Sprint("No notifications."))
-			}
-			return nil
+			return showAllNotifications(st)
 		}
 
-		// Mutating modes need a session
+		// Clear mode: fzf multi-select
+		if args[0] == "clear" {
+			return clearNotificationsFzf(mgr)
+		}
+
+		// Append mode: needs a session
 		sessionName, err := resolveSession(sessionFlag)
 		if err != nil {
 			return err
@@ -110,18 +72,105 @@ var notifyCmd = &cobra.Command{
 			return fmt.Errorf("no grove workspace for session %q", sessionName)
 		}
 
-		if args[0] == "clear" {
-			mgr.ClearNotifications(st, sessionName)
-			fmt.Println(notifDimColor.Sprint("Notifications cleared."))
-		} else {
-			message := strings.Join(args, " ")
-			mgr.AppendNotification(st, sessionName, message)
-			fmt.Printf("%s %s\n", notifBadgeColor.Sprint("★"), notifMsgColor.Sprint(message))
-			forwardNotify(sessionName, message)
-		}
+		message := strings.Join(args, " ")
+		mgr.AppendNotification(st, sessionName, message)
+		badge := lipgloss.NewStyle().Foreground(clrYellow).Bold(true).Render("★")
+		fmt.Printf("%s %s\n", badge, message)
+		forwardNotify(sessionName, message)
 
 		return mgr.Save(st)
 	},
+}
+
+func showAllNotifications(st *state.State) error {
+	dim := lipgloss.NewStyle().Faint(true)
+	sessionStyle := lipgloss.NewStyle().Foreground(clrCyan).Bold(true)
+	badgeStyle := lipgloss.NewStyle().Foreground(clrYellow).Bold(true)
+
+	var rows [][]string
+	for _, ws := range st.Workspaces {
+		if len(ws.Notifications) == 0 {
+			continue
+		}
+		for i, n := range ws.Notifications {
+			session := ""
+			if i == 0 {
+				session = badgeStyle.Render("★") + " " + sessionStyle.Render(ws.SessionName)
+			}
+			age := dim.Render(state.RelativeTime(n.CreatedAt) + " ago")
+			rows = append(rows, []string{session, n.Message, age})
+		}
+	}
+
+	if len(rows) == 0 {
+		fmt.Println(dim.Render("No notifications."))
+		return nil
+	}
+
+	t := table.New().
+		Border(lipgloss.HiddenBorder()).
+		Rows(rows...).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			return lipgloss.NewStyle().PaddingRight(2)
+		})
+
+	fmt.Println(t)
+	return nil
+}
+
+func clearNotificationsFzf(mgr *state.StateManager) error {
+	st, err := mgr.Load()
+	if err != nil {
+		return err
+	}
+
+	var lines []string
+	for _, ws := range st.Workspaces {
+		if len(ws.Notifications) == 0 {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s\t%s (%d)", ws.SessionName, ws.Name, len(ws.Notifications)))
+	}
+
+	if len(lines) == 0 {
+		fmt.Println(lipgloss.NewStyle().Faint(true).Render("No notifications to clear."))
+		return nil
+	}
+
+	fzfCmd := exec.Command("fzf", "--multi", "--prompt", "clear > ",
+		"--height", "~40%", "--reverse",
+		"--delimiter", "\t", "--with-nth", "2")
+	fzfCmd.Stdin = strings.NewReader(strings.Join(lines, "\n"))
+	fzfCmd.Stderr = os.Stderr
+
+	out, err := fzfCmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 130 {
+			return ErrCancelled
+		}
+		return fmt.Errorf("fzf failed: %w", err)
+	}
+
+	if err := mgr.Lock(); err != nil {
+		return err
+	}
+	defer mgr.Unlock()
+
+	st, err = mgr.Load()
+	if err != nil {
+		return err
+	}
+
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if idx := strings.Index(line, "\t"); idx >= 0 {
+			sessionName := line[:idx]
+			mgr.ClearNotifications(st, sessionName)
+			fmt.Printf("Cleared notifications for %s\n", sessionName)
+		}
+	}
+
+	return mgr.Save(st)
 }
 
 func forwardNotify(sessionName, message string) {
