@@ -111,13 +111,11 @@ func pickSessionFzf(st *state.State) (string, error) {
 		return sorted[i].LastUsedAt > sorted[j].LastUsedAt
 	})
 
-	exe, _ := os.Executable()
-
 	var lines []string
 	for _, ws := range sorted {
 		badge := "  "
 		if len(ws.Notifications) > 0 {
-			badge = "★ "
+			badge = "* "
 		}
 		age := ""
 		if ws.LastUsedAt != "" {
@@ -133,8 +131,6 @@ func pickSessionFzf(st *state.State) (string, error) {
 		"--reverse",
 		"--delimiter", "\t",
 		"--with-nth", "2",
-		"--preview", fmt.Sprintf("%s notify --session '{1}' 2>/dev/null", exe),
-		"--preview-window", "bottom:3:wrap:nohidden",
 	}
 
 	fzfCmd := exec.Command("fzf", fzfArgs...)
