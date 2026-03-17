@@ -183,10 +183,15 @@ func createWorktree(repo *config.RepoConfig, branch string, _ *config.Config, mg
 		return fmt.Errorf("creating worktree: %w", err)
 	}
 
+	setupDir := worktreePath
+	if repo.Workdir != "" {
+		setupDir = filepath.Join(worktreePath, repo.Workdir)
+	}
+
 	for _, setupCmd := range repo.Setup {
 		fmt.Printf("Running: %s\n", setupCmd)
 		c := exec.Command("sh", "-c", setupCmd)
-		c.Dir = worktreePath
+		c.Dir = setupDir
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 		if err := c.Run(); err != nil {
@@ -195,11 +200,11 @@ func createWorktree(repo *config.RepoConfig, branch string, _ *config.Config, mg
 	}
 
 	if dirOnly {
-		fmt.Println(worktreePath)
+		fmt.Println(setupDir)
 		return nil
 	}
 
-	if err := tmux.CreateSessionWithLayout(sessionName, worktreePath, repo.Layout); err != nil {
+	if err := tmux.CreateSessionWithLayout(sessionName, setupDir, repo.Layout); err != nil {
 		return fmt.Errorf("creating session: %w", err)
 	}
 
@@ -245,12 +250,17 @@ func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateMa
 		return fmt.Errorf("workspace %q already exists", repo.Name+"/"+name)
 	}
 
+	startDir := repo.Path
+	if repo.Workdir != "" {
+		startDir = filepath.Join(repo.Path, repo.Workdir)
+	}
+
 	if dirOnly {
-		fmt.Println(repo.Path)
+		fmt.Println(startDir)
 		return nil
 	}
 
-	if err := tmux.CreateSessionWithLayout(sessionName, repo.Path, repo.Layout); err != nil {
+	if err := tmux.CreateSessionWithLayout(sessionName, startDir, repo.Layout); err != nil {
 		return fmt.Errorf("creating session: %w", err)
 	}
 
@@ -259,7 +269,7 @@ func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateMa
 		Type:        "dir",
 		Repo:        repo.Name,
 		RepoPath:    repo.Path,
-		Path:        repo.Path,
+		Path:        startDir,
 		SessionName: sessionName,
 	}
 	mgr.AddWorkspace(st, ws)

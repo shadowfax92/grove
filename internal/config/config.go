@@ -32,6 +32,7 @@ type RepoConfig struct {
 	Type          string   `yaml:"type"`
 	DefaultBranch string   `yaml:"default_branch"`
 	Layout        string   `yaml:"layout"`
+	Workdir       string   `yaml:"workdir"`
 	Prepare       []string `yaml:"prepare"`
 	Setup         []string `yaml:"setup"`
 }
