@@ -4,8 +4,23 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
+
+type SessionInfo struct {
+	Name     string
+	Windows  int
+	Attached bool
+	Activity int64
+}
+
+type PaneInfo struct {
+	Target  string
+	Session string
+	Command string
+	Path    string
+}
 
 func run(args ...string) (string, error) {
 	cmd := exec.Command("tmux", args...)
@@ -80,4 +95,64 @@ func RenameSession(oldName, newName string) error {
 
 func CurrentSession() (string, error) {
 	return run("display-message", "-p", "#{session_name}")
+}
+
+func CurrentTarget() (string, error) {
+	return run("display-message", "-p", "#{session_name}:#{window_index}.#{pane_index}")
+}
+
+func ListSessionInfo() ([]SessionInfo, error) {
+	out, err := run("list-sessions", "-F", "#{session_name}\t#{session_windows}\t#{session_attached}\t#{session_activity}")
+	if err != nil {
+		if strings.Contains(err.Error(), "no server running") || strings.Contains(err.Error(), "no sessions") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	var sessions []SessionInfo
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(line, "\t", 4)
+		if len(parts) < 4 {
+			continue
+		}
+		wins, _ := strconv.Atoi(parts[1])
+		activity, _ := strconv.ParseInt(parts[3], 10, 64)
+		sessions = append(sessions, SessionInfo{
+			Name:     parts[0],
+			Windows:  wins,
+			Attached: parts[2] != "0",
+			Activity: activity,
+		})
+	}
+	return sessions, nil
+}
+
+func ListPaneInfo() ([]PaneInfo, error) {
+	out, err := run("list-panes", "-a", "-F", "#{session_name}:#{window_index}.#{pane_index}\t#{session_name}\t#{pane_current_command}\t#{pane_current_path}")
+	if err != nil {
+		if strings.Contains(err.Error(), "no server running") || strings.Contains(err.Error(), "no sessions") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	var panes []PaneInfo
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(line, "\t", 4)
+		if len(parts) < 4 {
+			continue
+		}
+		panes = append(panes, PaneInfo{
+			Target:  parts[0],
+			Session: parts[1],
+			Command: parts[2],
+			Path:    parts[3],
+		})
+	}
+	return panes, nil
 }
