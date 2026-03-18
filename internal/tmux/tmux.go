@@ -16,10 +16,11 @@ type SessionInfo struct {
 }
 
 type PaneInfo struct {
-	Target  string
-	Session string
-	Command string
-	Path    string
+	Target     string
+	Session    string
+	WindowName string
+	Command    string
+	Path       string
 }
 
 func run(args ...string) (string, error) {
@@ -131,7 +132,7 @@ func ListSessionInfo() ([]SessionInfo, error) {
 }
 
 func ListPaneInfo() ([]PaneInfo, error) {
-	out, err := run("list-panes", "-a", "-F", "#{session_name}:#{window_index}.#{pane_index}\t#{session_name}\t#{pane_current_command}\t#{pane_current_path}")
+	out, err := run("list-panes", "-a", "-F", "#{session_name}:#{window_index}.#{pane_index}\t#{session_name}\t#{window_name}\t#{pane_current_command}\t#{pane_current_path}")
 	if err != nil {
 		if strings.Contains(err.Error(), "no server running") || strings.Contains(err.Error(), "no sessions") {
 			return nil, nil
@@ -143,15 +144,16 @@ func ListPaneInfo() ([]PaneInfo, error) {
 	}
 	var panes []PaneInfo
 	for _, line := range strings.Split(out, "\n") {
-		parts := strings.SplitN(line, "\t", 4)
-		if len(parts) < 4 {
+		parts := strings.SplitN(line, "\t", 5)
+		if len(parts) < 5 {
 			continue
 		}
 		panes = append(panes, PaneInfo{
-			Target:  parts[0],
-			Session: parts[1],
-			Command: parts[2],
-			Path:    parts[3],
+			Target:     parts[0],
+			Session:    parts[1],
+			WindowName: parts[2],
+			Command:    parts[3],
+			Path:       parts[4],
 		})
 	}
 	return panes, nil
