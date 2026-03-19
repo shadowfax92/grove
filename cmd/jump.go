@@ -133,7 +133,7 @@ func runFzfPanes(lines []string) (string, error) {
 func runFzf(prompt string, lines []string, extra []string) (string, error) {
 	args := []string{
 		"--prompt", prompt,
-		"--height", "~80%",
+		"--height", "100%",
 		"--reverse",
 		"--delimiter", "\t",
 	}
