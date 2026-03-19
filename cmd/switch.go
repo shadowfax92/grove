@@ -127,7 +127,7 @@ func pickSessionFzf(st *state.State) (string, error) {
 
 	fzfArgs := []string{
 		"--prompt", "switch > ",
-		"--height", "~40%",
+		"--height", "~80%",
 		"--reverse",
 		"--delimiter", "\t",
 		"--with-nth", "2",

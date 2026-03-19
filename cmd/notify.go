@@ -130,7 +130,7 @@ func clearNotificationsFzf(mgr *state.StateManager) error {
 	}
 
 	fzfCmd := exec.Command("fzf", "--multi", "--prompt", "clear > ",
-		"--height", "~40%", "--reverse",
+		"--height", "~80%", "--reverse",
 		"--delimiter", "\t", "--with-nth", "2")
 	fzfCmd.Stdin = strings.NewReader(strings.Join(lines, "\n"))
 	fzfCmd.Stderr = os.Stderr

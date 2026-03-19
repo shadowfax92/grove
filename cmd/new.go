@@ -360,7 +360,7 @@ func pickRepoOrNameFzf(cfg *config.Config) (string, error) {
 		"--prompt", "repo or name > ",
 		"--header", "Pick a repo or type a session name",
 		"--print-query",
-		"--height", "~40%",
+		"--height", "~80%",
 		"--reverse",
 	)
 	fzfCmd.Stdin = strings.NewReader(strings.Join(repoNames, "\n"))
@@ -396,7 +396,7 @@ func promptNameFzf(prompt, header string, options []string) (string, bool, error
 		"--prompt", prompt,
 		"--header", header,
 		"--print-query",
-		"--height", "~40%",
+		"--height", "~80%",
 		"--reverse",
 	)
 	fzfCmd.Stdin = strings.NewReader(strings.Join(lines, "\n"))

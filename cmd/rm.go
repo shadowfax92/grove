@@ -120,7 +120,7 @@ func pickWorkspacesFzf(st *state.State) ([]string, error) {
 		lines = append(lines, ws.SessionName)
 	}
 
-	fzfCmd := exec.Command("fzf", "--multi", "--prompt", "remove > ", "--height", "~40%", "--reverse")
+	fzfCmd := exec.Command("fzf", "--multi", "--prompt", "remove > ", "--height", "~80%", "--reverse")
 	fzfCmd.Stdin = strings.NewReader(strings.Join(lines, "\n"))
 	fzfCmd.Stderr = os.Stderr
 
