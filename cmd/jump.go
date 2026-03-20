@@ -6,7 +6,9 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
+	"grove/internal/state"
 	"grove/internal/tmux"
 
 	"github.com/spf13/cobra"
@@ -49,14 +51,40 @@ func jumpSessions() error {
 		return fmt.Errorf("no tmux sessions")
 	}
 
-	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].Activity > sessions[j].Activity
+	// Load grove state for LastUsedAt sorting (best-effort, no lock needed for read)
+	mgr, _ := state.NewManager()
+	var st *state.State
+	if mgr != nil {
+		st, _ = mgr.Load()
+	}
+
+	// Build sort keys: grove LastUsedAt for grove sessions, tmux activity for others
+	type entry struct {
+		info    tmux.SessionInfo
+		sortKey int64
+	}
+	entries := make([]entry, len(sessions))
+	for i, s := range sessions {
+		sortKey := s.Activity
+		if st != nil {
+			if ws := mgr.FindBySession(st, s.Name); ws != nil && ws.LastUsedAt != "" {
+				if t, err := time.Parse(time.RFC3339, ws.LastUsedAt); err == nil {
+					sortKey = t.Unix()
+				}
+			}
+		}
+		entries[i] = entry{info: s, sortKey: sortKey}
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].sortKey > entries[j].sortKey
 	})
 
 	current, _ := tmux.CurrentSession()
 
 	var lines []string
-	for _, s := range sessions {
+	for _, e := range entries {
+		s := e.info
 		marker := "  "
 		if s.Name == current {
 			marker = "● "
@@ -75,9 +103,18 @@ func jumpSessions() error {
 	}
 
 	if tmux.IsInsideTmux() {
-		return tmux.SwitchClient(target)
+		if err := tmux.SwitchClient(target); err != nil {
+			return err
+		}
+	} else {
+		if err := tmux.Attach(target); err != nil {
+			return err
+		}
 	}
-	return tmux.Attach(target)
+
+	// Update grove state: touch workspace, set last active
+	touchGroveSession(mgr, target)
+	return nil
 }
 
 func jumpPanes() error {
@@ -114,9 +151,43 @@ func jumpPanes() error {
 	}
 
 	if tmux.IsInsideTmux() {
-		return tmux.SwitchClient(target)
+		if err := tmux.SwitchClient(target); err != nil {
+			return err
+		}
+	} else {
+		if err := tmux.Attach(target); err != nil {
+			return err
+		}
 	}
-	return tmux.Attach(target)
+
+	// Extract session name from pane target (session:window.pane)
+	sessionName := target
+	if idx := strings.LastIndex(target, ":"); idx >= 0 {
+		sessionName = target[:idx]
+	}
+	mgr, _ := state.NewManager()
+	touchGroveSession(mgr, sessionName)
+	return nil
+}
+
+func touchGroveSession(mgr *state.StateManager, sessionName string) {
+	if mgr == nil {
+		return
+	}
+	if err := mgr.Lock(); err != nil {
+		return
+	}
+	defer mgr.Unlock()
+	st, err := mgr.Load()
+	if err != nil {
+		return
+	}
+	if ws := mgr.FindBySession(st, sessionName); ws != nil {
+		mgr.ClearNotifications(st, sessionName)
+		mgr.TouchWorkspace(st, sessionName)
+		st.LastActive = sessionName
+		_ = mgr.Save(st)
+	}
 }
 
 func runFzfJump(prompt string, lines []string) (string, error) {
