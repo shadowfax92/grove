@@ -11,8 +11,7 @@ import (
 )
 
 func init() {
-	shadowCmd.AddCommand(shadowVimCmd)
-	shadowCmd.AddCommand(shadowShellCmd)
+	shadowCmd.AddCommand(shadowToggleCmd)
 	shadowCmd.AddCommand(shadowCleanupCmd)
 	rootCmd.AddCommand(shadowCmd)
 }
@@ -24,19 +23,63 @@ var shadowCmd = &cobra.Command{
 	Short:       "Toggle persistent popup sessions (vim, shell) for the current pane",
 }
 
-var shadowVimCmd = &cobra.Command{
-	Use:   "vim",
-	Short: "Toggle vim shadow popup for current pane",
+var shadowToggleCmd = &cobra.Command{
+	Use:   "toggle <vim|shell> <client_name> <session_name> <pane_id>",
+	Short: "Toggle a shadow popup for the current tmux client",
+	Args:  cobra.ExactArgs(4),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return toggleShadow("vim")
-	},
-}
+		typ, err := normalizeShadowType(args[0])
+		if err != nil {
+			return err
+		}
 
-var shadowShellCmd = &cobra.Command{
-	Use:   "shell",
-	Short: "Toggle shell shadow popup for current pane",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return toggleShadow("sh")
+		cfg, err := config.LoadFast()
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+
+		clientName := args[1]
+		currentSession := args[2]
+		activePane := args[3]
+
+		popupClient, err := shadow.PopupClient(currentSession, clientName)
+		if err != nil {
+			return err
+		}
+
+		parentPane, err := shadow.ParentPane(currentSession, activePane)
+		if err != nil {
+			return err
+		}
+
+		targetSession := shadow.Name(parentPane, typ)
+		if shadow.IsSession(currentSession) {
+			if err := tmux.ClosePopup(popupClient); err != nil {
+				return fmt.Errorf("closing popup: %w", err)
+			}
+			if currentSession == targetSession {
+				return nil
+			}
+		}
+
+		if !tmux.PaneExists(parentPane) {
+			return shadow.CleanupOrphans()
+		}
+
+		paneCwd, err := tmux.PaneCwd(parentPane)
+		if err != nil {
+			return fmt.Errorf("getting pane cwd: %w", err)
+		}
+
+		if err := shadow.Ensure(targetSession, paneCwd, typ, parentPane); err != nil {
+			return err
+		}
+		if err := tmux.SetSessionVar(targetSession, "shadow_client_name", popupClient); err != nil {
+			return fmt.Errorf("storing shadow client: %w", err)
+		}
+
+		command := fmt.Sprintf("exec tmux attach-session -t '=%s'", targetSession)
+		return tmux.DisplayPopup(popupClient, cfg.Shadow.Popup.Width, cfg.Shadow.Popup.Height, command)
 	},
 }
 
@@ -48,27 +91,13 @@ var shadowCleanupCmd = &cobra.Command{
 	},
 }
 
-func toggleShadow(typ string) error {
-	cfg, err := config.LoadFast()
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+func normalizeShadowType(typ string) (string, error) {
+	switch typ {
+	case "vim":
+		return "vim", nil
+	case "shell", "sh":
+		return "sh", nil
+	default:
+		return "", fmt.Errorf("invalid shadow type %q", typ)
 	}
-
-	paneID, err := tmux.PaneID()
-	if err != nil {
-		return fmt.Errorf("getting pane id: %w", err)
-	}
-
-	paneCwd, err := tmux.PaneCwd()
-	if err != nil {
-		return fmt.Errorf("getting pane cwd: %w", err)
-	}
-
-	sessionName := shadow.Name(paneID, typ)
-
-	if err := shadow.Ensure(sessionName, paneCwd, typ, paneID); err != nil {
-		return err
-	}
-
-	return tmux.DisplayPopup(sessionName, cfg.Shadow.Popup.Width, cfg.Shadow.Popup.Height)
 }

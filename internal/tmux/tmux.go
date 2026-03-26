@@ -46,6 +46,18 @@ func NewSession(name, startDir string) error {
 	return err
 }
 
+func NewSessionWithCommand(name, startDir string, env []string, command string) error {
+	args := []string{"new-session", "-d", "-s", name, "-c", startDir}
+	for _, entry := range env {
+		args = append(args, "-e", entry)
+	}
+	if command != "" {
+		args = append(args, command)
+	}
+	_, err := run(args...)
+	return err
+}
+
 func KillSession(name string) error {
 	_, err := run("kill-session", "-t", "="+name)
 	return err
@@ -135,30 +147,31 @@ func PaneID() (string, error) {
 	return run("display-message", "-p", "#{pane_id}")
 }
 
-func PaneCwd() (string, error) {
-	return run("display-message", "-p", "#{pane_current_path}")
+func PaneCwd(target string) (string, error) {
+	return run("display-message", "-t", target, "-p", "#{pane_current_path}")
 }
 
 func SetSessionVar(session, key, value string) error {
-	_, err := run("set", "-t", "="+session, "@"+key, value)
+	_, err := run("set-option", "-t", session, "@"+key, value)
 	return err
 }
 
 func GetSessionVar(session, key string) (string, error) {
-	return run("show-options", "-t", "="+session, "-v", "@"+key)
+	return run("show-options", "-t", session, "-v", "@"+key)
 }
 
-func DisplayPopup(session, width, height string) error {
-	cmd := exec.Command("tmux", "display-popup", "-w", width, "-h", height, "-E",
-		fmt.Sprintf("tmux attach -t '=%s'", session))
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+func DisplayPopup(client, width, height, command string) error {
+	_, err := run("display-popup", "-c", client, "-w", width, "-h", height, "-E", command)
+	return err
 }
 
 func SetHook(hookName, command string) error {
 	_, err := run("set-hook", "-g", hookName, command)
+	return err
+}
+
+func ClosePopup(client string) error {
+	_, err := run("display-popup", "-C", "-c", client)
 	return err
 }
 
@@ -185,19 +198,6 @@ func ListSessionsByPrefix(prefix string) ([]string, error) {
 func PaneExists(paneID string) bool {
 	_, err := run("display-message", "-t", paneID, "-p", "")
 	return err == nil
-}
-
-func SetEnv(session, key, value string) error {
-	_, err := run("set-environment", "-t", "="+session, key, value)
-	return err
-}
-
-func SendKeys(target, keys string) error {
-	if _, err := run("send-keys", "-t", "="+target, "-l", keys); err != nil {
-		return err
-	}
-	_, err := run("send-keys", "-t", "="+target, "Enter")
-	return err
 }
 
 func ListPaneInfo() ([]PaneInfo, error) {

@@ -17,7 +17,7 @@ func init() {
 }
 
 var startCmd = &cobra.Command{
-	Use:     "start",
+	Use:         "start",
 	Annotations: map[string]string{"group": "Setup:"},
 	Short:       "Start grove — create sessions, bind keys, and attach",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -96,11 +96,12 @@ var startCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "warning: failed to bind key: %v\n", err)
 		}
 
-		// Bind shadow popup keybindings
-		if err := tmux.BindKeyRaw("-n", cfg.Shadow.Keys.Vim, "run-shell", "grove shadow vim"); err != nil {
+		shadowVimCmd := `grove shadow toggle vim "#{client_name}" "#{session_name}" "#{pane_id}"`
+		if err := tmux.BindKeyRaw("-n", cfg.Shadow.Keys.Vim, "run-shell", shadowVimCmd); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to bind shadow vim key: %v\n", err)
 		}
-		if err := tmux.BindKeyRaw("-n", cfg.Shadow.Keys.Shell, "run-shell", "grove shadow shell"); err != nil {
+		shadowShellCmd := `grove shadow toggle shell "#{client_name}" "#{session_name}" "#{pane_id}"`
+		if err := tmux.BindKeyRaw("-n", cfg.Shadow.Keys.Shell, "run-shell", shadowShellCmd); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to bind shadow shell key: %v\n", err)
 		}
 
