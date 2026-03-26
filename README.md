@@ -39,10 +39,15 @@ Make sure `~/bin` is on your `PATH`. Then disable terminal flow control so `Ctrl
 stty -ixon
 ```
 
-**Fish shell helper** — install the `gv` wrapper function for shorter commands and `--cd` support:
+**Fish shell helper** — install the `gv` wrapper function for shorter commands plus `gv n --cd` / `gv cd` path-changing helpers:
 
 ```sh
 make fish       # copies gv.fish to ~/.config/fish/functions/
+```
+
+```fish
+gv n --cd mono feat-auth   # create a new workspace and cd into it
+gv cd mono/feat-auth       # cd into an existing workspace
 ```
 
 Optionally, add the sidebar keybinding to `~/.tmux.conf` so it survives config reloads without needing to re-run `grove start`:
@@ -109,6 +114,8 @@ grove new mono                 # pick or auto-generate branch in mono
 grove new mono feat-auth       # worktree + session for specific branch
 grove new notes                # plain session (name doesn't match a repo)
 grove new --cd mono feat-auth  # create worktree, print path (no session)
+grove cd                       # pick existing workspace and print its path
+grove cd mono/feat-auth        # print the path for a specific workspace
 grove rm mono/feat-auth        # kill session + remove worktree
 grove list                     # show all workspaces and status
 grove switch                   # pick workspace via fzf and switch to it
