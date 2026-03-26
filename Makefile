@@ -5,7 +5,7 @@ FISH_FUNCTIONS ?= $(HOME)/.config/fish/functions
 build:
 	go build -ldflags "-X grove/cmd.Version=$(VERSION)" -o grove .
 
-install: build
+install: build fish
 	cp grove $(PREFIX)/grove
 	codesign --force --sign - $(PREFIX)/grove
 

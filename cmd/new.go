@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -163,11 +164,12 @@ func createWorktree(repo *config.RepoConfig, branch string, _ *config.Config, mg
 	worktreePath := filepath.Join(repo.Path, ".grove", "worktrees", branch)
 
 	if !noPrepare {
+		statusOut, childOut := commandWriters(dirOnly)
 		for _, prepCmd := range repo.Prepare {
-			fmt.Printf("Preparing: %s\n", prepCmd)
+			fmt.Fprintf(statusOut, "Preparing: %s\n", prepCmd)
 			c := exec.Command("sh", "-c", prepCmd)
 			c.Dir = repo.Path
-			c.Stdout = os.Stdout
+			c.Stdout = childOut
 			c.Stderr = os.Stderr
 			if err := c.Run(); err != nil {
 				return fmt.Errorf("prepare command %q failed: %w", prepCmd, err)
@@ -188,11 +190,12 @@ func createWorktree(repo *config.RepoConfig, branch string, _ *config.Config, mg
 		setupDir = filepath.Join(worktreePath, repo.Workdir)
 	}
 
+	statusOut, childOut := commandWriters(dirOnly)
 	for _, setupCmd := range repo.Setup {
-		fmt.Printf("Running: %s\n", setupCmd)
+		fmt.Fprintf(statusOut, "Running: %s\n", setupCmd)
 		c := exec.Command("sh", "-c", setupCmd)
 		c.Dir = setupDir
-		c.Stdout = os.Stdout
+		c.Stdout = childOut
 		c.Stderr = os.Stderr
 		if err := c.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: setup command failed: %v\n", err)
@@ -432,4 +435,11 @@ func existingWorktreeNames(st *state.State, repoName string) []string {
 		}
 	}
 	return result
+}
+
+func commandWriters(dirOnly bool) (io.Writer, io.Writer) {
+	if dirOnly {
+		return os.Stderr, os.Stderr
+	}
+	return os.Stdout, os.Stdout
 }

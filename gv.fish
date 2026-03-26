@@ -10,8 +10,11 @@ function gv
     switch $subcmd
         case n new
             if contains -- --cd $rest
-                set -l path (grove new $rest)
-                and cd $path
+                set -l output (grove new $rest)
+                or return $status
+                set -l path (string trim -- $output[-1])
+                test -n "$path"
+                and cd -- $path
             else
                 grove new $rest
             end
