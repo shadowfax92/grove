@@ -13,7 +13,23 @@ type Config struct {
 	Prefix  string        `yaml:"prefix"`
 	Sidebar SidebarConfig `yaml:"sidebar"`
 	Notify  NotifyConfig  `yaml:"notify"`
+	Shadow  ShadowConfig  `yaml:"shadow"`
 	Repos   []RepoConfig  `yaml:"repos"`
+}
+
+type ShadowConfig struct {
+	Popup ShadowPopupConfig `yaml:"popup"`
+	Keys  ShadowKeys        `yaml:"keys"`
+}
+
+type ShadowPopupConfig struct {
+	Width  string `yaml:"width"`
+	Height string `yaml:"height"`
+}
+
+type ShadowKeys struct {
+	Vim   string `yaml:"vim"`
+	Shell string `yaml:"shell"`
 }
 
 type NotifyConfig struct {
@@ -113,6 +129,19 @@ func (c *Config) resolve() error {
 	}
 	if c.Sidebar.Position == "" {
 		c.Sidebar.Position = "center"
+	}
+
+	if c.Shadow.Popup.Width == "" {
+		c.Shadow.Popup.Width = "80%"
+	}
+	if c.Shadow.Popup.Height == "" {
+		c.Shadow.Popup.Height = "85%"
+	}
+	if c.Shadow.Keys.Vim == "" {
+		c.Shadow.Keys.Vim = "M-v"
+	}
+	if c.Shadow.Keys.Shell == "" {
+		c.Shadow.Keys.Shell = "M-b"
 	}
 
 	return nil

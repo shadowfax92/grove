@@ -131,6 +131,75 @@ func ListSessionInfo() ([]SessionInfo, error) {
 	return sessions, nil
 }
 
+func PaneID() (string, error) {
+	return run("display-message", "-p", "#{pane_id}")
+}
+
+func PaneCwd() (string, error) {
+	return run("display-message", "-p", "#{pane_current_path}")
+}
+
+func SetSessionVar(session, key, value string) error {
+	_, err := run("set", "-t", "="+session, "@"+key, value)
+	return err
+}
+
+func GetSessionVar(session, key string) (string, error) {
+	return run("show-options", "-t", "="+session, "-v", "@"+key)
+}
+
+func DisplayPopup(session, width, height string) error {
+	cmd := exec.Command("tmux", "display-popup", "-w", width, "-h", height, "-E",
+		fmt.Sprintf("tmux attach -t '=%s'", session))
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func SetHook(hookName, command string) error {
+	_, err := run("set-hook", "-g", hookName, command)
+	return err
+}
+
+func ListSessionsByPrefix(prefix string) ([]string, error) {
+	out, err := run("list-sessions", "-F", "#{session_name}")
+	if err != nil {
+		if strings.Contains(err.Error(), "no server running") || strings.Contains(err.Error(), "no sessions") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	var result []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			result = append(result, line)
+		}
+	}
+	return result, nil
+}
+
+func PaneExists(paneID string) bool {
+	_, err := run("display-message", "-t", paneID, "-p", "")
+	return err == nil
+}
+
+func SetEnv(session, key, value string) error {
+	_, err := run("set-environment", "-t", "="+session, key, value)
+	return err
+}
+
+func SendKeys(target, keys string) error {
+	if _, err := run("send-keys", "-t", "="+target, "-l", keys); err != nil {
+		return err
+	}
+	_, err := run("send-keys", "-t", "="+target, "Enter")
+	return err
+}
+
 func ListPaneInfo() ([]PaneInfo, error) {
 	out, err := run("list-panes", "-a", "-F", "#{session_name}:#{window_index}.#{pane_index}\t#{session_name}\t#{window_name}\t#{pane_current_command}\t#{pane_current_path}")
 	if err != nil {

@@ -96,6 +96,19 @@ var startCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "warning: failed to bind key: %v\n", err)
 		}
 
+		// Bind shadow popup keybindings
+		if err := tmux.BindKeyRaw("-n", cfg.Shadow.Keys.Vim, "run-shell", "grove shadow vim"); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to bind shadow vim key: %v\n", err)
+		}
+		if err := tmux.BindKeyRaw("-n", cfg.Shadow.Keys.Shell, "run-shell", "grove shadow shell"); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to bind shadow shell key: %v\n", err)
+		}
+
+		// Clean up orphaned shadow sessions when panes die
+		if err := tmux.SetHook("after-kill-pane", "run-shell 'grove shadow cleanup'"); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to set cleanup hook: %v\n", err)
+		}
+
 		// Attach to last active or first workspace
 		target := st.LastActive
 		if target == "" && len(st.Workspaces) > 0 {

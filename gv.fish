@@ -23,6 +23,8 @@ function gv
             grove rm $rest
         case cfg config
             grove config $rest
+        case sh shadow
+            grove shadow $rest
         case '*'
             grove $argv
     end
