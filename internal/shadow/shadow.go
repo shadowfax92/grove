@@ -8,6 +8,7 @@ import (
 )
 
 const Prefix = "gs"
+const EnvVersion = "1"
 
 func Name(paneID, typ string) string {
 	id := strings.TrimPrefix(paneID, "%")
@@ -49,18 +50,25 @@ func PopupClient(currentSession, fallback string) (string, error) {
 func Ensure(sessionName, paneCwd, typ, paneID string) error {
 	if tmux.SessionExists(sessionName) {
 		storedCwd, _ := tmux.GetSessionVar(sessionName, "shadow_cwd")
-		if storedCwd == paneCwd {
+		envVersion, _ := tmux.GetSessionVar(sessionName, "shadow_env_version")
+		if storedCwd == paneCwd && envVersion == EnvVersion {
 			return nil
 		}
 		tmux.KillSession(sessionName)
 	}
 
+	env := []string{
+		fmt.Sprintf("GROVE_AGENT_PANE=%s", paneID),
+		"GROVE_SHADOW=1",
+		fmt.Sprintf("GROVE_SHADOW_TYPE=%s", typ),
+	}
+
+	command := ""
 	if typ == "vim" {
-		env := []string{fmt.Sprintf("GROVE_AGENT_PANE=%s", paneID)}
-		if err := tmux.NewSessionWithCommand(sessionName, paneCwd, env, "nvim"); err != nil {
-			return fmt.Errorf("creating shadow session: %w", err)
-		}
-	} else if err := tmux.NewSession(sessionName, paneCwd); err != nil {
+		command = "nvim"
+	}
+
+	if err := tmux.NewSessionWithCommand(sessionName, paneCwd, env, command); err != nil {
 		return fmt.Errorf("creating shadow session: %w", err)
 	}
 	if err := tmux.SetSessionVar(sessionName, "shadow_cwd", paneCwd); err != nil {
@@ -68,6 +76,9 @@ func Ensure(sessionName, paneCwd, typ, paneID string) error {
 	}
 	if err := tmux.SetSessionVar(sessionName, "shadow_parent_pane", paneID); err != nil {
 		return fmt.Errorf("storing shadow parent pane: %w", err)
+	}
+	if err := tmux.SetSessionVar(sessionName, "shadow_env_version", EnvVersion); err != nil {
+		return fmt.Errorf("storing shadow env version: %w", err)
 	}
 	return nil
 }
