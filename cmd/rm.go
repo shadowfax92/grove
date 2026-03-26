@@ -14,20 +14,34 @@ import (
 	"github.com/spf13/cobra"
 )
 
+type removeTarget struct {
+	workspace *state.Workspace // nil for plain tmux sessions
+	session   string           // tmux session name (always set)
+}
+
+func (t removeTarget) label() string {
+	if t.workspace != nil {
+		return t.workspace.Name
+	}
+	return t.session
+}
+
 func init() {
 	rmCmd.Flags().BoolP("force", "f", false, "Skip confirmation")
 	rootCmd.AddCommand(rmCmd)
 }
 
 var rmCmd = &cobra.Command{
-	Use:         "rm [workspace...]",
+	Use:         "rm [session...]",
 	Aliases:     []string{"remove"},
 	Annotations: map[string]string{"group": "Workspaces:"},
-	Short:       "Remove one or more workspaces",
-	Long: `Remove workspaces, their tmux sessions, and worktrees (if applicable).
+	Short:       "Remove workspaces or tmux sessions",
+	Long: `Remove workspaces, tmux sessions, and worktrees (if applicable).
 
-  grove rm                    — pick workspaces via fzf (Tab to multi-select)
-  grove rm <ws1> <ws2> ...    — remove specific workspaces`,
+Handles both grove-managed workspaces and plain tmux sessions.
+
+  grove rm                    — pick from all tmux sessions via fzf (Tab to multi-select)
+  grove rm <s1> <s2> ...      — remove specific workspaces or tmux sessions`,
 	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		force, _ := cmd.Flags().GetBool("force")
@@ -48,7 +62,7 @@ var rmCmd = &cobra.Command{
 
 		var picked []string
 		if len(args) == 0 {
-			picked, err = pickWorkspacesFzf(st)
+			picked, err = pickSessionsFzf()
 			if err != nil {
 				return err
 			}
@@ -61,11 +75,11 @@ var rmCmd = &cobra.Command{
 
 		if !force {
 			if len(targets) == 1 {
-				fmt.Printf("Remove workspace %q? [y/N] ", targets[0].Name)
+				fmt.Printf("Remove %q? [y/N] ", targets[0].label())
 			} else {
-				fmt.Printf("Remove %d workspaces?\n", len(targets))
-				for _, ws := range targets {
-					fmt.Printf("  %s\n", ws.Name)
+				fmt.Printf("Remove %d sessions?\n", len(targets))
+				for _, t := range targets {
+					fmt.Printf("  %s\n", t.label())
 				}
 				fmt.Print("[y/N] ")
 			}
@@ -77,27 +91,30 @@ var rmCmd = &cobra.Command{
 			}
 		}
 
-		for _, ws := range targets {
-			mgr.RemoveWorkspace(st, ws.SessionName)
-			fmt.Printf("Removed workspace %q\n", ws.Name)
+		// Remove grove workspaces from state
+		for _, t := range targets {
+			if t.workspace != nil {
+				mgr.RemoveWorkspace(st, t.workspace.SessionName)
+			}
 		}
 		if err := mgr.Save(st); err != nil {
 			return err
 		}
 
 		var failed []state.Workspace
-		for _, ws := range targets {
-			if tmux.SessionExists(ws.SessionName) {
-				_ = tmux.KillSession(ws.SessionName)
+		for _, t := range targets {
+			if tmux.SessionExists(t.session) {
+				_ = tmux.KillSession(t.session)
 			}
-			if ws.Type == "worktree" && ws.WorktreePath != ws.RepoPath {
-				if _, statErr := os.Stat(ws.WorktreePath); statErr == nil {
-					if err := git.RemoveWorktree(ws.RepoPath, ws.WorktreePath); err != nil {
-						fmt.Fprintf(os.Stderr, "warning: failed to remove worktree %s: %v\n", ws.WorktreePath, err)
-						failed = append(failed, ws)
+			if t.workspace != nil && t.workspace.Type == "worktree" && t.workspace.WorktreePath != t.workspace.RepoPath {
+				if _, statErr := os.Stat(t.workspace.WorktreePath); statErr == nil {
+					if err := git.RemoveWorktree(t.workspace.RepoPath, t.workspace.WorktreePath); err != nil {
+						fmt.Fprintf(os.Stderr, "warning: failed to remove worktree %s: %v\n", t.workspace.WorktreePath, err)
+						failed = append(failed, *t.workspace)
 					}
 				}
 			}
+			fmt.Printf("Removed %q\n", t.label())
 		}
 
 		if len(failed) > 0 {
@@ -110,18 +127,17 @@ var rmCmd = &cobra.Command{
 	},
 }
 
-func pickWorkspacesFzf(st *state.State) ([]string, error) {
-	if len(st.Workspaces) == 0 {
-		return nil, fmt.Errorf("no workspaces to remove")
+func pickSessionsFzf() ([]string, error) {
+	allSessions, err := tmux.ListSessions()
+	if err != nil {
+		return nil, err
 	}
-
-	var lines []string
-	for _, ws := range st.Workspaces {
-		lines = append(lines, ws.SessionName)
+	if len(allSessions) == 0 {
+		return nil, fmt.Errorf("no tmux sessions to remove")
 	}
 
 	fzfCmd := exec.Command("fzf", "--multi", "--prompt", "remove > ", "--height", "100%", "--reverse")
-	fzfCmd.Stdin = strings.NewReader(strings.Join(lines, "\n"))
+	fzfCmd.Stdin = strings.NewReader(strings.Join(allSessions, "\n"))
 	fzfCmd.Stderr = os.Stderr
 
 	out, err := fzfCmd.Output()
@@ -147,25 +163,35 @@ func pickWorkspacesFzf(st *state.State) ([]string, error) {
 	return selected, nil
 }
 
-func resolveRemoveTargets(mgr *state.StateManager, st *state.State, args, picked []string) ([]state.Workspace, error) {
-	var targets []state.Workspace
-	if len(args) > 0 {
-		for _, arg := range args {
-			ws := mgr.FindWorkspace(st, arg)
-			if ws == nil {
-				return nil, fmt.Errorf("workspace %q not found", arg)
-			}
-			targets = append(targets, *ws)
+func resolveRemoveTargets(mgr *state.StateManager, st *state.State, args, picked []string) ([]removeTarget, error) {
+	var targets []removeTarget
+
+	resolve := func(name string) (removeTarget, error) {
+		// Try grove workspace first (by name or session)
+		if ws := mgr.FindWorkspace(st, name); ws != nil {
+			return removeTarget{workspace: ws, session: ws.SessionName}, nil
 		}
-		return targets, nil
+		if ws := mgr.FindBySession(st, name); ws != nil {
+			return removeTarget{workspace: ws, session: ws.SessionName}, nil
+		}
+		// Fall back to plain tmux session
+		if tmux.SessionExists(name) {
+			return removeTarget{session: name}, nil
+		}
+		return removeTarget{}, fmt.Errorf("session %q not found", name)
 	}
 
-	for _, sessionName := range picked {
-		ws := mgr.FindBySession(st, sessionName)
-		if ws == nil {
-			return nil, fmt.Errorf("workspace not found for session %q", sessionName)
+	names := args
+	if len(names) == 0 {
+		names = picked
+	}
+
+	for _, name := range names {
+		t, err := resolve(name)
+		if err != nil {
+			return nil, err
 		}
-		targets = append(targets, *ws)
+		targets = append(targets, t)
 	}
 	return targets, nil
 }

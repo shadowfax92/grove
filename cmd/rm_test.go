@@ -21,12 +21,12 @@ func TestResolveRemoveTargetsStayStableAcrossStateMutation(t *testing.T) {
 		t.Fatalf("resolveRemoveTargets returned error: %v", err)
 	}
 
-	mgr.RemoveWorkspace(st, targets[0].SessionName)
+	mgr.RemoveWorkspace(st, targets[0].session)
 
-	if got, want := targets[1].SessionName, "g/gamma"; got != want {
+	if got, want := targets[1].session, "g/gamma"; got != want {
 		t.Fatalf("second target session changed after state mutation: got %q want %q", got, want)
 	}
-	if got, want := targets[1].Name, "gamma"; got != want {
+	if got, want := targets[1].workspace.Name, "gamma"; got != want {
 		t.Fatalf("second target name changed after state mutation: got %q want %q", got, want)
 	}
 }
@@ -46,8 +46,8 @@ func TestResolveRemoveTargetsRemoveOnlySelectedSessions(t *testing.T) {
 		t.Fatalf("resolveRemoveTargets returned error: %v", err)
 	}
 
-	for _, ws := range targets {
-		mgr.RemoveWorkspace(st, ws.SessionName)
+	for _, t := range targets {
+		mgr.RemoveWorkspace(st, t.session)
 	}
 
 	if got, want := len(st.Workspaces), 1; got != want {
