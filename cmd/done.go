@@ -63,13 +63,7 @@ Bind in tmux.conf:
 		if !tmux.SessionExists(switchTo) {
 			target := mgr.FindBySession(st, switchTo)
 			if target != nil {
-				dir := target.WorktreePath
-				if target.Type == "plain" {
-					dir = target.Path
-				}
-				if dir == "" {
-					dir, _ = os.UserHomeDir()
-				}
+				dir := workspaceDir(target)
 				if err := tmux.NewSession(switchTo, dir); err != nil {
 					return fmt.Errorf("recreating target session: %w", err)
 				}
