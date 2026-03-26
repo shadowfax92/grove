@@ -81,19 +81,36 @@ func jumpSessions() error {
 	})
 
 	current, _ := tmux.CurrentSession()
+	infoBySession := make(map[string]tmux.SessionInfo, len(entries))
+	sessionNames := make([]string, 0, len(entries))
+	for _, e := range entries {
+		infoBySession[e.info.Name] = e.info
+		sessionNames = append(sessionNames, e.info.Name)
+	}
 
 	var lines []string
-	for _, e := range entries {
-		s := e.info
+	for _, row := range buildSessionTreeRows(sessionNames) {
+		target := row.defaultTarget
+		if target == "" {
+			continue
+		}
+
+		s, ok := infoBySession[row.sessionName]
 		marker := "  "
-		if s.Name == current {
+		if ok && s.Name == current {
 			marker = "● "
 		}
-		winLabel := "windows"
-		if s.Windows == 1 {
-			winLabel = "window"
+
+		detail := fmt.Sprintf("%d sessions", row.leafCount)
+		if ok {
+			winLabel := "windows"
+			if s.Windows == 1 {
+				winLabel = "window"
+			}
+			detail = fmt.Sprintf("%d %s", s.Windows, winLabel)
 		}
-		display := fmt.Sprintf("%s\t%s%-30s %d %s", s.Name, marker, s.Name, s.Windows, winLabel)
+
+		display := fmt.Sprintf("%s\t%s%-30s %s", target, marker, row.label, detail)
 		lines = append(lines, display)
 	}
 

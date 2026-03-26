@@ -44,39 +44,50 @@ var listCmd = &cobra.Command{
 		}
 
 		dim := lipgloss.NewStyle().Faint(true)
+		branchStyle := lipgloss.NewStyle().Foreground(clrCyan)
+		rootStyle := lipgloss.NewStyle().Bold(true).Faint(true)
+		workspaceBySession := make(map[string]*state.Workspace, len(st.Workspaces))
+		sessionNames := make([]string, 0, len(st.Workspaces))
+		for i := range st.Workspaces {
+			workspaceBySession[st.Workspaces[i].SessionName] = &st.Workspaces[i]
+			sessionNames = append(sessionNames, st.Workspaces[i].SessionName)
+		}
 
 		var rows [][]string
-		for _, ws := range st.Workspaces {
-			name := lipgloss.NewStyle().Foreground(clrYellow).Render(ws.Name)
-			if ws.Type == "worktree" {
-				name = lipgloss.NewStyle().Foreground(clrCyan).Render(ws.Repo) +
-					"/" +
-					lipgloss.NewStyle().Foreground(clrHiGreen).Render(ws.Branch)
+		for _, row := range buildSessionTreeRows(sessionNames) {
+			workspace := workspaceBySession[row.sessionName]
+			name := row.label
+			switch {
+			case row.depth == 0:
+				name = rootStyle.Render(row.label)
+			case row.hasChild && workspace == nil:
+				name = branchStyle.Render(row.label)
 			}
 
-			session := dim.Render(ws.SessionName)
+			status := ""
+			lastUsed := ""
+			if workspace != nil {
+				if tmux.SessionExists(workspace.SessionName) {
+					status = lipgloss.NewStyle().Foreground(clrGreen).Bold(true).Render("running")
+				} else {
+					status = dim.Render("stopped")
+				}
 
-			var status string
-			if tmux.SessionExists(ws.SessionName) {
-				status = lipgloss.NewStyle().Foreground(clrGreen).Bold(true).Render("running")
-			} else {
-				status = dim.Render("stopped")
+				lastUsed = dim.Render("—")
+				if workspace.LastUsedAt != "" {
+					lastUsed = dim.Render(state.RelativeTime(workspace.LastUsedAt) + " ago")
+				}
+				if len(workspace.Notifications) > 0 {
+					lastUsed += " " + lipgloss.NewStyle().Foreground(clrYellow).Bold(true).Render("★")
+				}
 			}
 
-			lastUsed := dim.Render("—")
-			if ws.LastUsedAt != "" {
-				lastUsed = dim.Render(state.RelativeTime(ws.LastUsedAt) + " ago")
-			}
-			if len(ws.Notifications) > 0 {
-				lastUsed += " " + lipgloss.NewStyle().Foreground(clrYellow).Bold(true).Render("★")
-			}
-
-			rows = append(rows, []string{name, session, status, lastUsed})
+			rows = append(rows, []string{name, status, lastUsed})
 		}
 
 		t := table.New().
 			Border(lipgloss.HiddenBorder()).
-			Headers("NAME", "SESSION", "STATUS", "LAST USED").
+			Headers("SESSION", "STATUS", "LAST USED").
 			Rows(rows...).
 			StyleFunc(func(row, col int) lipgloss.Style {
 				s := lipgloss.NewStyle().PaddingRight(2)
