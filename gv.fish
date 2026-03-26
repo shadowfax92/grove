@@ -18,6 +18,12 @@ function gv
             else
                 grove new $rest
             end
+        case cd
+            set -l output (grove cd $rest)
+            or return $status
+            set -l path (string trim -- $output[-1])
+            test -n "$path"
+            and cd -- $path
         case s sw switch
             grove switch $rest
         case ls l list

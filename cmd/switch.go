@@ -18,7 +18,7 @@ func init() {
 }
 
 var switchCmd = &cobra.Command{
-	Use:     "switch [workspace]",
+	Use:         "switch [workspace]",
 	Aliases:     []string{"s", "sw"},
 	Annotations: map[string]string{"group": "Workspaces:"},
 	Short:       "Switch to a workspace",
@@ -45,7 +45,7 @@ var switchCmd = &cobra.Command{
 				return fmt.Errorf("workspace %q not found", args[0])
 			}
 		} else {
-			picked, err := pickSessionFzf(st)
+			picked, err := pickSessionFzf("switch > ", st)
 			if err != nil {
 				return err
 			}
@@ -56,13 +56,7 @@ var switchCmd = &cobra.Command{
 		}
 
 		if !tmux.SessionExists(ws.SessionName) {
-			dir := ws.WorktreePath
-			if ws.Type == "plain" {
-				dir = ws.Path
-			}
-			if dir == "" {
-				dir, _ = os.UserHomeDir()
-			}
+			dir := workspaceDir(ws)
 			if err := tmux.NewSession(ws.SessionName, dir); err != nil {
 				return fmt.Errorf("recreating session: %w", err)
 			}
@@ -90,7 +84,7 @@ var switchCmd = &cobra.Command{
 	},
 }
 
-func pickSessionFzf(st *state.State) (string, error) {
+func pickSessionFzf(prompt string, st *state.State) (string, error) {
 	if len(st.Workspaces) == 0 {
 		return "", fmt.Errorf("no workspaces")
 	}
@@ -126,7 +120,7 @@ func pickSessionFzf(st *state.State) (string, error) {
 	}
 
 	fzfArgs := []string{
-		"--prompt", "switch > ",
+		"--prompt", prompt,
 		"--height", "100%",
 		"--reverse",
 		"--delimiter", "\t",
