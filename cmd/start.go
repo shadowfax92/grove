@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 
 	"grove/internal/config"
 	"grove/internal/state"
@@ -69,8 +70,14 @@ var startCmd = &cobra.Command{
 			return fmt.Errorf("saving state: %w", err)
 		}
 
+		selfPath, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("finding executable path: %w", err)
+		}
+		selfCmd := strconv.Quote(selfPath)
+
 		// Bind sidebar keybinding
-		sidebarCmd := fmt.Sprintf("grove sidebar")
+		sidebarCmd := fmt.Sprintf("%s sidebar", selfCmd)
 		var popupArgs []string
 		switch cfg.Sidebar.Position {
 		case "left":
@@ -96,17 +103,18 @@ var startCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "warning: failed to bind key: %v\n", err)
 		}
 
-		shadowVimCmd := `grove shadow toggle vim "#{client_name}" "#{session_name}" "#{pane_id}"`
-		if err := tmux.BindKeyRaw("-n", cfg.Shadow.Keys.Vim, "run-shell", shadowVimCmd); err != nil {
+		shadowVimCmd := fmt.Sprintf(`%s shadow toggle vim "#{client_name}" "#{session_name}" "#{pane_id}" >/dev/null 2>&1 || true`, selfCmd)
+		if err := tmux.BindKeyRaw("-n", cfg.Shadow.Keys.Vim, "run-shell", "-b", shadowVimCmd); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to bind shadow vim key: %v\n", err)
 		}
-		shadowShellCmd := `grove shadow toggle shell "#{client_name}" "#{session_name}" "#{pane_id}"`
-		if err := tmux.BindKeyRaw("-n", cfg.Shadow.Keys.Shell, "run-shell", shadowShellCmd); err != nil {
+		shadowShellCmd := fmt.Sprintf(`%s shadow toggle shell "#{client_name}" "#{session_name}" "#{pane_id}" >/dev/null 2>&1 || true`, selfCmd)
+		if err := tmux.BindKeyRaw("-n", cfg.Shadow.Keys.Shell, "run-shell", "-b", shadowShellCmd); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to bind shadow shell key: %v\n", err)
 		}
 
 		// Clean up orphaned shadow sessions when panes die
-		if err := tmux.SetHook("after-kill-pane", "run-shell 'grove shadow cleanup'"); err != nil {
+		cleanupHook := fmt.Sprintf("run-shell '%s shadow cleanup >/dev/null 2>&1 || true'", selfCmd)
+		if err := tmux.SetHook("after-kill-pane", cleanupHook); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to set cleanup hook: %v\n", err)
 		}
 
