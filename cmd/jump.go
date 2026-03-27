@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"grove/internal/shadow"
 	"grove/internal/state"
 	"grove/internal/tmux"
 
@@ -47,6 +48,7 @@ func jumpSessions() error {
 	if err != nil {
 		return err
 	}
+	sessions = visibleJumpSessions(sessions)
 	if len(sessions) == 0 {
 		return fmt.Errorf("no tmux sessions")
 	}
@@ -139,6 +141,7 @@ func jumpPanes() error {
 	if err != nil {
 		return err
 	}
+	panes = visibleJumpPanes(panes)
 	if len(panes) == 0 {
 		return fmt.Errorf("no tmux panes")
 	}
@@ -251,4 +254,26 @@ func runFzf(prompt string, lines []string, extra []string) (string, error) {
 		return line[:idx], nil
 	}
 	return line, nil
+}
+
+func visibleJumpSessions(sessions []tmux.SessionInfo) []tmux.SessionInfo {
+	visible := make([]tmux.SessionInfo, 0, len(sessions))
+	for _, session := range sessions {
+		if shadow.IsSession(session.Name) {
+			continue
+		}
+		visible = append(visible, session)
+	}
+	return visible
+}
+
+func visibleJumpPanes(panes []tmux.PaneInfo) []tmux.PaneInfo {
+	visible := make([]tmux.PaneInfo, 0, len(panes))
+	for _, pane := range panes {
+		if shadow.IsSession(pane.Session) {
+			continue
+		}
+		visible = append(visible, pane)
+	}
+	return visible
 }
