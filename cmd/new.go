@@ -35,7 +35,7 @@ var newCmd = &cobra.Command{
   grove new <repo>       — pick or auto-generate branch in repo
   grove new <repo> <br>  — specific branch in repo
   grove new <name>       — plain session (if name doesn't match a repo)
-  grove new --cd         — create workspace, print path: cd (gv n --cd)`,
+  grove new --cd         — create workspace, print path: cd (gv n --cd / gv nd)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		noSwitch, _ := cmd.Flags().GetBool("no-switch")
 		noPrepare, _ := cmd.Flags().GetBool("no-prepare")
@@ -97,15 +97,6 @@ func createPlain(name string, mgr *state.StateManager, st *state.State, noSwitch
 
 	dir, _ := os.UserHomeDir()
 
-	if dirOnly {
-		fmt.Println(dir)
-		return nil
-	}
-
-	if err := tmux.NewSession(sessionName, dir); err != nil {
-		return fmt.Errorf("creating session: %w", err)
-	}
-
 	ws := state.Workspace{
 		Name:        name,
 		Type:        "plain",
@@ -113,9 +104,17 @@ func createPlain(name string, mgr *state.StateManager, st *state.State, noSwitch
 		SessionName: sessionName,
 	}
 	mgr.AddWorkspace(st, ws)
-
 	if err := mgr.Save(st); err != nil {
 		return err
+	}
+
+	if dirOnly {
+		fmt.Println(dir)
+		return nil
+	}
+
+	if err := tmux.NewSession(sessionName, dir); err != nil {
+		return fmt.Errorf("creating session: %w", err)
 	}
 
 	fmt.Printf("Created workspace %q\n", name)
@@ -202,15 +201,6 @@ func createWorktree(repo *config.RepoConfig, branch string, _ *config.Config, mg
 		}
 	}
 
-	if dirOnly {
-		fmt.Println(setupDir)
-		return nil
-	}
-
-	if err := tmux.CreateSessionWithLayout(sessionName, setupDir, repo.Layout); err != nil {
-		return fmt.Errorf("creating session: %w", err)
-	}
-
 	ws := state.Workspace{
 		Name:         fmt.Sprintf("%s/%s", repo.Name, branch),
 		Type:         "worktree",
@@ -221,9 +211,17 @@ func createWorktree(repo *config.RepoConfig, branch string, _ *config.Config, mg
 		SessionName:  sessionName,
 	}
 	mgr.AddWorkspace(st, ws)
-
 	if err := mgr.Save(st); err != nil {
 		return err
+	}
+
+	if dirOnly {
+		fmt.Println(setupDir)
+		return nil
+	}
+
+	if err := tmux.CreateSessionWithLayout(sessionName, setupDir, repo.Layout); err != nil {
+		return fmt.Errorf("creating session: %w", err)
 	}
 
 	fmt.Printf("Created worktree workspace %s/%s\n", repo.Name, branch)
@@ -258,15 +256,6 @@ func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateMa
 		startDir = filepath.Join(repo.Path, repo.Workdir)
 	}
 
-	if dirOnly {
-		fmt.Println(startDir)
-		return nil
-	}
-
-	if err := tmux.CreateSessionWithLayout(sessionName, startDir, repo.Layout); err != nil {
-		return fmt.Errorf("creating session: %w", err)
-	}
-
 	ws := state.Workspace{
 		Name:        fmt.Sprintf("%s/%s", repo.Name, name),
 		Type:        "dir",
@@ -276,9 +265,17 @@ func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateMa
 		SessionName: sessionName,
 	}
 	mgr.AddWorkspace(st, ws)
-
 	if err := mgr.Save(st); err != nil {
 		return err
+	}
+
+	if dirOnly {
+		fmt.Println(startDir)
+		return nil
+	}
+
+	if err := tmux.CreateSessionWithLayout(sessionName, startDir, repo.Layout); err != nil {
+		return fmt.Errorf("creating session: %w", err)
 	}
 
 	fmt.Printf("Created dir workspace %s/%s\n", repo.Name, name)
@@ -310,15 +307,6 @@ func createPlainRepo(repo *config.RepoConfig, name string, mgr *state.StateManag
 
 	home, _ := os.UserHomeDir()
 
-	if dirOnly {
-		fmt.Println(home)
-		return nil
-	}
-
-	if err := tmux.NewSession(sessionName, home); err != nil {
-		return fmt.Errorf("creating session: %w", err)
-	}
-
 	ws := state.Workspace{
 		Name:        fmt.Sprintf("%s/%s", repo.Name, name),
 		Type:        "plain",
@@ -327,9 +315,17 @@ func createPlainRepo(repo *config.RepoConfig, name string, mgr *state.StateManag
 		SessionName: sessionName,
 	}
 	mgr.AddWorkspace(st, ws)
-
 	if err := mgr.Save(st); err != nil {
 		return err
+	}
+
+	if dirOnly {
+		fmt.Println(home)
+		return nil
+	}
+
+	if err := tmux.NewSession(sessionName, home); err != nil {
+		return fmt.Errorf("creating session: %w", err)
 	}
 
 	fmt.Printf("Created plain workspace %s/%s\n", repo.Name, name)

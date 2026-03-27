@@ -39,15 +39,17 @@ Make sure `~/bin` is on your `PATH`. Then disable terminal flow control so `Ctrl
 stty -ixon
 ```
 
-**Fish shell helper** — install the `gv` wrapper function for shorter commands plus `gv n --cd` / `gv cd` path-changing helpers:
+**Fish shell helper** — install the `gv` wrapper function for shorter commands plus `gv nd`, `gv cd`, and `gv dd` path-changing helpers:
 
 ```sh
 make fish       # copies gv.fish to ~/.config/fish/functions/
 ```
 
 ```fish
-gv n --cd mono feat-auth   # create a new workspace and cd into it
+gv nd mono feat-auth       # create a new workspace and cd into it
+gv n --cd mono feat-auth   # same flow, longer spelling
 gv cd mono/feat-auth       # cd into an existing workspace
+gv dd                      # finish the cwd-backed workspace and cd to the next one
 ```
 
 Optionally, add the sidebar keybinding to `~/.tmux.conf` so it survives config reloads without needing to re-run `grove start`:
@@ -116,6 +118,9 @@ grove new notes                # plain session (name doesn't match a repo)
 grove new --cd mono feat-auth  # create worktree, print path (no session)
 grove cd                       # pick existing workspace and print its path
 grove cd mono/feat-auth        # print the path for a specific workspace
+grove done --tmux              # finish current tmux workspace and switch to the next one
+grove done --cd                # finish workspace for current cwd and print the next path
+grove done --cd mono/feat-auth # finish a specific workspace and print the next path
 grove rm mono/feat-auth        # kill session + remove worktree
 grove list                     # show all workspaces and status
 grove switch                   # pick workspace via fzf and switch to it
@@ -127,7 +132,7 @@ grove notify clear             # clear notification for current session
 grove --version                # print version
 ```
 
-Most commands have short aliases: `new`→`n`, `list`→`ls`/`l`, `switch`→`s`/`sw`, `rm`→`remove`, `config`→`cfg`.
+Most commands have short aliases: `new`→`n`, `done`→`d`, `list`→`ls`/`l`, `switch`→`s`/`sw`, `rm`→`remove`, `config`→`cfg`.
 
 ## Sidebar Keybindings
 
