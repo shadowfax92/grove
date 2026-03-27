@@ -8,6 +8,18 @@ function gv
     set -l rest $argv[2..]
 
     switch $subcmd
+        case nd
+            set -l output (grove new --cd $rest)
+            or return $status
+            set -l path (string trim -- $output[-1])
+            test -n "$path"
+            and cd -- $path
+        case dd
+            set -l output (grove done --cd $rest)
+            or return $status
+            set -l path (string trim -- $output[-1])
+            test -n "$path"
+            and cd -- $path
         case n new
             if contains -- --cd $rest
                 set -l output (grove new $rest)

@@ -35,7 +35,7 @@ var newCmd = &cobra.Command{
   grove new <repo>       — pick or auto-generate branch in repo
   grove new <repo> <br>  — specific branch in repo
   grove new <name>       — plain session (if name doesn't match a repo)
-  grove new --cd         — create workspace, print path: cd (gv n --cd)`,
+  grove new --cd         — create workspace, print path: cd (gv n --cd / gv nd)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		noSwitch, _ := cmd.Flags().GetBool("no-switch")
 		noPrepare, _ := cmd.Flags().GetBool("no-prepare")
