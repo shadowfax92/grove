@@ -34,3 +34,10 @@ func TestFindNextSessionFallsBackToMostRecent(t *testing.T) {
 		t.Fatalf("findNextSession() = %q, want %q", got, want)
 	}
 }
+
+func TestValidateDoneArgsRejectsWorkspaceInTmuxMode(t *testing.T) {
+	err := validateDoneArgs([]string{"mono/feat-auth"}, true)
+	if err == nil {
+		t.Fatalf("validateDoneArgs() error = nil, want rejection")
+	}
+}

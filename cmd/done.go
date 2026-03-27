@@ -40,6 +40,9 @@ Bind in tmux.conf:
 		if err := validateDoneMode(tmuxMode, cdMode); err != nil {
 			return err
 		}
+		if err := validateDoneArgs(args, tmuxMode); err != nil {
+			return err
+		}
 		return runDone(args, tmuxMode)
 	},
 }
@@ -47,6 +50,13 @@ Bind in tmux.conf:
 func validateDoneMode(tmuxMode, cdMode bool) error {
 	if tmuxMode == cdMode {
 		return fmt.Errorf("choose exactly one mode: --tmux or --cd")
+	}
+	return nil
+}
+
+func validateDoneArgs(args []string, tmuxMode bool) error {
+	if tmuxMode && len(args) > 0 {
+		return fmt.Errorf("workspace arguments are only supported with --cd")
 	}
 	return nil
 }
