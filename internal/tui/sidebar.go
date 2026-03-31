@@ -10,6 +10,7 @@ import (
 	"grove/internal/git"
 	"grove/internal/state"
 	"grove/internal/tmux"
+	"grove/internal/workspaces"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -303,8 +304,13 @@ func (m Model) selectWorkspace() (tea.Model, tea.Cmd) {
 	m.st.LastActive = node.Workspace.SessionName
 	_ = m.stateMgr.Save(m.st)
 
-	// Recreate session if it doesn't exist
-	if !tmux.SessionExists(node.Workspace.SessionName) {
+	running := tmux.SessionExists(node.Workspace.SessionName)
+	if inv, err := workspaces.Build(m.st, nil); err == nil {
+		if entry, ok := inv.FindManagedBySession(node.Workspace.SessionName); ok {
+			running = entry.Running
+		}
+	}
+	if !running {
 		dir := node.Workspace.WorktreePath
 		if node.Workspace.Type == "plain" || node.Workspace.Type == "dir" {
 			dir = node.Workspace.Path
@@ -492,7 +498,11 @@ func (m Model) confirmDelete() (tea.Model, tea.Cmd) {
 
 	wsCopy := *m.deleteTarget.Workspace
 
-	m.stateMgr.RemoveWorkspace(m.st, wsCopy.SessionName)
+	workspaces.RemoveManagedEntries(m.st, []workspaces.RemoveTarget{{
+		Kind:        workspaces.RemoveManagedWorkspace,
+		Workspace:   wsCopy,
+		SessionName: wsCopy.SessionName,
+	}})
 	_ = m.stateMgr.Save(m.st)
 
 	m.rebuildTree()
@@ -588,7 +598,14 @@ func (m Model) confirmRename() (tea.Model, tea.Cmd) {
 	}
 
 	// Check for duplicates
-	if m.stateMgr.FindBySession(m.st, newSessionName) != nil {
+	if inv, err := workspaces.Build(m.st, nil); err == nil {
+		if _, ok := inv.FindManagedBySession(newSessionName); ok {
+			m.err = fmt.Errorf("workspace %q already exists", newName)
+			m.mode = modeBrowse
+			m.renameTarget = nil
+			return m, nil
+		}
+	} else if m.stateMgr.FindBySession(m.st, newSessionName) != nil {
 		m.err = fmt.Errorf("workspace %q already exists", newName)
 		m.mode = modeBrowse
 		m.renameTarget = nil

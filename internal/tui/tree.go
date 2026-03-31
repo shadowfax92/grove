@@ -7,12 +7,13 @@ import (
 
 	"grove/internal/config"
 	"grove/internal/state"
+	"grove/internal/workspaces"
 )
 
 type NodeKind int
 
 const (
-	NodeRepo      NodeKind = iota
+	NodeRepo NodeKind = iota
 	NodeWorkspace
 )
 
@@ -30,9 +31,11 @@ func (n TreeNode) IsRepo() bool {
 
 func buildTree(st *state.State, cfg *config.Config, currentSession string) []TreeNode {
 	var nodes []TreeNode
+	managed := managedEntriesForTree(st)
 
 	repoWorkspaces := make(map[string][]state.Workspace)
-	for _, ws := range st.Workspaces {
+	for _, entry := range managed {
+		ws := entry.Workspace
 		if ws.Repo != "" {
 			repoWorkspaces[ws.Repo] = append(repoWorkspaces[ws.Repo], ws)
 		}
@@ -80,10 +83,11 @@ func buildTree(st *state.State, cfg *config.Config, currentSession string) []Tre
 	}
 
 	// Standalone plain workspaces at the bottom, sorted by LastUsedAt
-	var plainWs []*state.Workspace
-	for i := range st.Workspaces {
-		if st.Workspaces[i].Type == "plain" && st.Workspaces[i].Repo == "" {
-			plainWs = append(plainWs, &st.Workspaces[i])
+	var plainWs []state.Workspace
+	for _, entry := range managed {
+		ws := entry.Workspace
+		if ws.Type == "plain" && ws.Repo == "" {
+			plainWs = append(plainWs, ws)
 		}
 	}
 	sort.Slice(plainWs, func(i, j int) bool {
@@ -98,15 +102,28 @@ func buildTree(st *state.State, cfg *config.Config, currentSession string) []Tre
 		}
 		return plainWs[i].LastUsedAt > plainWs[j].LastUsedAt
 	})
-	for _, ws := range plainWs {
+	for i := range plainWs {
 		nodes = append(nodes, TreeNode{
 			Kind:        NodeWorkspace,
-			Workspace:   ws,
-			DisplayName: ws.Name,
+			Workspace:   &plainWs[i],
+			DisplayName: plainWs[i].Name,
 		})
 	}
 
 	return nodes
+}
+
+func managedEntriesForTree(st *state.State) []workspaces.ManagedEntry {
+	inv, err := workspaces.Build(st, nil)
+	if err == nil {
+		return inv.Managed
+	}
+
+	entries := make([]workspaces.ManagedEntry, 0, len(st.Workspaces))
+	for _, ws := range st.Workspaces {
+		entries = append(entries, workspaces.ManagedEntry{Workspace: ws})
+	}
+	return entries
 }
 
 func renderTree(nodes []TreeNode, cursor int, expanded map[string]bool, currentSession string, filter string, styles Styles) string {
