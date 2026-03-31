@@ -111,11 +111,17 @@ Targets:
 			}
 		}
 
+		var removeTargets []workspaces.RemoveTarget
 		for _, t := range selected {
 			if t.Kind == workspaces.CleanupManagedWorkspace {
-				mgr.RemoveWorkspace(st, t.Workspace.SessionName)
+				removeTargets = append(removeTargets, workspaces.RemoveTarget{
+					Kind:        workspaces.RemoveManagedWorkspace,
+					Workspace:   t.Workspace,
+					SessionName: t.Workspace.SessionName,
+				})
 			}
 		}
+		workspaces.RemoveManagedEntries(st, removeTargets)
 		if err := mgr.Save(st); err != nil {
 			return err
 		}
