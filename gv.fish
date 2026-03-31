@@ -36,6 +36,16 @@ function gv
             set -l path (string trim -- $output[-1])
             test -n "$path"
             and cd -- $path
+        case d done
+            if contains -- --cd $rest
+                set -l output (grove done $rest)
+                or return $status
+                set -l path (string trim -- $output[-1])
+                test -n "$path"
+                and cd -- $path
+            else
+                grove done $rest
+            end
         case s sw switch
             grove switch $rest
         case ls l list

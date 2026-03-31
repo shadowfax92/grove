@@ -76,52 +76,48 @@ func runDone(args []string, tmuxMode bool) error {
 		return err
 	}
 
-	current, next, err := resolveDoneWorkspaces(mgr, st, args, tmuxMode)
+	current, err := resolveDoneWorkspace(mgr, st, args, tmuxMode)
 	if err != nil {
 		return err
 	}
 
 	if tmuxMode {
+		nextSession := findNextSession(st, current.SessionName)
+		if nextSession == "" {
+			return fmt.Errorf("no other workspace to switch to")
+		}
+		next := mgr.FindBySession(st, nextSession)
+		if next == nil {
+			return fmt.Errorf("no other workspace to switch to")
+		}
 		if err := ensureDoneSwitchTarget(next); err != nil {
 			return err
 		}
 		if err := tmux.SwitchClient(next.SessionName); err != nil {
 			return fmt.Errorf("switching to %s: %w", next.SessionName, err)
 		}
+		removed := *current
+		mgr.TouchWorkspace(st, next.SessionName)
+		st.LastActive = next.SessionName
+		mgr.RemoveWorkspace(st, current.SessionName)
+		if err := mgr.Save(st); err != nil {
+			return fmt.Errorf("saving state: %w", err)
+		}
+		cleanupDoneWorkspace(removed)
+		fmt.Printf("Done with %q → switched to %s\n", removed.Name, next.SessionName)
+		return nil
 	}
 
+	// --cd mode: remove workspace, always go home
 	removed := *current
-	nextPath := workspaceDir(next)
-	mgr.TouchWorkspace(st, next.SessionName)
-	st.LastActive = next.SessionName
+	home, _ := os.UserHomeDir()
 	mgr.RemoveWorkspace(st, current.SessionName)
 	if err := mgr.Save(st); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
 	cleanupDoneWorkspace(removed)
-
-	if !tmuxMode {
-		fmt.Println(nextPath)
-		return nil
-	}
-	fmt.Printf("Done with %q → switched to %s\n", removed.Name, next.SessionName)
+	fmt.Println(home)
 	return nil
-}
-
-func resolveDoneWorkspaces(mgr *state.StateManager, st *state.State, args []string, tmuxMode bool) (*state.Workspace, *state.Workspace, error) {
-	current, err := resolveDoneWorkspace(mgr, st, args, tmuxMode)
-	if err != nil {
-		return nil, nil, err
-	}
-	nextSession := findNextSession(st, current.SessionName)
-	if nextSession == "" {
-		return nil, nil, fmt.Errorf("no other workspace to switch to")
-	}
-	next := mgr.FindBySession(st, nextSession)
-	if next == nil {
-		return nil, nil, fmt.Errorf("next workspace %q not found", nextSession)
-	}
-	return current, next, nil
 }
 
 func resolveDoneWorkspace(mgr *state.StateManager, st *state.State, args []string, tmuxMode bool) (*state.Workspace, error) {
@@ -179,9 +175,13 @@ func cleanupDoneWorkspace(removed state.Workspace) {
 }
 
 func findNextSession(st *state.State, exclude string) string {
-	// Try LastActive first
+	// Try LastActive first, but only if it still exists in state
 	if st.LastActive != "" && st.LastActive != exclude {
-		return st.LastActive
+		for _, ws := range st.Workspaces {
+			if ws.SessionName == st.LastActive {
+				return st.LastActive
+			}
+		}
 	}
 
 	// Fall back to most recently used workspace
