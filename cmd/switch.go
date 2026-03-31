@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"sort"
 	"strings"
 
 	"grove/internal/state"
 	"grove/internal/tmux"
+	"grove/internal/workspaces"
 
 	"github.com/spf13/cobra"
 )
@@ -37,26 +37,32 @@ var switchCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		inv, err := workspaces.Build(st, nil)
+		if err != nil {
+			return err
+		}
 
-		var ws *state.Workspace
+		var ws state.Workspace
 		if len(args) == 1 {
-			ws = mgr.FindWorkspace(st, args[0])
-			if ws == nil {
+			entry, ok := inv.FindManaged(args[0])
+			if !ok {
 				return fmt.Errorf("workspace %q not found", args[0])
 			}
+			ws = entry.Workspace
 		} else {
-			picked, err := pickSessionFzf("switch > ", st)
+			picked, err := pickSessionFzf("switch > ", inv.ManagedByLastUsed())
 			if err != nil {
 				return err
 			}
-			ws = mgr.FindBySession(st, picked)
-			if ws == nil {
+			entry, ok := inv.FindManagedBySession(picked)
+			if !ok {
 				return fmt.Errorf("workspace not found")
 			}
+			ws = entry.Workspace
 		}
 
 		if !tmux.SessionExists(ws.SessionName) {
-			dir := workspaceDir(ws)
+			dir := workspaceDir(&ws)
 			if err := tmux.NewSession(ws.SessionName, dir); err != nil {
 				return fmt.Errorf("recreating session: %w", err)
 			}
@@ -84,29 +90,14 @@ var switchCmd = &cobra.Command{
 	},
 }
 
-func pickSessionFzf(prompt string, st *state.State) (string, error) {
-	if len(st.Workspaces) == 0 {
+func pickSessionFzf(prompt string, entries []workspaces.ManagedEntry) (string, error) {
+	if len(entries) == 0 {
 		return "", fmt.Errorf("no workspaces")
 	}
 
-	// Sort by LastUsedAt descending
-	sorted := make([]state.Workspace, len(st.Workspaces))
-	copy(sorted, st.Workspaces)
-	sort.Slice(sorted, func(i, j int) bool {
-		if sorted[i].LastUsedAt == "" && sorted[j].LastUsedAt == "" {
-			return false
-		}
-		if sorted[i].LastUsedAt == "" {
-			return false
-		}
-		if sorted[j].LastUsedAt == "" {
-			return true
-		}
-		return sorted[i].LastUsedAt > sorted[j].LastUsedAt
-	})
-
 	var lines []string
-	for _, ws := range sorted {
+	for _, entry := range entries {
+		ws := entry.Workspace
 		badge := "  "
 		if len(ws.Notifications) > 0 {
 			badge = "* "

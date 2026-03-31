@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"grove/internal/state"
-	"grove/internal/tmux"
+	"grove/internal/workspaces"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
@@ -37,8 +37,12 @@ var listCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		inv, err := workspaces.Build(st, nil)
+		if err != nil {
+			return err
+		}
 
-		if len(st.Workspaces) == 0 {
+		if len(inv.Managed) == 0 {
 			fmt.Println("No workspaces. Run 'grove new' to create one.")
 			return nil
 		}
@@ -46,28 +50,29 @@ var listCmd = &cobra.Command{
 		dim := lipgloss.NewStyle().Faint(true)
 		branchStyle := lipgloss.NewStyle().Foreground(clrCyan)
 		rootStyle := lipgloss.NewStyle().Bold(true).Faint(true)
-		workspaceBySession := make(map[string]*state.Workspace, len(st.Workspaces))
-		sessionNames := make([]string, 0, len(st.Workspaces))
-		for i := range st.Workspaces {
-			workspaceBySession[st.Workspaces[i].SessionName] = &st.Workspaces[i]
-			sessionNames = append(sessionNames, st.Workspaces[i].SessionName)
+		workspaceBySession := make(map[string]workspaces.ManagedEntry, len(inv.Managed))
+		sessionNames := make([]string, 0, len(inv.Managed))
+		for _, entry := range inv.Managed {
+			workspaceBySession[entry.Workspace.SessionName] = entry
+			sessionNames = append(sessionNames, entry.Workspace.SessionName)
 		}
 
 		var rows [][]string
 		for _, row := range buildSessionTreeRows(sessionNames) {
-			workspace := workspaceBySession[row.sessionName]
+			entry, ok := workspaceBySession[row.sessionName]
 			name := row.label
 			switch {
 			case row.depth == 0:
 				name = rootStyle.Render(row.label)
-			case row.hasChild && workspace == nil:
+			case row.hasChild && !ok:
 				name = branchStyle.Render(row.label)
 			}
 
 			status := ""
 			lastUsed := ""
-			if workspace != nil {
-				if tmux.SessionExists(workspace.SessionName) {
+			if ok {
+				workspace := entry.Workspace
+				if entry.Running {
 					status = lipgloss.NewStyle().Foreground(clrGreen).Bold(true).Render("running")
 				} else {
 					status = dim.Render("stopped")

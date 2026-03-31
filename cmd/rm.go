@@ -5,26 +5,16 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"grove/internal/git"
 	"grove/internal/state"
 	"grove/internal/tmux"
+	"grove/internal/workspaces"
 
 	"github.com/spf13/cobra"
 )
-
-type removeTarget struct {
-	workspace *state.Workspace // nil for plain tmux sessions
-	session   string           // tmux session name (always set)
-}
-
-func (t removeTarget) label() string {
-	if t.workspace != nil {
-		return t.workspace.Name
-	}
-	return t.session
-}
 
 func init() {
 	rmCmd.Flags().BoolP("force", "f", false, "Skip confirmation")
@@ -59,27 +49,31 @@ Handles both grove-managed workspaces and plain tmux sessions.
 		if err != nil {
 			return err
 		}
+		inv, err := workspaces.Build(st, nil)
+		if err != nil {
+			return err
+		}
 
-		var picked []string
+		var targets []workspaces.RemoveTarget
 		if len(args) == 0 {
-			picked, err = pickSessionsFzf()
+			targets, err = pickRemoveTargetsFzf(inv.RemoveCandidates())
+			if err != nil {
+				return err
+			}
+		} else {
+			targets, err = inv.ResolveRemoveTargets(args)
 			if err != nil {
 				return err
 			}
 		}
 
-		targets, err := resolveRemoveTargets(mgr, st, args, picked)
-		if err != nil {
-			return err
-		}
-
 		if !force {
 			if len(targets) == 1 {
-				fmt.Printf("Remove %q? [y/N] ", targets[0].label())
+				fmt.Printf("Remove %q? [y/N] ", targets[0].Label())
 			} else {
 				fmt.Printf("Remove %d sessions?\n", len(targets))
 				for _, t := range targets {
-					fmt.Printf("  %s\n", t.label())
+					fmt.Printf("  %s\n", t.Label())
 				}
 				fmt.Print("[y/N] ")
 			}
@@ -91,30 +85,25 @@ Handles both grove-managed workspaces and plain tmux sessions.
 			}
 		}
 
-		// Remove grove workspaces from state
-		for _, t := range targets {
-			if t.workspace != nil {
-				mgr.RemoveWorkspace(st, t.workspace.SessionName)
-			}
-		}
+		workspaces.RemoveManagedEntries(st, targets)
 		if err := mgr.Save(st); err != nil {
 			return err
 		}
 
 		var failed []state.Workspace
 		for _, t := range targets {
-			if tmux.SessionExists(t.session) {
-				_ = tmux.KillSession(t.session)
+			if tmux.SessionExists(t.SessionName) {
+				_ = tmux.KillSession(t.SessionName)
 			}
-			if t.workspace != nil && t.workspace.Type == "worktree" && t.workspace.WorktreePath != t.workspace.RepoPath {
-				if _, statErr := os.Stat(t.workspace.WorktreePath); statErr == nil {
-					if err := git.RemoveWorktree(t.workspace.RepoPath, t.workspace.WorktreePath); err != nil {
-						fmt.Fprintf(os.Stderr, "warning: failed to remove worktree %s: %v\n", t.workspace.WorktreePath, err)
-						failed = append(failed, *t.workspace)
+			if t.Kind == workspaces.RemoveManagedWorkspace && t.Workspace.Type == "worktree" && t.Workspace.WorktreePath != t.Workspace.RepoPath {
+				if _, statErr := os.Stat(t.Workspace.WorktreePath); statErr == nil {
+					if err := git.RemoveWorktree(t.Workspace.RepoPath, t.Workspace.WorktreePath); err != nil {
+						fmt.Fprintf(os.Stderr, "warning: failed to remove worktree %s: %v\n", t.Workspace.WorktreePath, err)
+						failed = append(failed, t.Workspace)
 					}
 				}
 			}
-			fmt.Printf("Removed %q\n", t.label())
+			fmt.Printf("Removed %q\n", t.Label())
 		}
 
 		if len(failed) > 0 {
@@ -127,17 +116,35 @@ Handles both grove-managed workspaces and plain tmux sessions.
 	},
 }
 
-func pickSessionsFzf() ([]string, error) {
-	allSessions, err := tmux.ListSessions()
-	if err != nil {
-		return nil, err
-	}
-	if len(allSessions) == 0 {
+func pickRemoveTargetsFzf(candidates []workspaces.RemoveTarget) ([]workspaces.RemoveTarget, error) {
+	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no tmux sessions to remove")
 	}
 
-	fzfCmd := exec.Command("fzf", "--multi", "--prompt", "remove > ", "--height", "100%", "--reverse")
-	fzfCmd.Stdin = strings.NewReader(strings.Join(allSessions, "\n"))
+	var lines []string
+	for i, candidate := range candidates {
+		kind := "tmux"
+		status := "running"
+		if candidate.Kind == workspaces.RemoveManagedWorkspace {
+			kind = "workspace"
+			if !candidate.Running {
+				status = "stopped"
+			}
+		}
+		lines = append(lines, fmt.Sprintf("%d\t%-10s\t%-30s\t%s", i, kind, candidate.Label(), status))
+	}
+
+	fzfCmd := exec.Command(
+		"fzf",
+		"--multi",
+		"--prompt", "remove > ",
+		"--header", "Select Grove workspaces or tmux sessions to remove",
+		"--height", "100%",
+		"--reverse",
+		"--delimiter", "\t",
+		"--with-nth", "2,3,4",
+	)
+	fzfCmd.Stdin = strings.NewReader(strings.Join(lines, "\n"))
 	fzfCmd.Stderr = os.Stderr
 
 	out, err := fzfCmd.Output()
@@ -148,11 +155,16 @@ func pickSessionsFzf() ([]string, error) {
 		return nil, fmt.Errorf("fzf failed: %w (is fzf installed?)", err)
 	}
 
-	var selected []string
+	var selected []workspaces.RemoveTarget
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" {
-			selected = append(selected, line)
+			parts := strings.SplitN(line, "\t", 4)
+			idx, convErr := strconv.Atoi(parts[0])
+			if convErr != nil || idx < 0 || idx >= len(candidates) {
+				continue
+			}
+			selected = append(selected, candidates[idx])
 		}
 	}
 
@@ -161,37 +173,4 @@ func pickSessionsFzf() ([]string, error) {
 	}
 
 	return selected, nil
-}
-
-func resolveRemoveTargets(mgr *state.StateManager, st *state.State, args, picked []string) ([]removeTarget, error) {
-	var targets []removeTarget
-
-	resolve := func(name string) (removeTarget, error) {
-		// Try grove workspace first (by name or session)
-		if ws := mgr.FindWorkspace(st, name); ws != nil {
-			return removeTarget{workspace: ws, session: ws.SessionName}, nil
-		}
-		if ws := mgr.FindBySession(st, name); ws != nil {
-			return removeTarget{workspace: ws, session: ws.SessionName}, nil
-		}
-		// Fall back to plain tmux session
-		if tmux.SessionExists(name) {
-			return removeTarget{session: name}, nil
-		}
-		return removeTarget{}, fmt.Errorf("session %q not found", name)
-	}
-
-	names := args
-	if len(names) == 0 {
-		names = picked
-	}
-
-	for _, name := range names {
-		t, err := resolve(name)
-		if err != nil {
-			return nil, err
-		}
-		targets = append(targets, t)
-	}
-	return targets, nil
 }

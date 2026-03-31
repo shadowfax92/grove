@@ -11,6 +11,7 @@ import (
 	"grove/internal/shadow"
 	"grove/internal/state"
 	"grove/internal/tmux"
+	"grove/internal/workspaces"
 
 	"github.com/spf13/cobra"
 )
@@ -56,8 +57,12 @@ func jumpSessions() error {
 	// Load grove state for LastUsedAt sorting (best-effort, no lock needed for read)
 	mgr, _ := state.NewManager()
 	var st *state.State
+	var inv *workspaces.Inventory
 	if mgr != nil {
 		st, _ = mgr.Load()
+		if st != nil {
+			inv, _ = workspaces.Build(st, nil)
+		}
 	}
 
 	// Build sort keys: grove LastUsedAt for grove sessions, tmux activity for others
@@ -68,9 +73,9 @@ func jumpSessions() error {
 	entries := make([]entry, len(sessions))
 	for i, s := range sessions {
 		sortKey := s.Activity
-		if st != nil {
-			if ws := mgr.FindBySession(st, s.Name); ws != nil && ws.LastUsedAt != "" {
-				if t, err := time.Parse(time.RFC3339, ws.LastUsedAt); err == nil {
+		if inv != nil {
+			if managed, ok := inv.FindManagedBySession(s.Name); ok && managed.Workspace.LastUsedAt != "" {
+				if t, err := time.Parse(time.RFC3339, managed.Workspace.LastUsedAt); err == nil {
 					sortKey = t.Unix()
 				}
 			}
@@ -202,7 +207,11 @@ func touchGroveSession(mgr *state.StateManager, sessionName string) {
 	if err != nil {
 		return
 	}
-	if ws := mgr.FindBySession(st, sessionName); ws != nil {
+	inv, err := workspaces.Build(st, nil)
+	if err != nil {
+		return
+	}
+	if _, ok := inv.FindManagedBySession(sessionName); ok {
 		mgr.ClearNotifications(st, sessionName)
 		mgr.TouchWorkspace(st, sessionName)
 		st.LastActive = sessionName

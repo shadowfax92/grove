@@ -5,26 +5,17 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 
 	"grove/internal/config"
 	"grove/internal/git"
 	"grove/internal/state"
 	"grove/internal/tmux"
+	"grove/internal/workspaces"
 
 	"github.com/spf13/cobra"
 )
-
-type cleanupTarget struct {
-	workspace    *state.Workspace
-	repoPath     string
-	worktreePath string
-	label        string
-	detail       string
-}
 
 func init() {
 	cleanupCmd.Flags().BoolP("force", "f", false, "Skip confirmation")
@@ -67,16 +58,20 @@ Targets:
 		if err != nil {
 			return err
 		}
+		inv, err := workspaces.Build(st, cfg)
+		if err != nil {
+			return err
+		}
 
 		fmt.Fprintf(os.Stderr, "Scanning %d workspaces and %d repos…\n", len(st.Workspaces), len(cfg.Repos))
-		candidates := findCleanupCandidates(cfg, st)
+		candidates := inv.CleanupTargets()
 		if len(candidates) == 0 {
 			fmt.Fprintln(os.Stderr, "Nothing to clean up.")
 			return nil
 		}
 		stale, orphans := 0, 0
 		for _, c := range candidates {
-			if c.workspace != nil {
+			if c.Kind == workspaces.CleanupManagedWorkspace {
 				stale++
 			} else {
 				orphans++
@@ -84,7 +79,7 @@ Targets:
 		}
 		fmt.Fprintf(os.Stderr, "Found %d stale workspaces, %d orphaned worktrees\n", stale, orphans)
 
-		var selected []cleanupTarget
+		var selected []workspaces.CleanupTarget
 		if all {
 			selected = candidates
 		} else {
@@ -100,11 +95,11 @@ Targets:
 
 		if !force {
 			if len(selected) == 1 {
-				fmt.Printf("Remove %s? [y/N] ", selected[0].label)
+				fmt.Printf("Remove %s? [y/N] ", selected[0].Label)
 			} else {
 				fmt.Printf("Remove %d workspaces?\n", len(selected))
 				for _, t := range selected {
-					fmt.Printf("  %s\n", t.label)
+					fmt.Printf("  %s\n", t.Label)
 				}
 				fmt.Print("[y/N] ")
 			}
@@ -117,8 +112,8 @@ Targets:
 		}
 
 		for _, t := range selected {
-			if t.workspace != nil {
-				mgr.RemoveWorkspace(st, t.workspace.SessionName)
+			if t.Kind == workspaces.CleanupManagedWorkspace {
+				mgr.RemoveWorkspace(st, t.Workspace.SessionName)
 			}
 		}
 		if err := mgr.Save(st); err != nil {
@@ -127,16 +122,16 @@ Targets:
 
 		var failed []state.Workspace
 		for i, t := range selected {
-			fmt.Fprintf(os.Stderr, "[%d/%d] Removing %s…\n", i+1, len(selected), t.label)
-			if t.workspace != nil && tmux.SessionExists(t.workspace.SessionName) {
-				_ = tmux.KillSession(t.workspace.SessionName)
+			fmt.Fprintf(os.Stderr, "[%d/%d] Removing %s…\n", i+1, len(selected), t.Label)
+			if t.Kind == workspaces.CleanupManagedWorkspace && tmux.SessionExists(t.Workspace.SessionName) {
+				_ = tmux.KillSession(t.Workspace.SessionName)
 			}
-			if t.worktreePath != "" {
-				if _, statErr := os.Stat(t.worktreePath); statErr == nil {
-					if err := git.RemoveWorktree(t.repoPath, t.worktreePath); err != nil {
-						fmt.Fprintf(os.Stderr, "  warning: failed to remove worktree %s: %v\n", t.worktreePath, err)
-						if t.workspace != nil {
-							failed = append(failed, *t.workspace)
+			if t.WorktreePath != "" {
+				if _, statErr := os.Stat(t.WorktreePath); statErr == nil {
+					if err := git.RemoveWorktree(t.RepoPath, t.WorktreePath); err != nil {
+						fmt.Fprintf(os.Stderr, "  warning: failed to remove worktree %s: %v\n", t.WorktreePath, err)
+						if t.Kind == workspaces.CleanupManagedWorkspace {
+							failed = append(failed, t.Workspace)
 						}
 						continue
 					}
@@ -155,104 +150,14 @@ Targets:
 	},
 }
 
-func findCleanupCandidates(cfg *config.Config, st *state.State) []cleanupTarget {
-	// Single tmux call to get all live sessions
-	liveSessions := make(map[string]bool)
-	if sessions, err := tmux.ListSessions(); err == nil {
-		for _, s := range sessions {
-			liveSessions[s] = true
-		}
-	}
-
-	var candidates []cleanupTarget
-	for i := range st.Workspaces {
-		ws := &st.Workspaces[i]
-		if liveSessions[ws.SessionName] {
-			continue
-		}
-		t := cleanupTarget{
-			workspace: ws,
-			label:     ws.Name,
-		}
-		if ws.Type == "worktree" {
-			t.repoPath = ws.RepoPath
-			t.worktreePath = ws.WorktreePath
-		}
-		if ws.LastUsedAt != "" {
-			t.detail = state.RelativeTime(ws.LastUsedAt) + " ago"
-		} else if ws.CreatedAt != "" {
-			t.detail = state.RelativeTime(ws.CreatedAt) + " ago"
-		}
-		candidates = append(candidates, t)
-	}
-
-	trackedPaths := make(map[string]bool)
-	for _, ws := range st.Workspaces {
-		if ws.WorktreePath != "" {
-			trackedPaths[ws.WorktreePath] = true
-		}
-	}
-
-	// Fan out git worktree list across repos concurrently
-	type orphanResult struct {
-		targets []cleanupTarget
-	}
-	var wtRepos []config.RepoConfig
-	for _, repo := range cfg.Repos {
-		if repo.Type != "" && repo.Type != "worktree" {
-			continue
-		}
-		wtRepos = append(wtRepos, repo)
-	}
-
-	results := make([]orphanResult, len(wtRepos))
-	var wg sync.WaitGroup
-	groveWorktreePrefix := string(filepath.Separator) + ".grove" + string(filepath.Separator) + "worktrees" + string(filepath.Separator)
-	for i, repo := range wtRepos {
-		wg.Add(1)
-		go func(idx int, r config.RepoConfig) {
-			defer wg.Done()
-			worktrees, err := git.ListWorktrees(r.Path)
-			if err != nil {
-				return
-			}
-			for _, wt := range worktrees {
-				if wt.Bare || trackedPaths[wt.Path] {
-					continue
-				}
-				if !strings.Contains(wt.Path, groveWorktreePrefix) {
-					continue
-				}
-				branch := wt.Branch
-				if branch == "" {
-					branch = filepath.Base(wt.Path)
-				}
-				results[idx].targets = append(results[idx].targets, cleanupTarget{
-					repoPath:     r.Path,
-					worktreePath: wt.Path,
-					label:        fmt.Sprintf("%s/%s", r.Name, branch),
-					detail:       "orphan",
-				})
-			}
-		}(i, repo)
-	}
-	wg.Wait()
-
-	for _, r := range results {
-		candidates = append(candidates, r.targets...)
-	}
-
-	return candidates
-}
-
-func pickCleanupFzf(candidates []cleanupTarget) ([]cleanupTarget, error) {
+func pickCleanupFzf(candidates []workspaces.CleanupTarget) ([]workspaces.CleanupTarget, error) {
 	var lines []string
 	for i, c := range candidates {
-		tag := c.detail
+		tag := c.Detail
 		if tag == "" {
 			tag = "stopped"
 		}
-		lines = append(lines, fmt.Sprintf("%d\t%-30s\t%s", i, c.label, tag))
+		lines = append(lines, fmt.Sprintf("%d\t%-30s\t%s", i, c.Label, tag))
 	}
 
 	fzfCmd := exec.Command("fzf",
@@ -275,7 +180,7 @@ func pickCleanupFzf(candidates []cleanupTarget) ([]cleanupTarget, error) {
 		return nil, fmt.Errorf("fzf failed: %w", err)
 	}
 
-	var selected []cleanupTarget
+	var selected []workspaces.CleanupTarget
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {

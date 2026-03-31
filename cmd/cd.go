@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"grove/internal/state"
+	"grove/internal/workspaces"
 
 	"github.com/spf13/cobra"
 )
@@ -31,28 +32,34 @@ var cdCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if len(st.Workspaces) == 0 {
+		inv, err := workspaces.Build(st, nil)
+		if err != nil {
+			return err
+		}
+		if len(inv.Managed) == 0 {
 			return fmt.Errorf("no workspaces")
 		}
 
-		var ws *state.Workspace
+		var ws state.Workspace
 		if len(args) == 1 {
-			ws = mgr.FindWorkspace(st, args[0])
-			if ws == nil {
+			entry, ok := inv.FindManaged(args[0])
+			if !ok {
 				return fmt.Errorf("workspace %q not found", args[0])
 			}
+			ws = entry.Workspace
 		} else {
-			picked, err := pickSessionFzf("cd > ", st)
+			picked, err := pickSessionFzf("cd > ", inv.ManagedByLastUsed())
 			if err != nil {
 				return err
 			}
-			ws = mgr.FindBySession(st, picked)
-			if ws == nil {
+			entry, ok := inv.FindManagedBySession(picked)
+			if !ok {
 				return fmt.Errorf("workspace not found")
 			}
+			ws = entry.Workspace
 		}
 
-		fmt.Println(workspaceDir(ws))
+		fmt.Println(workspaceDir(&ws))
 		return nil
 	},
 }
