@@ -2,7 +2,7 @@
 
 **Persistent popup sessions for tmux — vim and shell shadows for any pane.**
 
-Press `Alt+V` for an editor popup, `Alt+B` for a shell popup. The popup follows your pane's working directory.
+Press `Alt+I` for an editor popup, `Alt+B` for a shell popup. The popup follows your pane's working directory.
 
 ## Install
 
@@ -22,10 +22,18 @@ Make sure `~/bin` is on your `PATH`.
 # 1. Bind the popup keys in your tmux session
 grove start
 
-# 2. Press Alt+V for vim popup, Alt+B for shell popup
+# 2. Press Alt+I for vim popup, Alt+B for shell popup
 ```
 
-To make the bindings persist across tmux restarts, add to `~/.tmux.conf`:
+To make the bindings persist across tmux restarts, add to your `.zshrc`:
+
+```sh
+if [ -n "$TMUX" ]; then
+  grove start >/dev/null 2>&1
+fi
+```
+
+Or add to `~/.tmux.conf`:
 
 ```tmux
 run-shell 'grove start'
@@ -39,9 +47,9 @@ Location: `~/.config/grove/config.yaml` (created automatically on first run)
 shadow:
   popup:
     width: "80%"
-    height: "85%"
+    height: "95%"
   keys:
-    vim: M-v
+    vim: M-i
     shell: M-b
 ```
 
@@ -60,6 +68,25 @@ grove config
 3. Opens it in a tmux popup overlay
 
 If the pane's directory has changed since the shadow was created, the shadow is recreated in the new directory. When panes are closed, orphaned shadow sessions are automatically cleaned up.
+
+## Usage with Layouts
+
+Grove pairs well with [layouts](https://github.com/shadowfax92/layouts) for tmux pane management:
+
+```sh
+# See available layouts
+layouts list
+
+# Apply a layout to your current tmux session
+layouts apply dev          # 3 windows: claude+editor+shell, test, codex
+layouts apply simple       # 3 windows: editor, claude, shell
+
+# Create a NEW tmux session with a layout pre-applied
+layouts new myproject dev
+
+# Then use grove popups in any pane
+# Alt+I → vim popup, Alt+B → shell popup
+```
 
 ## CLI
 

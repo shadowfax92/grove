@@ -75,7 +75,7 @@ func (c *Config) setDefaults() {
 		c.Shadow.Popup.Height = "85%"
 	}
 	if c.Shadow.Keys.Vim == "" {
-		c.Shadow.Keys.Vim = "M-v"
+		c.Shadow.Keys.Vim = "M-i"
 	}
 	if c.Shadow.Keys.Shell == "" {
 		c.Shadow.Keys.Shell = "M-b"
