@@ -14,6 +14,12 @@ var Version = "dev"
 
 var ErrCancelled = errors.New("")
 
+var (
+	clrCyan    = lipgloss.Color("6")
+	clrHiGreen = lipgloss.Color("10")
+	clrYellow  = lipgloss.Color("11")
+)
+
 func helpHeader(s string) string {
 	return lipgloss.NewStyle().Bold(true).Foreground(clrCyan).Render(s)
 }
@@ -28,7 +34,6 @@ func helpAliases(aliases []string) string {
 }
 
 var groupOrder = []string{
-	"Workspaces:",
 	"Setup:",
 	"Other:",
 }
@@ -86,13 +91,10 @@ const usageTemplate = `{{helpHeader "Usage:"}}{{if .Runnable}}
 
 var rootCmd = &cobra.Command{
 	Use:           "grove",
-	Short:         "Tmux workspaces powered by git worktrees",
+	Short:         "Tmux popup sessions — vim and shell shadows for any pane",
 	Version:       Version,
 	SilenceUsage:  true,
 	SilenceErrors: true,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return listCmd.RunE(cmd, args)
-	},
 }
 
 func init() {
