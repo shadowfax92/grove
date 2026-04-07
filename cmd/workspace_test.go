@@ -42,6 +42,40 @@ func TestWorkspaceDirFallsBackToHome(t *testing.T) {
 	}
 }
 
+func TestWorkspacePaneLabelUsesBranchForWorktrees(t *testing.T) {
+	ws := &state.Workspace{
+		Type:        "worktree",
+		Branch:      "feat-auth",
+		SessionName: "g/mono/feat-auth",
+	}
+
+	if got, want := workspacePaneLabel(ws), "feat-auth"; got != want {
+		t.Fatalf("workspacePaneLabel() = %q, want %q", got, want)
+	}
+}
+
+func TestWorkspacePaneLabelTrimsSessionPrefixForPlainWorkspace(t *testing.T) {
+	ws := &state.Workspace{
+		Type:        "plain",
+		SessionName: "g/notes",
+	}
+
+	if got, want := workspacePaneLabel(ws), "notes"; got != want {
+		t.Fatalf("workspacePaneLabel() = %q, want %q", got, want)
+	}
+}
+
+func TestWorkspacePaneLabelPreservesRepoScopedNonWorktreeNames(t *testing.T) {
+	ws := &state.Workspace{
+		Type:        "dir",
+		SessionName: "g/mono/scratch",
+	}
+
+	if got, want := workspacePaneLabel(ws), "mono/scratch"; got != want {
+		t.Fatalf("workspacePaneLabel() = %q, want %q", got, want)
+	}
+}
+
 func TestFindWorkspaceRefMatchesNameAndSession(t *testing.T) {
 	mgr := &state.StateManager{}
 	st := &state.State{

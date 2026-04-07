@@ -109,7 +109,7 @@ func createPlain(name string, mgr *state.StateManager, st *state.State, noSwitch
 	}
 
 	if dirOnly {
-		fmt.Println(dir)
+		finishDirOnlyWorkspace(dir, ws)
 		return nil
 	}
 
@@ -216,7 +216,7 @@ func createWorktree(repo *config.RepoConfig, branch string, _ *config.Config, mg
 	}
 
 	if dirOnly {
-		fmt.Println(setupDir)
+		finishDirOnlyWorkspace(setupDir, ws)
 		return nil
 	}
 
@@ -270,7 +270,7 @@ func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateMa
 	}
 
 	if dirOnly {
-		fmt.Println(startDir)
+		finishDirOnlyWorkspace(startDir, ws)
 		return nil
 	}
 
@@ -320,7 +320,7 @@ func createPlainRepo(repo *config.RepoConfig, name string, mgr *state.StateManag
 	}
 
 	if dirOnly {
-		fmt.Println(home)
+		finishDirOnlyWorkspace(home, ws)
 		return nil
 	}
 
@@ -438,4 +438,22 @@ func commandWriters(dirOnly bool) (io.Writer, io.Writer) {
 		return os.Stderr, os.Stderr
 	}
 	return os.Stdout, os.Stdout
+}
+
+func finishDirOnlyWorkspace(path string, ws state.Workspace) {
+	fmt.Println(path)
+	maybeSetCurrentPaneLabel(&ws)
+}
+
+func maybeSetCurrentPaneLabel(ws *state.Workspace) {
+	if !tmux.IsInsideTmux() {
+		return
+	}
+	label := workspacePaneLabel(ws)
+	if label == "" {
+		return
+	}
+	if err := tmux.SetCurrentPaneLabel(label); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not set pane label: %v\n", err)
+	}
 }

@@ -147,6 +147,19 @@ func PaneID() (string, error) {
 	return run("display-message", "-p", "#{pane_id}")
 }
 
+func SetPaneVar(target, key, value string) error {
+	_, err := run("set-option", "-p", "-t", target, "@"+key, value)
+	return err
+}
+
+func SetCurrentPaneLabel(value string) error {
+	target, err := PaneID()
+	if err != nil {
+		return err
+	}
+	return SetPaneVar(target, "pane_label", value)
+}
+
 func PaneCwd(target string) (string, error) {
 	return run("display-message", "-t", target, "-p", "#{pane_current_path}")
 }

@@ -24,6 +24,16 @@ func workspaceDir(ws *state.Workspace) string {
 	return home
 }
 
+func workspacePaneLabel(ws *state.Workspace) string {
+	if ws == nil {
+		return ""
+	}
+	if ws.Type == "worktree" && ws.Branch != "" {
+		return ws.Branch
+	}
+	return strings.TrimPrefix(ws.SessionName, "g/")
+}
+
 func findWorkspaceRef(mgr *state.StateManager, st *state.State, ref string) *state.Workspace {
 	if ws := mgr.FindWorkspace(st, ref); ws != nil {
 		return ws
