@@ -76,6 +76,88 @@ func TestWorkspacePaneLabelPreservesRepoScopedNonWorktreeNames(t *testing.T) {
 	}
 }
 
+func TestResolvePaneLabelPrefersWorkspace(t *testing.T) {
+	ws := &state.Workspace{
+		Type:        "worktree",
+		Branch:      "feat-auth",
+		SessionName: "g/mono/feat-auth",
+	}
+	got := resolvePaneLabel(paneLabelInputs{
+		cwd:       "/tmp/mono/.grove/worktrees/feat-auth",
+		workspace: ws,
+		branch:    "feat-auth",
+		repoRoot:  "/tmp/mono",
+	})
+	if got != "feat-auth" {
+		t.Fatalf("resolvePaneLabel() = %q, want feat-auth", got)
+	}
+}
+
+func TestResolvePaneLabelMainBranchUsesRepoBasename(t *testing.T) {
+	got := resolvePaneLabel(paneLabelInputs{
+		cwd:      "/Users/x/code/clis/grove",
+		branch:   "main",
+		repoRoot: "/Users/x/code/clis/grove",
+	})
+	if got != "grove" {
+		t.Fatalf("resolvePaneLabel() = %q, want grove", got)
+	}
+}
+
+func TestResolvePaneLabelNonMainBranchUsesBranchName(t *testing.T) {
+	got := resolvePaneLabel(paneLabelInputs{
+		cwd:      "/Users/x/code/some-repo",
+		branch:   "feat/x",
+		repoRoot: "/Users/x/code/some-repo",
+	})
+	if got != "feat/x" {
+		t.Fatalf("resolvePaneLabel() = %q, want feat/x", got)
+	}
+}
+
+func TestResolvePaneLabelDetachedHeadUsesRepoAtSha(t *testing.T) {
+	got := resolvePaneLabel(paneLabelInputs{
+		cwd:      "/Users/x/code/some-repo",
+		repoRoot: "/Users/x/code/some-repo",
+		headSha:  "abc1234",
+	})
+	if got != "some-repo@abc1234" {
+		t.Fatalf("resolvePaneLabel() = %q, want some-repo@abc1234", got)
+	}
+}
+
+func TestResolvePaneLabelHomeReturnsHome(t *testing.T) {
+	home := "/Users/x"
+	got := resolvePaneLabel(paneLabelInputs{
+		cwd:  home,
+		home: home,
+	})
+	if got != "home" {
+		t.Fatalf("resolvePaneLabel() = %q, want home", got)
+	}
+}
+
+func TestResolvePaneLabelFallsBackToBasename(t *testing.T) {
+	got := resolvePaneLabel(paneLabelInputs{
+		cwd:  "/Users/x/Downloads",
+		home: "/Users/x",
+	})
+	if got != "Downloads" {
+		t.Fatalf("resolvePaneLabel() = %q, want Downloads", got)
+	}
+}
+
+func TestResolvePaneLabelMasterAlsoMapsToRepoBasename(t *testing.T) {
+	got := resolvePaneLabel(paneLabelInputs{
+		cwd:      "/tmp/legacy",
+		branch:   "master",
+		repoRoot: "/tmp/legacy",
+	})
+	if got != "legacy" {
+		t.Fatalf("resolvePaneLabel() = %q, want legacy", got)
+	}
+}
+
 func TestFindWorkspaceRefMatchesNameAndSession(t *testing.T) {
 	mgr := &state.StateManager{}
 	st := &state.State{

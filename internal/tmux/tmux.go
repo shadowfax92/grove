@@ -160,6 +160,25 @@ func SetCurrentPaneLabel(value string) error {
 	return SetPaneVar(target, "pane_label", value)
 }
 
+func UnsetCurrentPaneLabel() error {
+	target, err := PaneID()
+	if err != nil {
+		return err
+	}
+	_, err = run("set-option", "-p", "-t", target, "-u", "@pane_label")
+	return err
+}
+
+func RenameCurrentWindow(name string) error {
+	_, err := run("rename-window", name)
+	return err
+}
+
+func DisableCurrentWindowAutoRename() error {
+	_, err := run("set-option", "-w", "automatic-rename", "off")
+	return err
+}
+
 func PaneCwd(target string) (string, error) {
 	return run("display-message", "-t", target, "-p", "#{pane_current_path}")
 }

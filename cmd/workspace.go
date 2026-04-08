@@ -34,6 +34,60 @@ func workspacePaneLabel(ws *state.Workspace) string {
 	return strings.TrimPrefix(ws.SessionName, "g/")
 }
 
+type paneLabelInputs struct {
+	cwd       string
+	home      string
+	workspace *state.Workspace
+	branch    string
+	repoRoot  string
+	headSha   string
+}
+
+func resolvePaneLabel(in paneLabelInputs) string {
+	if in.workspace != nil {
+		if label := workspacePaneLabel(in.workspace); label != "" {
+			return label
+		}
+	}
+	if in.branch != "" {
+		if isMainBranch(in.branch) && in.repoRoot != "" {
+			return filepath.Base(in.repoRoot)
+		}
+		return in.branch
+	}
+	if in.repoRoot != "" && in.headSha != "" {
+		return filepath.Base(in.repoRoot) + "@" + in.headSha
+	}
+	if in.home != "" && samePath(in.cwd, in.home) {
+		return "home"
+	}
+	base := filepath.Base(in.cwd)
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		return in.cwd
+	}
+	return base
+}
+
+func isMainBranch(branch string) bool {
+	switch branch {
+	case "main", "master", "trunk":
+		return true
+	}
+	return false
+}
+
+func samePath(a, b string) bool {
+	pa, err := filepath.Abs(a)
+	if err != nil {
+		return false
+	}
+	pb, err := filepath.Abs(b)
+	if err != nil {
+		return false
+	}
+	return pa == pb
+}
+
 func findWorkspaceRef(mgr *state.StateManager, st *state.State, ref string) *state.Workspace {
 	if ws := mgr.FindWorkspace(st, ref); ws != nil {
 		return ws

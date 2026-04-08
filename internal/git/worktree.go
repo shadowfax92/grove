@@ -85,6 +85,36 @@ func RemoteBranchExists(repoPath, branch string) bool {
 	return cmd.Run() == nil
 }
 
+func CurrentBranch(dir string) string {
+	cmd := exec.Command("git", "symbolic-ref", "--short", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func RepoRoot(dir string) string {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func HeadShortSha(dir string) string {
+	cmd := exec.Command("git", "rev-parse", "--short", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func RemoveWorktree(repoPath, worktreePath string) error {
 	cmd := exec.Command("git", "worktree", "remove", worktreePath, "--force")
 	cmd.Dir = repoPath
