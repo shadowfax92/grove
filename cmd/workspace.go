@@ -44,11 +44,6 @@ type paneLabelInputs struct {
 }
 
 func resolvePaneLabel(in paneLabelInputs) string {
-	if in.workspace != nil {
-		if label := workspacePaneLabel(in.workspace); label != "" {
-			return label
-		}
-	}
 	if in.branch != "" {
 		if isMainBranch(in.branch) && in.repoRoot != "" {
 			return filepath.Base(in.repoRoot)
@@ -61,11 +56,13 @@ func resolvePaneLabel(in paneLabelInputs) string {
 	if in.home != "" && samePath(in.cwd, in.home) {
 		return "home"
 	}
-	base := filepath.Base(in.cwd)
-	if base == "" || base == "." || base == string(filepath.Separator) {
-		return in.cwd
+	if base := filepath.Base(in.cwd); base != "" && base != "." && base != string(filepath.Separator) {
+		return base
 	}
-	return base
+	if in.workspace != nil {
+		return workspacePaneLabel(in.workspace)
+	}
+	return ""
 }
 
 func isMainBranch(branch string) bool {

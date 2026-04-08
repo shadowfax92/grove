@@ -76,12 +76,8 @@ func TestWorkspacePaneLabelPreservesRepoScopedNonWorktreeNames(t *testing.T) {
 	}
 }
 
-func TestResolvePaneLabelPrefersWorkspace(t *testing.T) {
-	ws := &state.Workspace{
-		Type:        "worktree",
-		Branch:      "feat-auth",
-		SessionName: "g/mono/feat-auth",
-	}
+func TestResolvePaneLabelBranchBeatsWorkspaceSession(t *testing.T) {
+	ws := &state.Workspace{Type: "plain", SessionName: "g/MAIN"}
 	got := resolvePaneLabel(paneLabelInputs{
 		cwd:       "/tmp/mono/.grove/worktrees/feat-auth",
 		workspace: ws,
@@ -90,6 +86,30 @@ func TestResolvePaneLabelPrefersWorkspace(t *testing.T) {
 	})
 	if got != "feat-auth" {
 		t.Fatalf("resolvePaneLabel() = %q, want feat-auth", got)
+	}
+}
+
+func TestResolvePaneLabelHomeBeatsWorkspaceSession(t *testing.T) {
+	ws := &state.Workspace{Type: "plain", SessionName: "g/MAIN"}
+	home := "/Users/shadowfax"
+	got := resolvePaneLabel(paneLabelInputs{
+		cwd:       home,
+		home:      home,
+		workspace: ws,
+	})
+	if got != "home" {
+		t.Fatalf("resolvePaneLabel() = %q, want home", got)
+	}
+}
+
+func TestResolvePaneLabelFallsBackToSessionWhenCwdDegenerate(t *testing.T) {
+	ws := &state.Workspace{Type: "plain", SessionName: "g/MAIN"}
+	got := resolvePaneLabel(paneLabelInputs{
+		cwd:       "/",
+		workspace: ws,
+	})
+	if got != "MAIN" {
+		t.Fatalf("resolvePaneLabel() = %q, want MAIN", got)
 	}
 }
 
