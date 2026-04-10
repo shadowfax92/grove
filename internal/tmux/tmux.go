@@ -15,10 +15,20 @@ type SessionInfo struct {
 	Activity int64
 }
 
+type WindowInfo struct {
+	Target  string // session_name:window_index
+	Session string
+	Index   int
+	Name    string
+	Label   string
+	Path    string
+}
+
 type PaneInfo struct {
 	Target     string
 	Session    string
 	WindowName string
+	Label      string
 	Command    string
 	Path       string
 }
@@ -232,8 +242,38 @@ func PaneExists(paneID string) bool {
 	return err == nil
 }
 
+func ListWindowInfo() ([]WindowInfo, error) {
+	out, err := run("list-windows", "-a", "-F", "#{session_name}:#{window_index}\t#{session_name}\t#{window_index}\t#{window_name}\t#{@pane_label}\t#{pane_current_path}")
+	if err != nil {
+		if strings.Contains(err.Error(), "no server running") || strings.Contains(err.Error(), "no sessions") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	var windows []WindowInfo
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(line, "\t", 6)
+		if len(parts) < 6 {
+			continue
+		}
+		idx, _ := strconv.Atoi(parts[2])
+		windows = append(windows, WindowInfo{
+			Target:  parts[0],
+			Session: parts[1],
+			Index:   idx,
+			Name:    parts[3],
+			Label:   parts[4],
+			Path:    parts[5],
+		})
+	}
+	return windows, nil
+}
+
 func ListPaneInfo() ([]PaneInfo, error) {
-	out, err := run("list-panes", "-a", "-F", "#{session_name}:#{window_index}.#{pane_index}\t#{session_name}\t#{window_name}\t#{pane_current_command}\t#{pane_current_path}")
+	out, err := run("list-panes", "-a", "-F", "#{session_name}:#{window_index}.#{pane_index}\t#{session_name}\t#{window_name}\t#{@pane_label}\t#{pane_current_command}\t#{pane_current_path}")
 	if err != nil {
 		if strings.Contains(err.Error(), "no server running") || strings.Contains(err.Error(), "no sessions") {
 			return nil, nil
@@ -245,16 +285,17 @@ func ListPaneInfo() ([]PaneInfo, error) {
 	}
 	var panes []PaneInfo
 	for _, line := range strings.Split(out, "\n") {
-		parts := strings.SplitN(line, "\t", 5)
-		if len(parts) < 5 {
+		parts := strings.SplitN(line, "\t", 6)
+		if len(parts) < 6 {
 			continue
 		}
 		panes = append(panes, PaneInfo{
 			Target:     parts[0],
 			Session:    parts[1],
 			WindowName: parts[2],
-			Command:    parts[3],
-			Path:       parts[4],
+			Label:      parts[3],
+			Command:    parts[4],
+			Path:       parts[5],
 		})
 	}
 	return panes, nil
