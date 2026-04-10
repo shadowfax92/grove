@@ -179,6 +179,21 @@ func UnsetCurrentPaneLabel() error {
 	return err
 }
 
+func UnsetSessionVar(session, key string) error {
+	_, err := run("set-option", "-t", session, "-u", "@"+key)
+	return err
+}
+
+func MoveCurrentWindow(targetSession string) error {
+	_, err := run("move-window", "-t", "="+targetSession+":")
+	return err
+}
+
+func KillWindow(target string) error {
+	_, err := run("kill-window", "-t", target)
+	return err
+}
+
 func RenameCurrentWindow(name string) error {
 	_, err := run("rename-window", name)
 	return err
