@@ -47,6 +47,11 @@ Creates the target session if it doesn't exist.
 		if err != nil {
 			return fmt.Errorf("reading current session: %w", err)
 		}
+		// Resolve target: try as-is, then g/-prefixed
+		if !tmux.SessionExists(target) && !strings.HasPrefix(target, "g/") {
+			target = "g/" + target
+		}
+
 		if session == target {
 			return fmt.Errorf("current window is already in %q", target)
 		}
@@ -67,9 +72,12 @@ Creates the target session if it doesn't exist.
 			return fmt.Errorf("moving window: %w", err)
 		}
 
-		// If we just created the session, kill its placeholder window
+		// If we just created the session, kill its placeholder window and register in state
 		if created {
 			_ = tmux.KillWindow("=" + target + ":1")
+			wsName := strings.TrimPrefix(target, "g/")
+			home, _ := os.UserHomeDir()
+			registerWorkspace(wsName, target, home)
 		}
 
 		fmt.Printf("moved window to %s\n", target)

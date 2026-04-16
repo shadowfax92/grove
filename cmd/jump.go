@@ -136,6 +136,7 @@ func jumpSessions(all bool) error {
 	target, err := runFzf("session > ", lines, []string{
 		"--with-nth", "2..",
 		"--nth", "2..",
+		"--tiebreak", "begin,index",
 	})
 	if err != nil {
 		return err

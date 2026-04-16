@@ -113,6 +113,18 @@ var startCmd = &cobra.Command{
 
 		// Attach to last active or first workspace
 		target := st.LastActive
+		if target != "" {
+			found := false
+			for _, ws := range st.Workspaces {
+				if ws.SessionName == target {
+					found = true
+					break
+				}
+			}
+			if !found {
+				target = ""
+			}
+		}
 		if target == "" && len(st.Workspaces) > 0 {
 			target = st.Workspaces[0].SessionName
 		}

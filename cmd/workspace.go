@@ -159,3 +159,29 @@ func workspaceMatchNames(st *state.State, matches []workspaceMatch, rootLen int)
 	sort.Strings(names)
 	return names
 }
+
+func registerWorkspace(name, sessionName, path string) {
+	mgr, err := state.NewManager()
+	if err != nil {
+		return
+	}
+	if err := mgr.Lock(); err != nil {
+		return
+	}
+	defer mgr.Unlock()
+
+	st, err := mgr.Load()
+	if err != nil {
+		return
+	}
+	if mgr.FindBySession(st, sessionName) != nil {
+		return
+	}
+	mgr.AddWorkspace(st, state.Workspace{
+		Name:        name,
+		Type:        "plain",
+		SessionName: sessionName,
+		Path:        path,
+	})
+	_ = mgr.Save(st)
+}

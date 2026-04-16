@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"grove/internal/shadow"
 	"grove/internal/tmux"
@@ -51,6 +52,10 @@ Only works when the current session is a gs/ shadow session.`,
 			name = label
 		}
 
+		if !strings.HasPrefix(name, "g/") {
+			name = "g/" + name
+		}
+
 		if tmux.SessionExists(name) {
 			return fmt.Errorf("session %q already exists", name)
 		}
@@ -63,6 +68,12 @@ Only works when the current session is a gs/ shadow session.`,
 		for _, key := range []string{"shadow_cwd", "shadow_parent_pane", "shadow_env_version"} {
 			_ = tmux.UnsetSessionVar(name, key)
 		}
+
+		// Register in grove state so notify/sidebar/jump see it
+		paneID, _ := tmux.PaneID()
+		cwd, _ := tmux.PaneCwd(paneID)
+		wsName := strings.TrimPrefix(name, "g/")
+		registerWorkspace(wsName, name, cwd)
 
 		fmt.Printf("promoted %s → %s\n", session, name)
 		return nil
