@@ -17,12 +17,15 @@ var ErrCancelled = errors.New("")
 func helpHeader(s string) string {
 	return lipgloss.NewStyle().Bold(true).Foreground(clrCyan).Render(s)
 }
+
 func helpCmdCol(s string) string {
 	return lipgloss.NewStyle().Foreground(clrHiGreen).Render(s)
 }
+
 func helpHint(s string) string {
 	return lipgloss.NewStyle().Faint(true).Render(s)
 }
+
 func helpAliases(aliases []string) string {
 	return lipgloss.NewStyle().Foreground(clrYellow).Render(fmt.Sprintf("(aliases: %s)", strings.Join(aliases, ", ")))
 }
