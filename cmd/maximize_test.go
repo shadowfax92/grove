@@ -16,7 +16,7 @@ func TestShadowMaximizeOpensCenteredPopup(t *testing.T) {
 	log := readFakeTmuxLog(t, logPath)
 	assertLogContains(t, log, "display-popup -C -c popup-client")
 	assertLogContains(t, log, "set-option -t gs/vim/7 @shadow_popup_mode maximized")
-	assertLogContains(t, log, "display-popup -c popup-client -w 60% -h 100% -E exec tmux attach-session -t '=gs/vim/7'")
+	assertLogContains(t, log, "display-popup -c popup-client -w 100% -h 100% -E exec tmux attach-session -t '=gs/vim/7'")
 }
 
 func TestShadowMaximizeRestoresNormalPopupSize(t *testing.T) {
@@ -49,7 +49,7 @@ func TestNormalPaneMaximizeSwapsPaneIntoCenteredPopup(t *testing.T) {
 	assertLogContains(t, log, "set-option -t gm/7 @maximize_placeholder_pane %42")
 	assertLogContains(t, log, "set-option -t gm/7 @maximize_popup_client main-client")
 	assertLogContains(t, log, "swap-pane -s %7 -t %42")
-	assertLogContains(t, log, "display-popup -c main-client -w 60% -h 100% -E exec tmux attach-session -t '=gm/7'")
+	assertLogContains(t, log, "display-popup -c main-client -w 100% -h 100% -E exec tmux attach-session -t '=gm/7'")
 }
 
 func TestNormalPaneMaximizeRestoreSwapsPaneBack(t *testing.T) {
