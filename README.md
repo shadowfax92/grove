@@ -2,7 +2,7 @@
 
 **Persistent popup sessions for tmux — vim and shell shadows for any pane.**
 
-Press `Alt+I` for an editor popup, `Alt+O` for a shell popup, and `Alt+D` to delete both shadow sessions for the current pane. The popup follows your pane's working directory.
+Press `Alt+I` for an editor popup, `Alt+O` for a shell popup, `Alt+D` to delete both shadow sessions for the current pane, and `Ctrl+Shift+M` to maximize or restore. The popup follows your pane's working directory.
 
 ## Install
 
@@ -22,7 +22,8 @@ Make sure `~/bin` is on your `PATH`.
 # 1. Bind the popup keys in your tmux session
 grove start
 
-# 2. Press Alt+I for vim popup, Alt+O for shell popup, Alt+D to delete both
+# 2. Press Alt+I for vim popup, Alt+O for shell popup, Alt+D to delete both,
+#    Ctrl+Shift+M to maximize or restore
 ```
 
 To make the bindings persist across tmux restarts, add to your `.zshrc`:
@@ -48,12 +49,13 @@ shadow:
   popup:
     width: "80%"
     height: "95%"
-    max_width: "100%"
+    max_width: "50%"
     max_height: "100%"
   keys:
     vim: M-i
     shell: M-o
     delete: M-d
+    maximize: C-S-M
 ```
 
 Edit the config:
@@ -72,6 +74,8 @@ grove config
 
 If the pane's directory has changed since the shadow was created, the shadow is recreated in the new directory. When panes are closed, orphaned shadow sessions are automatically cleaned up.
 
+`Ctrl+Shift+M` opens a centered maximize popup using `max_width` and `max_height`. For normal panes, Grove swaps the pane with a temporary placeholder before opening the popup, then swaps it back on restore so the original layout slot is preserved.
+
 ## Usage with Layouts
 
 Grove pairs well with [layouts](https://github.com/shadowfax92/layouts) for tmux pane management:
@@ -88,14 +92,15 @@ layouts apply simple       # 3 windows: editor, claude, shell
 layouts new myproject dev
 
 # Then use grove popups in any pane
-# Alt+I → vim popup, Alt+O → shell popup, Alt+D → delete both
+# Alt+I → vim popup, Alt+O → shell popup, Alt+D → delete both,
+# Ctrl+Shift+M → maximize/restore
 ```
 
 ## CLI
 
 ```sh
 grove start                    # bind popup keys in current tmux server
-grove maximize ...             # (internal) toggle pane zoom or popup fullscreen
+grove maximize ...             # (internal) toggle centered maximize popup
 grove config                   # open config in $EDITOR
 grove config --path            # print config file path
 grove shadow toggle vim ...    # (internal) toggle a shadow popup

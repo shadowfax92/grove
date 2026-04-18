@@ -25,9 +25,10 @@ type ShadowPopupConfig struct {
 }
 
 type ShadowKeys struct {
-	Vim    string `yaml:"vim"`
-	Shell  string `yaml:"shell"`
-	Delete string `yaml:"delete"`
+	Vim      string `yaml:"vim"`
+	Shell    string `yaml:"shell"`
+	Delete   string `yaml:"delete"`
+	Maximize string `yaml:"maximize"`
 }
 
 func DefaultConfigPath() (string, error) {
@@ -78,7 +79,7 @@ func (c *Config) setDefaults() {
 		c.Shadow.Popup.Height = "85%"
 	}
 	if c.Shadow.Popup.MaxWidth == "" {
-		c.Shadow.Popup.MaxWidth = "100%"
+		c.Shadow.Popup.MaxWidth = "50%"
 	}
 	if c.Shadow.Popup.MaxHeight == "" {
 		c.Shadow.Popup.MaxHeight = "100%"
@@ -91,6 +92,9 @@ func (c *Config) setDefaults() {
 	}
 	if c.Shadow.Keys.Delete == "" {
 		c.Shadow.Keys.Delete = "M-d"
+	}
+	if c.Shadow.Keys.Maximize == "" {
+		c.Shadow.Keys.Maximize = "C-S-M"
 	}
 }
 

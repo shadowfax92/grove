@@ -58,6 +58,10 @@ func NewSessionWithCommand(name, startDir string, env []string, command string) 
 	return err
 }
 
+func FirstPaneID(session string) (string, error) {
+	return run("list-panes", "-t", "="+session, "-F", "#{pane_id}")
+}
+
 func KillSession(name string) error {
 	_, err := run("kill-session", "-t", "="+name)
 	return err
@@ -153,6 +157,11 @@ func PaneCwd(target string) (string, error) {
 
 func TogglePaneZoom(target string) error {
 	_, err := run("resize-pane", "-t", target, "-Z")
+	return err
+}
+
+func SwapPane(source, target string) error {
+	_, err := run("swap-pane", "-s", source, "-t", target)
 	return err
 }
 

@@ -60,7 +60,25 @@ func installFakeTmux(t *testing.T) string {
 printf '%s\n' "$*" >> "$TMUX_FAKE_LOG"
 
 case "$1" in
-  has-session|kill-session|display-popup)
+  has-session)
+    if [ "$3" = "=gm/7" ] && [ "$TMUX_FAKE_MAXIMIZE_EXISTS" != "1" ]; then
+      exit 1
+    fi
+    exit 0
+    ;;
+  kill-session|display-popup|new-session|set-option|swap-pane)
+    exit 0
+    ;;
+  list-panes)
+    printf '%s\n' '%42'
+    exit 0
+    ;;
+  display-message)
+    case "$5" in
+      '#{pane_current_path}')
+        printf '%s\n' '/tmp/grove-test'
+        ;;
+    esac
     exit 0
     ;;
   show-options)
@@ -70,6 +88,18 @@ case "$1" in
         ;;
       @shadow_parent_pane)
         printf '%s\n' '%7'
+        ;;
+      @shadow_popup_mode)
+        printf '%s\n' "$TMUX_FAKE_POPUP_MODE"
+        ;;
+      @maximize_origin_pane)
+        printf '%s\n' '%7'
+        ;;
+      @maximize_placeholder_pane)
+        printf '%s\n' '%42'
+        ;;
+      @maximize_popup_client)
+        printf '%s\n' 'main-client'
         ;;
     esac
     exit 0
