@@ -10,11 +10,9 @@ import (
 )
 
 type Config struct {
-	Prefix  string        `yaml:"prefix"`
-	Sidebar SidebarConfig `yaml:"sidebar"`
-	Notify  NotifyConfig  `yaml:"notify"`
-	Shadow  ShadowConfig  `yaml:"shadow"`
-	Repos   []RepoConfig  `yaml:"repos"`
+	Notify NotifyConfig `yaml:"notify"`
+	Shadow ShadowConfig `yaml:"shadow"`
+	Repos  []RepoConfig `yaml:"repos"`
 }
 
 type ShadowConfig struct {
@@ -34,12 +32,6 @@ type ShadowKeys struct {
 
 type NotifyConfig struct {
 	Forward []string `yaml:"forward"`
-}
-
-type SidebarConfig struct {
-	Width    string `yaml:"width"`
-	Height   string `yaml:"height"`
-	Position string `yaml:"position"`
 }
 
 type RepoConfig struct {
@@ -65,7 +57,6 @@ func Load() (*Config, error) {
 	return load(true)
 }
 
-// LoadFast skips repo path validation — used by the sidebar for speed.
 func LoadFast() (*Config, error) {
 	return load(false)
 }
@@ -116,19 +107,6 @@ func (c *Config) resolve() error {
 		if c.Repos[i].Type == "" {
 			c.Repos[i].Type = "worktree"
 		}
-	}
-
-	if c.Prefix == "" {
-		c.Prefix = "C-s"
-	}
-	if c.Sidebar.Width == "" {
-		c.Sidebar.Width = "30%"
-	}
-	if c.Sidebar.Height == "" {
-		c.Sidebar.Height = "50%"
-	}
-	if c.Sidebar.Position == "" {
-		c.Sidebar.Position = "center"
 	}
 
 	if c.Shadow.Popup.Width == "" {
@@ -185,13 +163,10 @@ func createDefault(path string) (*Config, error) {
 	}
 
 	cfg := &Config{
-		Prefix: "C-s",
-		Sidebar: SidebarConfig{
-			Width:    "30%",
-			Height:   "50%",
-			Position: "center",
-		},
-		Repos:     []RepoConfig{},
+		Repos: []RepoConfig{},
+	}
+	if err := cfg.resolve(); err != nil {
+		return nil, err
 	}
 
 	data, err := yaml.Marshal(cfg)

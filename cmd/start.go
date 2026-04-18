@@ -69,33 +69,6 @@ var startCmd = &cobra.Command{
 		}
 		selfCmd := strconv.Quote(selfPath)
 
-		// Bind sidebar keybinding
-		sidebarCmd := fmt.Sprintf("%s sidebar", selfCmd)
-		var popupArgs []string
-		switch cfg.Sidebar.Position {
-		case "left":
-			popupArgs = []string{
-				"-n", cfg.Prefix,
-				"display-popup", "-x", "0", "-y", "0",
-				"-w", cfg.Sidebar.Width, "-h", cfg.Sidebar.Height, "-E", sidebarCmd,
-			}
-		case "right":
-			popupArgs = []string{
-				"-n", cfg.Prefix,
-				"display-popup", "-y", "0",
-				"-w", cfg.Sidebar.Width, "-h", cfg.Sidebar.Height, "-E", sidebarCmd,
-			}
-		default: // center
-			popupArgs = []string{
-				"-n", cfg.Prefix,
-				"display-popup",
-				"-w", cfg.Sidebar.Width, "-h", cfg.Sidebar.Height, "-E", sidebarCmd,
-			}
-		}
-		if err := tmux.BindKeyRaw(popupArgs...); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to bind key: %v\n", err)
-		}
-
 		shadowVimCmd := fmt.Sprintf(`%s shadow toggle vim "#{client_name}" "#{session_name}" "#{pane_id}" >/dev/null 2>&1 || true`, selfCmd)
 		if err := tmux.BindKeyRaw("-n", cfg.Shadow.Keys.Vim, "run-shell", "-b", shadowVimCmd); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to bind shadow vim key: %v\n", err)

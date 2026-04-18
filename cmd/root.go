@@ -94,8 +94,15 @@ var rootCmd = &cobra.Command{
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return listCmd.RunE(cmd, args)
+		return runRootDefault(args)
 	},
+}
+
+var runRootDefault = func(args []string) error {
+	if err := cdCmd.Args(cdCmd, args); err != nil {
+		return err
+	}
+	return cdCmd.RunE(cdCmd, args)
 }
 
 func init() {
