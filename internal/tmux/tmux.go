@@ -91,6 +91,12 @@ func BindKeyRaw(args ...string) error {
 	return err
 }
 
+func UnbindKeyRaw(args ...string) error {
+	fullArgs := append([]string{"unbind-key"}, args...)
+	_, err := run(fullArgs...)
+	return err
+}
+
 func ListSessions() ([]string, error) {
 	out, err := run("list-sessions", "-F", "#{session_name}")
 	if err != nil {

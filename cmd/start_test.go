@@ -12,6 +12,7 @@ func TestStartBindsMaximizeKey(t *testing.T) {
 	}
 
 	log := readFakeTmuxLog(t, logPath)
-	assertLogContainsSubstring(t, log, "bind-key -n C-S-M run-shell -b")
+	assertLogContainsSubstring(t, log, "unbind-key -n C-S-M")
+	assertLogContainsSubstring(t, log, "bind-key -n C-S-Y run-shell -b")
 	assertLogContainsSubstring(t, log, " maximize \"#{client_name}\" \"#{session_name}\" \"#{pane_id}\"")
 }
