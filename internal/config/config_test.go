@@ -22,7 +22,7 @@ func TestDefaultShadowConfigIncludesShadowKeysAndCenteredMaximize(t *testing.T) 
 	if !strings.Contains(string(data), "maximize: M-y") {
 		t.Fatalf("default config should include maximize key M-y, got:\n%s", string(data))
 	}
-	if !strings.Contains(string(data), "max_width: 50%") {
-		t.Fatalf("default config should include centered max width 50%%, got:\n%s", string(data))
+	if !strings.Contains(string(data), "max_width: 100%") {
+		t.Fatalf("default config should include full-screen max width 100%%, got:\n%s", string(data))
 	}
 }
