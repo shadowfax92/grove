@@ -61,27 +61,10 @@ func maximizePaneAsPopup(clientName, activePane string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	paneCwd, err := tmux.PaneCwd(activePane)
+	sessionName, placeholderPane, err := createMaximizeSession(activePane)
 	if err != nil {
-		return fmt.Errorf("getting pane cwd: %w", err)
+		return err
 	}
-
-	sessionName := maximizeName(activePane)
-	if tmux.SessionExists(sessionName) {
-		if err := tmux.KillSession(sessionName); err != nil {
-			return fmt.Errorf("removing stale maximize session: %w", err)
-		}
-	}
-	if err := tmux.NewSessionWithCommand(sessionName, paneCwd, nil, "while :; do sleep 3600; done"); err != nil {
-		return fmt.Errorf("creating maximize session: %w", err)
-	}
-
-	placeholderPane, err := tmux.FirstPaneID(sessionName)
-	if err != nil {
-		_ = tmux.KillSession(sessionName)
-		return fmt.Errorf("finding placeholder pane: %w", err)
-	}
-
 	if err := storeMaximizeState(sessionName, activePane, placeholderPane, clientName); err != nil {
 		_ = tmux.KillSession(sessionName)
 		return err
@@ -99,6 +82,30 @@ func maximizePaneAsPopup(clientName, activePane string) error {
 	}
 
 	return nil
+}
+
+func createMaximizeSession(activePane string) (string, string, error) {
+	paneCwd, err := tmux.PaneCwd(activePane)
+	if err != nil {
+		return "", "", fmt.Errorf("getting pane cwd: %w", err)
+	}
+
+	sessionName := maximizeName(activePane)
+	if tmux.SessionExists(sessionName) {
+		if err := tmux.KillSession(sessionName); err != nil {
+			return "", "", fmt.Errorf("removing stale maximize session: %w", err)
+		}
+	}
+	if err := tmux.NewSessionWithCommand(sessionName, paneCwd, nil, "while :; do sleep 3600; done"); err != nil {
+		return "", "", fmt.Errorf("creating maximize session: %w", err)
+	}
+
+	placeholderPane, err := tmux.FirstPaneID(sessionName)
+	if err != nil {
+		_ = tmux.KillSession(sessionName)
+		return "", "", fmt.Errorf("finding placeholder pane: %w", err)
+	}
+	return sessionName, placeholderPane, nil
 }
 
 func storeMaximizeState(sessionName, originPane, placeholderPane, popupClient string) error {

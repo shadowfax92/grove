@@ -137,3 +137,14 @@ func assertLogContains(t *testing.T, log []string, want string) {
 	}
 	t.Fatalf("tmux log missing %q; got:\n%s", want, strings.Join(log, "\n"))
 }
+
+func assertLogContainsSubstring(t *testing.T, log []string, want string) {
+	t.Helper()
+
+	for _, line := range log {
+		if strings.Contains(line, want) {
+			return
+		}
+	}
+	t.Fatalf("tmux log missing substring %q; got:\n%s", want, strings.Join(log, "\n"))
+}
