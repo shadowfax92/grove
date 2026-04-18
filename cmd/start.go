@@ -43,13 +43,19 @@ var startCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "warning: failed to bind shadow shell key: %v\n", err)
 		}
 
+		// Bind shadow delete key
+		shadowDeleteCommand := fmt.Sprintf(`%s shadow delete "#{client_name}" "#{session_name}" "#{pane_id}" >/dev/null 2>&1 || true`, selfCmd)
+		if err := tmux.BindKeyRaw("-n", cfg.Shadow.Keys.Delete, "run-shell", "-b", shadowDeleteCommand); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to bind shadow delete key: %v\n", err)
+		}
+
 		// Clean up orphaned shadow sessions when panes die
 		cleanupHook := fmt.Sprintf("run-shell '%s shadow cleanup >/dev/null 2>&1 || true'", selfCmd)
 		if err := tmux.SetHook("after-kill-pane", cleanupHook); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to set cleanup hook: %v\n", err)
 		}
 
-		fmt.Printf("Bound shadow keys: vim=%s, shell=%s\n", cfg.Shadow.Keys.Vim, cfg.Shadow.Keys.Shell)
+		fmt.Printf("Bound shadow keys: vim=%s, shell=%s, delete=%s\n", cfg.Shadow.Keys.Vim, cfg.Shadow.Keys.Shell, cfg.Shadow.Keys.Delete)
 		return nil
 	},
 }

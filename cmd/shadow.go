@@ -12,6 +12,7 @@ import (
 
 func init() {
 	shadowCmd.AddCommand(shadowToggleCmd)
+	shadowCmd.AddCommand(shadowDeleteCmd)
 	shadowCmd.AddCommand(shadowCleanupCmd)
 	rootCmd.AddCommand(shadowCmd)
 }
@@ -77,9 +78,41 @@ var shadowToggleCmd = &cobra.Command{
 		if err := tmux.SetSessionVar(targetSession, "shadow_client_name", popupClient); err != nil {
 			return fmt.Errorf("storing shadow client: %w", err)
 		}
+		if err := tmux.SetSessionVar(targetSession, shadowPopupModeKey, shadowPopupModeNormal); err != nil {
+			return fmt.Errorf("storing popup mode: %w", err)
+		}
 
 		command := fmt.Sprintf("exec tmux attach-session -t '=%s'", targetSession)
 		return tmux.DisplayPopup(popupClient, cfg.Shadow.Popup.Width, cfg.Shadow.Popup.Height, command)
+	},
+}
+
+var shadowDeleteCmd = &cobra.Command{
+	Use:   "delete <client_name> <session_name> <pane_id>",
+	Short: "Delete the vim and shell shadow sessions for the current pane",
+	Args:  cobra.ExactArgs(3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		clientName := args[0]
+		currentSession := args[1]
+		activePane := args[2]
+
+		popupClient, err := shadow.PopupClient(currentSession, clientName)
+		if err != nil {
+			return err
+		}
+
+		parentPane, err := shadow.ParentPane(currentSession, activePane)
+		if err != nil {
+			return err
+		}
+
+		if shadow.IsSession(currentSession) {
+			if err := tmux.ClosePopup(popupClient); err != nil {
+				return fmt.Errorf("closing popup: %w", err)
+			}
+		}
+
+		return shadow.DeleteForPane(parentPane)
 	},
 }
 

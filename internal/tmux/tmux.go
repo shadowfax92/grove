@@ -151,6 +151,11 @@ func PaneCwd(target string) (string, error) {
 	return run("display-message", "-t", target, "-p", "#{pane_current_path}")
 }
 
+func TogglePaneZoom(target string) error {
+	_, err := run("resize-pane", "-t", target, "-Z")
+	return err
+}
+
 func SetSessionVar(session, key, value string) error {
 	_, err := run("set-option", "-t", session, "@"+key, value)
 	return err
