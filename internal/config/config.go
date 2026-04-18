@@ -94,7 +94,7 @@ func (c *Config) setDefaults() {
 		c.Shadow.Keys.Delete = "M-d"
 	}
 	if c.Shadow.Keys.Maximize == "" {
-		c.Shadow.Keys.Maximize = "C-S-Y"
+		c.Shadow.Keys.Maximize = "M-y"
 	}
 }
 

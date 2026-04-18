@@ -55,7 +55,7 @@ shadow:
     vim: M-i
     shell: M-o
     delete: M-d
-    maximize: C-S-Y
+    maximize: M-y      # tmux can't see Ctrl+Shift+<letter>; see Kitty mapping below
 ```
 
 Edit the config:
@@ -75,6 +75,16 @@ grove config
 If the pane's directory has changed since the shadow was created, the shadow is recreated in the new directory. When panes are closed, orphaned shadow sessions are automatically cleaned up.
 
 `Ctrl+Shift+Y` opens a centered maximize popup using `max_width` and `max_height`. For normal panes, Grove swaps the pane with a temporary placeholder before opening the popup, then swaps it back on restore so the original layout slot is preserved.
+
+### Ctrl+Shift+Y in Kitty
+
+tmux cannot distinguish `Ctrl+Shift+<letter>` from plain `Ctrl+<letter>` in legacy terminal mode — the shift bit never makes it over the wire. Grove's default binding is therefore `M-y` (Alt+y), and Kitty is configured to translate the familiar `Ctrl+Shift+Y` chord into that. Add this to `~/.config/kitty/kitty.conf`:
+
+```conf
+map ctrl+shift+y send_text all \x1by
+```
+
+If you don't use Kitty, either bind `M-y` directly or set `maximize:` in `~/.config/grove/config.yaml` to any tmux-supported key (e.g. `F12`).
 
 ## Usage with Layouts
 

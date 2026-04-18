@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const legacyMaximizeKey = "C-S-M"
+var legacyMaximizeKeys = []string{"C-S-M", "C-S-Y"}
 
 func init() {
 	rootCmd.AddCommand(startCmd)
@@ -52,9 +52,12 @@ var startCmd = &cobra.Command{
 		}
 
 		// Bind maximize key
-		if cfg.Shadow.Keys.Maximize != legacyMaximizeKey {
-			if err := tmux.UnbindKeyRaw("-n", legacyMaximizeKey); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: failed to unbind legacy maximize key: %v\n", err)
+		for _, legacy := range legacyMaximizeKeys {
+			if cfg.Shadow.Keys.Maximize == legacy {
+				continue
+			}
+			if err := tmux.UnbindKeyRaw("-n", legacy); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to unbind legacy maximize key %s: %v\n", legacy, err)
 			}
 		}
 		maximizeCommand := fmt.Sprintf(`%s maximize "#{client_name}" "#{session_name}" "#{pane_id}" >/dev/null 2>&1 || true`, selfCmd)
