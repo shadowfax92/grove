@@ -86,11 +86,6 @@ func Attach(target string) error {
 	return cmd.Run()
 }
 
-func BindKey(key, command string) error {
-	_, err := run("bind-key", "-n", key, "display-popup", "-x", "0", "-y", "0", "-w", command, "-E", "grove sidebar")
-	return err
-}
-
 func BindKeyRaw(args ...string) error {
 	fullArgs := append([]string{"bind-key"}, args...)
 	_, err := run(fullArgs...)

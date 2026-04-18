@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 
 	"grove/internal/git"
+	"grove/internal/shadow"
 	"grove/internal/state"
 	"grove/internal/tmux"
 	"grove/internal/workspaces"
@@ -56,7 +56,7 @@ Handles both grove-managed workspaces and plain tmux sessions.
 
 		var targets []workspaces.RemoveTarget
 		if len(args) == 0 {
-			targets, err = pickRemoveTargetsFzf(inv.RemoveCandidates())
+			targets, err = pickRemoveTargetsFzf(inv)
 			if err != nil {
 				return err
 			}
@@ -116,35 +116,63 @@ Handles both grove-managed workspaces and plain tmux sessions.
 	},
 }
 
-func pickRemoveTargetsFzf(candidates []workspaces.RemoveTarget) ([]workspaces.RemoveTarget, error) {
-	if len(candidates) == 0 {
+func pickRemoveTargetsFzf(inv *workspaces.Inventory) ([]workspaces.RemoveTarget, error) {
+	managed := removePickerTargets(inv, false)
+	all := removePickerTargets(inv, true)
+	if len(all) == 0 {
 		return nil, fmt.Errorf("no tmux sessions to remove")
 	}
 
-	var lines []string
-	for i, candidate := range candidates {
-		kind := "tmux"
-		status := "running"
-		if candidate.Kind == workspaces.RemoveManagedWorkspace {
-			kind = "workspace"
-			if !candidate.Running {
-				status = "stopped"
-			}
-		}
-		lines = append(lines, fmt.Sprintf("%d\t%-10s\t%-30s\t%s", i, kind, candidate.Label(), status))
+	lookup := make(map[string]workspaces.RemoveTarget, len(all))
+	managedInput := renderRemovePickerInput(managed, lookup)
+	allInput := renderRemovePickerInput(all, lookup)
+
+	managedFile, err := os.CreateTemp("", "grove-rm-managed-*.txt")
+	if err != nil {
+		return nil, err
 	}
+	defer os.Remove(managedFile.Name())
+	if _, err := managedFile.WriteString(managedInput); err != nil {
+		managedFile.Close()
+		return nil, err
+	}
+	if err := managedFile.Close(); err != nil {
+		return nil, err
+	}
+
+	allFile, err := os.CreateTemp("", "grove-rm-all-*.txt")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(allFile.Name())
+	if _, err := allFile.WriteString(allInput); err != nil {
+		allFile.Close()
+		return nil, err
+	}
+	if err := allFile.Close(); err != nil {
+		return nil, err
+	}
+
+	reloadCmd := fmt.Sprintf(
+		`sh -c 'case "$1" in %s/*) cat "$2" ;; *) cat "$3" ;; esac' sh {q} %q %q`,
+		shadow.Prefix,
+		allFile.Name(),
+		managedFile.Name(),
+	)
 
 	fzfCmd := exec.Command(
 		"fzf",
 		"--multi",
 		"--prompt", "remove > ",
-		"--header", "Select Grove workspaces or tmux sessions to remove",
+		"--header", "Blank query shows Grove workspaces. Type gs/ to surface shadow sessions.",
 		"--height", "100%",
 		"--reverse",
 		"--delimiter", "\t",
+		"--accept-nth", "1",
 		"--with-nth", "2,3,4",
+		"--bind", "change:reload:"+reloadCmd,
 	)
-	fzfCmd.Stdin = strings.NewReader(strings.Join(lines, "\n"))
+	fzfCmd.Stdin = strings.NewReader(managedInput)
 	fzfCmd.Stderr = os.Stderr
 
 	out, err := fzfCmd.Output()
@@ -156,16 +184,16 @@ func pickRemoveTargetsFzf(candidates []workspaces.RemoveTarget) ([]workspaces.Re
 	}
 
 	var selected []workspaces.RemoveTarget
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			parts := strings.SplitN(line, "\t", 4)
-			idx, convErr := strconv.Atoi(parts[0])
-			if convErr != nil || idx < 0 || idx >= len(candidates) {
-				continue
-			}
-			selected = append(selected, candidates[idx])
+	for _, id := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
 		}
+		target, ok := lookup[id]
+		if !ok {
+			continue
+		}
+		selected = append(selected, target)
 	}
 
 	if len(selected) == 0 {
@@ -173,4 +201,48 @@ func pickRemoveTargetsFzf(candidates []workspaces.RemoveTarget) ([]workspaces.Re
 	}
 
 	return selected, nil
+}
+
+func removePickerTargets(inv *workspaces.Inventory, includeUnmanaged bool) []workspaces.RemoveTarget {
+	targets := make([]workspaces.RemoveTarget, 0, len(inv.Managed)+len(inv.Unmanaged))
+	for _, entry := range inv.ManagedByLastUsed() {
+		targets = append(targets, workspaces.RemoveTarget{
+			Kind:        workspaces.RemoveManagedWorkspace,
+			Workspace:   entry.Workspace,
+			SessionName: entry.Workspace.SessionName,
+			Running:     entry.Running,
+		})
+	}
+	if !includeUnmanaged {
+		return targets
+	}
+	for _, session := range inv.Unmanaged {
+		targets = append(targets, workspaces.RemoveTarget{
+			Kind:        workspaces.RemoveUnmanagedSession,
+			SessionName: session.SessionName,
+			Running:     true,
+		})
+	}
+	return targets
+}
+
+func shouldExpandRemovePicker(query string) bool {
+	return strings.HasPrefix(strings.TrimSpace(query), shadow.Prefix+"/")
+}
+
+func renderRemovePickerInput(targets []workspaces.RemoveTarget, lookup map[string]workspaces.RemoveTarget) string {
+	var lines []string
+	for _, target := range targets {
+		lookup[target.SessionName] = target
+		kind := "tmux"
+		status := "running"
+		if target.Kind == workspaces.RemoveManagedWorkspace {
+			kind = "workspace"
+			if !target.Running {
+				status = "stopped"
+			}
+		}
+		lines = append(lines, fmt.Sprintf("%s\t%-10s\t%-30s\t%s", target.SessionName, kind, target.Label(), status))
+	}
+	return strings.Join(lines, "\n")
 }

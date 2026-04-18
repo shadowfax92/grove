@@ -69,7 +69,7 @@ Only works when the current session is a gs/ shadow session.`,
 			_ = tmux.UnsetSessionVar(name, key)
 		}
 
-		// Register in grove state so notify/sidebar/jump see it
+		// Register in grove state so notify/list/jump see it
 		paneID, _ := tmux.PaneID()
 		cwd, _ := tmux.PaneCwd(paneID)
 		wsName := strings.TrimPrefix(name, "g/")

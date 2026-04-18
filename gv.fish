@@ -1,6 +1,10 @@
 function gv
     if test (count $argv) -eq 0
-        grove
+        set -l output (grove cd)
+        or return $status
+        set -l path (string trim -- $output[-1])
+        test -n "$path"
+        and cd -- $path
         return
     end
 
@@ -9,11 +13,13 @@ function gv
 
     switch $subcmd
         case nd
-            set -l output (grove new --cd $rest)
+            set -l output (grove new $rest)
             or return $status
             set -l path (string trim -- $output[-1])
             test -n "$path"
             and cd -- $path
+        case nt
+            grove new --tmux $rest
         case dd
             set -l output (grove done --cd $rest)
             or return $status
@@ -21,14 +27,14 @@ function gv
             test -n "$path"
             and cd -- $path
         case n new
-            if contains -- --cd $rest
+            if contains -- --tmux $rest
+                grove new $rest
+            else
                 set -l output (grove new $rest)
                 or return $status
                 set -l path (string trim -- $output[-1])
                 test -n "$path"
                 and cd -- $path
-            else
-                grove new $rest
             end
         case cd
             set -l output (grove cd $rest)
