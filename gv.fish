@@ -11,6 +11,11 @@ function gv
     set -l subcmd $argv[1]
     set -l rest $argv[2..]
 
+    if contains -- --help $rest; or contains -- -h $rest
+        grove $argv
+        return
+    end
+
     switch $subcmd
         case nd
             set -l output (grove new $rest)
