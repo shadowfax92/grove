@@ -101,6 +101,8 @@ grove done --tmux            # finish current tmux workspace and switch to the n
 grove done --cd              # finish cwd-backed workspace and print home
 grove rm                     # interactive remove picker
 grove rm mono/feat-auth      # remove specific workspace
+grove shadow cleanup         # remove orphaned shadow sessions
+grove shadow clean --inactive 1d
 grove list                   # show all Grove workspaces and status
 grove switch                 # pick workspace via fzf and switch tmux
 grove config                 # open config in $EDITOR
@@ -124,6 +126,10 @@ grove notify clear           # clear notifications interactively
 ### Remove Picker
 
 `grove rm` starts by showing Grove-managed workspaces only. When you begin filtering with `gs/`, the picker expands so shadow sessions are removable without cluttering the blank-state list.
+
+### Shadow Cleanup
+
+`grove shadow cleanup` removes orphaned `gs/...` sessions by default. Use `--dry-run` to preview matches, `--inactive 1h` or `--inactive 1d` to clean old shadow sessions by tmux activity, or `--all` to clear every shadow session.
 
 ## Notifications
 

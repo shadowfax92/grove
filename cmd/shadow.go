@@ -2,9 +2,13 @@ package cmd
 
 import (
 	"fmt"
+	"io"
+	"strings"
+	"time"
 
 	"grove/internal/config"
 	"grove/internal/shadow"
+	"grove/internal/state"
 	"grove/internal/tmux"
 
 	"github.com/spf13/cobra"
@@ -84,11 +88,27 @@ var shadowToggleCmd = &cobra.Command{
 }
 
 var shadowCleanupCmd = &cobra.Command{
-	Use:   "cleanup",
-	Short: "Remove shadow sessions for panes that no longer exist",
+	Use:     "cleanup",
+	Aliases: []string{"clean"},
+	Short:   "Remove stale shadow sessions",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return shadow.CleanupOrphans()
+		opts, err := shadowCleanupOptionsFromFlags(cmd)
+		if err != nil {
+			return err
+		}
+
+		report, err := runShadowCleanup(opts)
+		printShadowCleanupReport(cmd.OutOrStdout(), report, opts.DryRun)
+		return err
 	},
+}
+
+var runShadowCleanup = shadow.Cleanup
+
+func init() {
+	shadowCleanupCmd.Flags().Bool("dry-run", false, "Show matching shadow sessions without removing them")
+	shadowCleanupCmd.Flags().Bool("all", false, "Remove all shadow sessions")
+	shadowCleanupCmd.Flags().String("inactive", "", "Remove shadow sessions inactive longer than this threshold (for example: 1h, 1d)")
 }
 
 func normalizeShadowType(typ string) (string, error) {
@@ -100,4 +120,58 @@ func normalizeShadowType(typ string) (string, error) {
 	default:
 		return "", fmt.Errorf("invalid shadow type %q", typ)
 	}
+}
+
+func shadowCleanupOptionsFromFlags(cmd *cobra.Command) (shadow.CleanupOptions, error) {
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	removeAll, _ := cmd.Flags().GetBool("all")
+	inactiveRaw, _ := cmd.Flags().GetString("inactive")
+
+	if removeAll && strings.TrimSpace(inactiveRaw) != "" {
+		return shadow.CleanupOptions{}, fmt.Errorf("--all cannot be combined with --inactive")
+	}
+
+	inactiveOlderThan, err := shadow.ParseInactiveThreshold(inactiveRaw)
+	if err != nil {
+		return shadow.CleanupOptions{}, err
+	}
+
+	return shadow.CleanupOptions{
+		DryRun:            dryRun,
+		RemoveAll:         removeAll,
+		InactiveOlderThan: inactiveOlderThan,
+	}, nil
+}
+
+func printShadowCleanupReport(w io.Writer, report shadow.CleanupReport, dryRun bool) {
+	if len(report.Matched) == 0 {
+		fmt.Fprintln(w, "No shadow sessions matched cleanup criteria.")
+		return
+	}
+
+	if dryRun {
+		fmt.Fprintf(w, "Would remove %d shadow sessions:\n", len(report.Matched))
+		for _, candidate := range report.Matched {
+			fmt.Fprintf(w, "  %-12s %-8s last active %s ago\n", candidate.SessionName, candidate.Reason, shadowCleanupAge(candidate.LastActiveAt))
+		}
+		return
+	}
+
+	fmt.Fprintf(w, "Removed %d shadow sessions:\n", len(report.Removed))
+	for _, candidate := range report.Removed {
+		fmt.Fprintf(w, "  %-12s %s\n", candidate.SessionName, candidate.Reason)
+	}
+	if len(report.Failed) > 0 {
+		fmt.Fprintf(w, "Failed to remove %d shadow sessions:\n", len(report.Failed))
+		for _, failure := range report.Failed {
+			fmt.Fprintf(w, "  %-12s %v\n", failure.Candidate.SessionName, failure.Err)
+		}
+	}
+}
+
+func shadowCleanupAge(ts time.Time) string {
+	if ts.IsZero() {
+		return "unknown"
+	}
+	return state.RelativeTime(ts.UTC().Format(time.RFC3339))
 }

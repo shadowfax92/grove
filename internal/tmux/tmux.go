@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type SessionInfo struct {
@@ -31,6 +32,12 @@ type PaneInfo struct {
 	Label      string
 	Command    string
 	Path       string
+}
+
+type SessionSnapshot struct {
+	Name     string
+	Created  time.Time
+	Activity time.Time
 }
 
 func run(args ...string) (string, error) {
@@ -245,6 +252,34 @@ func ListSessionsByPrefix(prefix string) ([]string, error) {
 		}
 	}
 	return result, nil
+}
+
+func ListSessionSnapshotsByPrefix(prefix string) ([]SessionSnapshot, error) {
+	out, err := run("list-sessions", "-F", "#{session_name}\t#{session_activity}\t#{session_created}")
+	if err != nil {
+		if strings.Contains(err.Error(), "no server running") || strings.Contains(err.Error(), "no sessions") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	var snapshots []SessionSnapshot
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) < 3 || !strings.HasPrefix(parts[0], prefix) {
+			continue
+		}
+		activity, _ := strconv.ParseInt(parts[1], 10, 64)
+		created, _ := strconv.ParseInt(parts[2], 10, 64)
+		snapshots = append(snapshots, SessionSnapshot{
+			Name:     parts[0],
+			Activity: time.Unix(activity, 0).UTC(),
+			Created:  time.Unix(created, 0).UTC(),
+		})
+	}
+	return snapshots, nil
 }
 
 func PaneExists(paneID string) bool {
