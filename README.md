@@ -121,7 +121,7 @@ grove notify clear           # clear notifications interactively
 
 ### Start
 
-`grove start` reads config and state, recreates missing tmux sessions for existing workspaces, installs the shadow-session keybindings, and attaches to tmux. It no longer binds a sidebar popup.
+`grove start` reads config and state, recreates missing tmux sessions for existing workspaces, installs the shadow-session keybindings, and attaches to tmux.
 
 ### Remove Picker
 
