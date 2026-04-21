@@ -17,7 +17,8 @@ import (
 )
 
 func init() {
-	jumpCmd.Flags().BoolP("panes", "p", false, "Search panes instead of sessions")
+	jumpCmd.Flags().BoolP("panes", "p", false, "Search panes")
+	jumpCmd.Flags().BoolP("windows", "w", false, "Search windows")
 	jumpCmd.Flags().BoolP("all", "a", false, "Include ghost (shadow) sessions")
 	rootCmd.AddCommand(jumpCmd)
 }
@@ -26,31 +27,112 @@ var jumpCmd = &cobra.Command{
 	Use:         "jump",
 	Aliases:     []string{"j"},
 	Annotations: map[string]string{"group": "Workspaces:"},
-	Short:       "Fuzzy-find and jump to any tmux session or pane",
-	Long: `Search all tmux sessions or panes with fzf and jump to the selection.
+	Short:       "Fuzzy-find and jump to any tmux session, window, or pane",
+	Long: `Search all tmux sessions, windows, or panes with fzf and jump to the selection.
 Not limited to grove workspaces — searches everything in tmux.
 
   grove jump      — search sessions
-  grove jump -a   — search all sessions including ghosts (gs/)
+  grove jump -w   — search windows
   grove jump -p   — search panes
-  grove jump -pa  — search all panes including ghosts
+  grove jump -a   — include ghost (shadow) sessions in any mode
 
 Bind in tmux.conf for quick access:
   bind-key -n M-s display-popup -E "grove jump"
   bind-key -n M-i display-popup -E "grove jump -a"
+  bind-key -n M-w display-popup -E "grove jump -w"
   bind-key -n M-u display-popup -E "grove jump -p"
   bind-key -n M-f display-popup -E "grove jump -pa"`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		panes, _ := cmd.Flags().GetBool("panes")
+		windows, _ := cmd.Flags().GetBool("windows")
 		all, _ := cmd.Flags().GetBool("all")
 		if panes {
 			return jumpPanes(all)
+		}
+		if windows {
+			return jumpWindows(all)
 		}
 		return jumpSessions(all)
 	},
 }
 
 func jumpSessions(all bool) error {
+	sessions, err := tmux.ListSessionInfo()
+	if err != nil {
+		return err
+	}
+	if !all {
+		sessions = visibleJumpSessions(sessions)
+	}
+	if len(sessions) == 0 {
+		return fmt.Errorf("no tmux sessions")
+	}
+
+	mgr, _ := state.NewManager()
+	var inv *workspaces.Inventory
+	if mgr != nil {
+		if st, err := mgr.Load(); err == nil {
+			inv, _ = workspaces.Build(st, nil)
+		}
+	}
+
+	sessionSort := make(map[string]int64, len(sessions))
+	for _, s := range sessions {
+		sortKey := s.Activity
+		if inv != nil {
+			if managed, ok := inv.FindManagedBySession(s.Name); ok && managed.Workspace.LastUsedAt != "" {
+				if t, err := time.Parse(time.RFC3339, managed.Workspace.LastUsedAt); err == nil {
+					sortKey = t.Unix()
+				}
+			}
+		}
+		sessionSort[s.Name] = sortKey
+	}
+
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessionSort[sessions[i].Name] > sessionSort[sessions[j].Name]
+	})
+
+	currentSession, _ := tmux.CurrentSession()
+
+	var lines []string
+	for _, s := range sessions {
+		marker := "  "
+		if s.Name == currentSession {
+			marker = "● "
+		}
+		attached := ""
+		if s.Attached {
+			attached = "(attached)"
+		}
+		lines = append(lines, fmt.Sprintf("%s\t%s%-32s\t%-3d windows\t%s",
+			s.Name, marker, s.Name, s.Windows, attached))
+	}
+
+	target, err := runFzf("session > ", lines, []string{
+		"--with-nth", "2..",
+		"--nth", "2",
+		"--tiebreak", "begin,index",
+	})
+	if err != nil {
+		return err
+	}
+
+	if tmux.IsInsideTmux() {
+		if err := tmux.SwitchClient(target); err != nil {
+			return err
+		}
+	} else {
+		if err := tmux.Attach(target); err != nil {
+			return err
+		}
+	}
+
+	touchGroveSession(mgr, target)
+	return nil
+}
+
+func jumpWindows(all bool) error {
 	sessions, err := tmux.ListSessionInfo()
 	if err != nil {
 		return err
@@ -114,7 +196,7 @@ func jumpSessions(all bool) error {
 
 	home, _ := os.UserHomeDir()
 
-	// Fields: 1=target(hidden) 2=session 3=idx 4=label 5=path
+	// Fields: 1=target(hidden) 2=session 3=window 4=path
 	var lines []string
 	for _, w := range windows {
 		path := w.Path
@@ -125,15 +207,16 @@ func jumpSessions(all bool) error {
 		if w.Target == currentWindow {
 			marker = "● "
 		}
-		label := w.Label
-		if label == "" {
-			label = w.Name
+		name := w.Name
+		if name == "" {
+			name = w.Label
 		}
-		lines = append(lines, fmt.Sprintf("%s\t%s%-24s\t%-3d\t%-14s\t%s",
-			w.Target, marker, w.Session, w.Index, label, path))
+		window := fmt.Sprintf("%d:%s", w.Index, name)
+		lines = append(lines, fmt.Sprintf("%s\t%s%-24s\t%-20s\t%s",
+			w.Target, marker, w.Session, window, path))
 	}
 
-	target, err := runFzf("session > ", lines, []string{
+	target, err := runFzf("window > ", lines, []string{
 		"--with-nth", "2..",
 		"--nth", "2..",
 		"--tiebreak", "begin,index",
@@ -176,8 +259,8 @@ func jumpPanes(all bool) error {
 	current, _ := tmux.CurrentTarget()
 	home, _ := os.UserHomeDir()
 
-	// Fields: 1=target(hidden) 2=session 3=label 4=command 5=path
-	// fzf searches: 2,3,5 (session, label, path)
+	// Fields: 1=target(hidden) 2=session 3=window 4=pane 5=command 6=path
+	// fzf searches: 2,3,4,6 (session, window, pane, path)
 	var lines []string
 	for _, p := range panes {
 		path := p.Path
@@ -188,12 +271,13 @@ func jumpPanes(all bool) error {
 		if p.Target == current {
 			marker = "● "
 		}
-		label := p.Label
-		if label == "" {
-			label = p.WindowName
+		window := fmt.Sprintf("%d:%s", p.WindowIndex, p.WindowName)
+		pane := fmt.Sprintf("%d", p.PaneIndex)
+		if p.Label != "" {
+			pane = fmt.Sprintf("%d:%s", p.PaneIndex, p.Label)
 		}
-		lines = append(lines, fmt.Sprintf("%s\t%s%-24s\t%-14s\t%-12s\t%s",
-			p.Target, marker, p.Session, label, p.Command, path))
+		lines = append(lines, fmt.Sprintf("%s\t%s%-24s\t%-20s\t%-16s\t%-12s\t%s",
+			p.Target, marker, p.Session, window, pane, p.Command, path))
 	}
 
 	target, err := runFzfPanes(lines)
@@ -248,7 +332,7 @@ func touchGroveSession(mgr *state.StateManager, sessionName string) {
 func runFzfPanes(lines []string) (string, error) {
 	return runFzf("pane > ", lines, []string{
 		"--with-nth", "2..",
-		"--nth", "2,3,5",
+		"--nth", "2,3,4,6",
 	})
 }
 
