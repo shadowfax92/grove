@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"grove/internal/git"
@@ -231,18 +232,42 @@ func shouldExpandRemovePicker(query string) bool {
 }
 
 func renderRemovePickerInput(targets []workspaces.RemoveTarget, lookup map[string]workspaces.RemoveTarget) string {
-	var lines []string
-	for _, target := range targets {
-		lookup[target.SessionName] = target
-		kind := "tmux"
-		status := "running"
-		if target.Kind == workspaces.RemoveManagedWorkspace {
-			kind = "workspace"
-			if !target.Running {
-				status = "stopped"
-			}
+	sorted := make([]workspaces.RemoveTarget, len(targets))
+	copy(sorted, targets)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ti, tj := sorted[i].Workspace.CreatedAt, sorted[j].Workspace.CreatedAt
+		if ti == "" && tj == "" {
+			return false
 		}
-		lines = append(lines, fmt.Sprintf("%s\t%-10s\t%-30s\t%s", target.SessionName, kind, target.Label(), status))
+		if ti == "" {
+			return false
+		}
+		if tj == "" {
+			return true
+		}
+		return ti > tj
+	})
+
+	maxLabel := 0
+	for _, t := range sorted {
+		if n := len(t.Label()); n > maxLabel {
+			maxLabel = n
+		}
+	}
+
+	var lines []string
+	for _, target := range sorted {
+		lookup[target.SessionName] = target
+		status := "running"
+		if target.Kind == workspaces.RemoveManagedWorkspace && !target.Running {
+			status = "stopped"
+		}
+		created := "—"
+		if target.Workspace.CreatedAt != "" {
+			created = state.RelativeTime(target.Workspace.CreatedAt) + " ago"
+		}
+		lines = append(lines, fmt.Sprintf("%s\t%-*s\t%-8s\t%s",
+			target.SessionName, maxLabel, target.Label(), status, created))
 	}
 	return strings.Join(lines, "\n")
 }
