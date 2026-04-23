@@ -3,7 +3,9 @@ package config
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -25,11 +27,24 @@ type PopupSize struct {
 	Height string `yaml:"height,omitempty"`
 }
 
+type PopupMatch struct {
+	MinClientWidth int `yaml:"min_client_width,omitempty"`
+	MaxClientWidth int `yaml:"max_client_width,omitempty"`
+}
+
+type PopupProfile struct {
+	Name  string     `yaml:"name"`
+	Match PopupMatch `yaml:"match,omitempty"`
+	Vim   PopupSize  `yaml:"vim,omitempty"`
+	Shell PopupSize  `yaml:"shell,omitempty"`
+}
+
 type ShadowPopupConfig struct {
-	Width  string    `yaml:"width,omitempty"`
-	Height string    `yaml:"height,omitempty"`
-	Vim    PopupSize `yaml:"vim,omitempty"`
-	Shell  PopupSize `yaml:"shell,omitempty"`
+	Width    string         `yaml:"width,omitempty"`
+	Height   string         `yaml:"height,omitempty"`
+	Vim      PopupSize      `yaml:"vim,omitempty"`
+	Shell    PopupSize      `yaml:"shell,omitempty"`
+	Profiles []PopupProfile `yaml:"profiles,omitempty"`
 }
 
 type ShadowKeys struct {
@@ -199,15 +214,34 @@ func expandTilde(path, home string) string {
 	return path
 }
 
-// PopupFor returns the popup size for the given shadow type ("vim"/"shell").
-// Falls back to the legacy top-level width/height, then to a hard-coded default.
+// PopupFor returns the popup size for the given shadow type ("vim"/"shell"/"sh").
+// Resolution order (first non-empty wins per-field):
+//   1. Active profile (GROVE_PROFILE env, else matched by tmux client width)
+//   2. Top-level vim/shell blocks
+//   3. Legacy top-level width/height
+//   4. Hard-coded 90%/90%
 func (p ShadowPopupConfig) PopupFor(typ string) PopupSize {
+	size, _ := p.ResolvePopup(typ)
+	return size
+}
+
+// ResolvePopup picks the popup size and returns the active profile name
+// ("" when no profile matched).
+func (p ShadowPopupConfig) ResolvePopup(typ string) (PopupSize, string) {
+	profile := p.SelectProfile(TmuxClientWidth())
+
 	size := PopupSize{}
-	switch typ {
-	case "vim":
-		size = p.Vim
-	case "shell", "sh":
-		size = p.Shell
+	if profile != nil {
+		size = popupSizeFor(*profile, typ)
+	}
+	if size.Width == "" || size.Height == "" {
+		top := topLevelSize(p, typ)
+		if size.Width == "" {
+			size.Width = top.Width
+		}
+		if size.Height == "" {
+			size.Height = top.Height
+		}
 	}
 	if size.Width == "" {
 		size.Width = p.Width
@@ -221,5 +255,81 @@ func (p ShadowPopupConfig) PopupFor(typ string) PopupSize {
 	if size.Height == "" {
 		size.Height = "90%"
 	}
-	return size
+
+	name := ""
+	if profile != nil {
+		name = profile.Name
+	}
+	return size, name
+}
+
+// SelectProfile returns the profile chosen by $GROVE_PROFILE env override or
+// by matching the given tmux client width. Returns nil when none applies.
+func (p ShadowPopupConfig) SelectProfile(clientWidth int) *PopupProfile {
+	if name := strings.TrimSpace(os.Getenv("GROVE_PROFILE")); name != "" {
+		for i := range p.Profiles {
+			if p.Profiles[i].Name == name {
+				return &p.Profiles[i]
+			}
+		}
+	}
+	if clientWidth <= 0 {
+		return nil
+	}
+	for i := range p.Profiles {
+		if p.Profiles[i].Match.Matches(clientWidth) {
+			return &p.Profiles[i]
+		}
+	}
+	return nil
+}
+
+func (m PopupMatch) Matches(width int) bool {
+	if m.MinClientWidth == 0 && m.MaxClientWidth == 0 {
+		return false
+	}
+	if m.MinClientWidth > 0 && width < m.MinClientWidth {
+		return false
+	}
+	if m.MaxClientWidth > 0 && width > m.MaxClientWidth {
+		return false
+	}
+	return true
+}
+
+func popupSizeFor(profile PopupProfile, typ string) PopupSize {
+	switch typ {
+	case "vim":
+		return profile.Vim
+	case "shell", "sh":
+		return profile.Shell
+	}
+	return PopupSize{}
+}
+
+func topLevelSize(p ShadowPopupConfig, typ string) PopupSize {
+	switch typ {
+	case "vim":
+		return p.Vim
+	case "shell", "sh":
+		return p.Shell
+	}
+	return PopupSize{}
+}
+
+// TmuxClientWidth returns the current tmux client width in cells, or 0 if
+// unavailable (not inside tmux, command failed, etc.).
+func TmuxClientWidth() int {
+	if os.Getenv("TMUX") == "" {
+		return 0
+	}
+	out, err := exec.Command("tmux", "display", "-p", "#{client_width}").Output()
+	if err != nil {
+		return 0
+	}
+	w, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0
+	}
+	return w
 }
