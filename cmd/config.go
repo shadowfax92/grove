@@ -49,3 +49,4 @@ var configCmd = &cobra.Command{
 		return c.Run()
 	},
 }
+

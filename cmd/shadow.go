@@ -83,7 +83,8 @@ var shadowToggleCmd = &cobra.Command{
 		}
 
 		command := fmt.Sprintf("exec tmux attach-session -t '=%s'", targetSession)
-		return tmux.DisplayPopup(popupClient, cfg.Shadow.Popup.Width, cfg.Shadow.Popup.Height, command)
+		size := cfg.Shadow.Popup.PopupFor(typ)
+		return tmux.DisplayPopup(popupClient, size.Width, size.Height, command)
 	},
 }
 

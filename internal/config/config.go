@@ -20,9 +20,16 @@ type ShadowConfig struct {
 	Keys  ShadowKeys        `yaml:"keys"`
 }
 
+type PopupSize struct {
+	Width  string `yaml:"width,omitempty"`
+	Height string `yaml:"height,omitempty"`
+}
+
 type ShadowPopupConfig struct {
-	Width  string `yaml:"width"`
-	Height string `yaml:"height"`
+	Width  string    `yaml:"width,omitempty"`
+	Height string    `yaml:"height,omitempty"`
+	Vim    PopupSize `yaml:"vim,omitempty"`
+	Shell  PopupSize `yaml:"shell,omitempty"`
 }
 
 type ShadowKeys struct {
@@ -190,4 +197,29 @@ func expandTilde(path, home string) string {
 		return home
 	}
 	return path
+}
+
+// PopupFor returns the popup size for the given shadow type ("vim"/"shell").
+// Falls back to the legacy top-level width/height, then to a hard-coded default.
+func (p ShadowPopupConfig) PopupFor(typ string) PopupSize {
+	size := PopupSize{}
+	switch typ {
+	case "vim":
+		size = p.Vim
+	case "shell", "sh":
+		size = p.Shell
+	}
+	if size.Width == "" {
+		size.Width = p.Width
+	}
+	if size.Height == "" {
+		size.Height = p.Height
+	}
+	if size.Width == "" {
+		size.Width = "90%"
+	}
+	if size.Height == "" {
+		size.Height = "90%"
+	}
+	return size
 }
