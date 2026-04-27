@@ -27,6 +27,36 @@ func TestVisibleJumpSessionsFiltersShadowSessions(t *testing.T) {
 	}
 }
 
+func TestRootIncludesQuickCommand(t *testing.T) {
+	cmd, _, err := rootCmd.Find([]string{"quick"})
+	if err != nil {
+		t.Fatalf("rootCmd.Find(quick) error = %v", err)
+	}
+	if cmd == nil || cmd.Name() != "quick" {
+		t.Fatalf("rootCmd.Find(quick) = %v, want quick command", cmd)
+	}
+}
+
+func TestJumpTargetSessionName(t *testing.T) {
+	tests := []struct {
+		name   string
+		target string
+		want   string
+	}{
+		{name: "pane", target: "g/main:2.1", want: "g/main"},
+		{name: "window", target: "notes:3", want: "notes"},
+		{name: "session", target: "scratch", want: "scratch"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := jumpTargetSessionName(tt.target); got != tt.want {
+				t.Fatalf("jumpTargetSessionName(%q) = %q, want %q", tt.target, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestVisibleJumpPanesFiltersShadowSessionPanes(t *testing.T) {
 	panes := []tmux.PaneInfo{
 		{Target: "g/main:1.1", Session: "g/main"},

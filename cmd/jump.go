@@ -5,9 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"grove/internal/config"
 	"grove/internal/shadow"
 	"grove/internal/state"
 	"grove/internal/tmux"
@@ -20,7 +22,10 @@ func init() {
 	jumpCmd.Flags().BoolP("panes", "p", false, "Search panes")
 	jumpCmd.Flags().BoolP("windows", "w", false, "Search windows")
 	jumpCmd.Flags().BoolP("all", "a", false, "Include ghost (shadow) sessions")
+	quickCmd.Flags().Bool("inside", false, "Run inside the quick popup")
+	_ = quickCmd.Flags().MarkHidden("inside")
 	rootCmd.AddCommand(jumpCmd)
+	rootCmd.AddCommand(quickCmd)
 }
 
 var jumpCmd = &cobra.Command{
@@ -57,6 +62,58 @@ Bind in tmux.conf for quick access:
 		}
 		return jumpSessions(all)
 	},
+}
+
+var quickCmd = &cobra.Command{
+	Use:         "quick [client_name]",
+	Aliases:     []string{"q"},
+	Annotations: map[string]string{"group": "Workspaces:"},
+	Short:       "Fuzzy-find panes and windows, then open the selection in a popup",
+	Long: `Open a popup picker for panes and windows, including shadow sessions.
+The selected target attaches inside that popup so closing it returns to the original pane.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		inside, _ := cmd.Flags().GetBool("inside")
+		if inside {
+			return runQuickInside()
+		}
+		return openQuickPopup(args)
+	},
+}
+
+func openQuickPopup(args []string) error {
+	clientName := ""
+	if len(args) > 0 {
+		clientName = args[0]
+	} else {
+		var err error
+		clientName, err = tmux.CurrentClient()
+		if err != nil {
+			return err
+		}
+	}
+
+	cfg, err := config.LoadFast()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	selfPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("finding executable path: %w", err)
+	}
+
+	command := fmt.Sprintf("exec %s quick --inside", strconv.Quote(selfPath))
+	size := cfg.Shadow.Popup.PopupFor("sh")
+	return tmux.DisplayPopup(clientName, size.Width, size.Height, command)
+}
+
+func runQuickInside() error {
+	target, mgr, err := selectPanesAndWindows(true)
+	if err != nil {
+		return err
+	}
+	touchGroveSession(mgr, jumpTargetSessionName(target))
+	return tmux.Attach(target)
 }
 
 func jumpSessions(all bool) error {
@@ -315,13 +372,33 @@ const (
 )
 
 func jumpPanesAndWindows(all bool) error {
-	windows, err := tmux.ListWindowInfo()
+	target, mgr, err := selectPanesAndWindows(all)
 	if err != nil {
 		return err
 	}
+
+	if tmux.IsInsideTmux() {
+		if err := tmux.SwitchClient(target); err != nil {
+			return err
+		}
+	} else {
+		if err := tmux.Attach(target); err != nil {
+			return err
+		}
+	}
+
+	touchGroveSession(mgr, jumpTargetSessionName(target))
+	return nil
+}
+
+func selectPanesAndWindows(all bool) (string, *state.StateManager, error) {
+	windows, err := tmux.ListWindowInfo()
+	if err != nil {
+		return "", nil, err
+	}
 	panes, err := tmux.ListPaneInfo()
 	if err != nil {
-		return err
+		return "", nil, err
 	}
 	if !all {
 		visibleW := make([]tmux.WindowInfo, 0, len(windows))
@@ -334,7 +411,7 @@ func jumpPanesAndWindows(all bool) error {
 		panes = visibleJumpPanes(panes)
 	}
 	if len(windows) == 0 && len(panes) == 0 {
-		return fmt.Errorf("no tmux windows or panes")
+		return "", nil, fmt.Errorf("no tmux windows or panes")
 	}
 
 	mgr, _ := state.NewManager()
@@ -397,25 +474,17 @@ func jumpPanesAndWindows(all bool) error {
 		"--tiebreak", "begin,index",
 	})
 	if err != nil {
-		return err
+		return "", nil, err
 	}
 
-	if tmux.IsInsideTmux() {
-		if err := tmux.SwitchClient(target); err != nil {
-			return err
-		}
-	} else {
-		if err := tmux.Attach(target); err != nil {
-			return err
-		}
-	}
+	return target, mgr, nil
+}
 
-	sessionName := target
+func jumpTargetSessionName(target string) string {
 	if idx := strings.Index(target, ":"); idx >= 0 {
-		sessionName = target[:idx]
+		return target[:idx]
 	}
-	touchGroveSession(mgr, sessionName)
-	return nil
+	return target
 }
 
 func tagWindowLine(w tmux.WindowInfo, currentWindow string) string {

@@ -124,6 +124,10 @@ func CurrentSession() (string, error) {
 	return run("display-message", "-p", "#{session_name}")
 }
 
+func CurrentClient() (string, error) {
+	return run("display-message", "-p", "#{client_name}")
+}
+
 func CurrentTarget() (string, error) {
 	return run("display-message", "-p", "#{session_name}:#{window_index}.#{pane_index}")
 }
