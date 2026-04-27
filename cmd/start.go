@@ -47,7 +47,7 @@ var startCmd = &cobra.Command{
 			if tmux.SessionExists(ws.SessionName) {
 				continue
 			}
-			dir := workspaceDir(&ws)
+			dir := workspaceDirWithConfig(&ws, cfg)
 			var layoutName string
 			if ws.Type == "worktree" {
 				if repo := cfg.FindRepo(ws.Repo); repo != nil {

@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"grove/internal/config"
 	"grove/internal/state"
 	"grove/internal/workspaces"
 
@@ -32,6 +33,10 @@ var cdCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		cfg, err := config.LoadFast()
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
 		inv, err := workspaces.Build(st, nil)
 		if err != nil {
 			return err
@@ -59,7 +64,7 @@ var cdCmd = &cobra.Command{
 			ws = entry.Workspace
 		}
 
-		fmt.Println(workspaceDir(&ws))
+		fmt.Println(workspaceDirWithConfig(&ws, cfg))
 		return nil
 	},
 }

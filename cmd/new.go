@@ -207,10 +207,7 @@ func createWorktree(repo *config.RepoConfig, branch string, _ *config.Config, mg
 		return fmt.Errorf("creating worktree: %w", err)
 	}
 
-	setupDir := worktreePath
-	if repo.Workdir != "" {
-		setupDir = filepath.Join(worktreePath, repo.Workdir)
-	}
+	setupDir := pathWithWorkdir(worktreePath, repo.Workdir)
 
 	statusOut, childOut := commandWriters(mode == newModeCD)
 	for _, setupCmd := range repo.Setup {
@@ -232,6 +229,9 @@ func createWorktree(repo *config.RepoConfig, branch string, _ *config.Config, mg
 		WorktreePath: worktreePath,
 		Branch:       branch,
 		SessionName:  sessionName,
+	}
+	if repo.Workdir != "" {
+		ws.Path = setupDir
 	}
 	mgr.AddWorkspace(st, ws)
 	if err := mgr.Save(st); err != nil {

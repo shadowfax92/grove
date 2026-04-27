@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"grove/internal/config"
 	"grove/internal/state"
 	"grove/internal/tmux"
 	"grove/internal/workspaces"
@@ -37,6 +38,10 @@ var switchCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		cfg, err := config.LoadFast()
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
 		inv, err := workspaces.Build(st, nil)
 		if err != nil {
 			return err
@@ -62,7 +67,7 @@ var switchCmd = &cobra.Command{
 		}
 
 		if !tmux.SessionExists(ws.SessionName) {
-			dir := workspaceDir(&ws)
+			dir := workspaceDirWithConfig(&ws, cfg)
 			if err := tmux.NewSession(ws.SessionName, dir); err != nil {
 				return fmt.Errorf("recreating session: %w", err)
 			}

@@ -5,6 +5,7 @@ import (
 	"os"
 	"sort"
 
+	"grove/internal/config"
 	"grove/internal/git"
 	"grove/internal/state"
 	"grove/internal/tmux"
@@ -75,13 +76,16 @@ func runDone(args []string, tmuxMode bool) error {
 	if err != nil {
 		return err
 	}
-
 	current, err := resolveDoneWorkspace(mgr, st, args, tmuxMode)
 	if err != nil {
 		return err
 	}
 
 	if tmuxMode {
+		cfg, err := config.LoadFast()
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
 		nextSession := findNextSession(st, current.SessionName)
 		if nextSession == "" {
 			return fmt.Errorf("no other workspace to switch to")
@@ -90,7 +94,7 @@ func runDone(args []string, tmuxMode bool) error {
 		if next == nil {
 			return fmt.Errorf("no other workspace to switch to")
 		}
-		if err := ensureDoneSwitchTarget(next); err != nil {
+		if err := ensureDoneSwitchTarget(next, cfg); err != nil {
 			return err
 		}
 		if err := tmux.SwitchClient(next.SessionName); err != nil {
@@ -150,11 +154,11 @@ func resolveTmuxDoneWorkspace(mgr *state.StateManager, st *state.State) (*state.
 	return ws, nil
 }
 
-func ensureDoneSwitchTarget(next *state.Workspace) error {
+func ensureDoneSwitchTarget(next *state.Workspace, cfg *config.Config) error {
 	if tmux.SessionExists(next.SessionName) {
 		return nil
 	}
-	if err := tmux.NewSession(next.SessionName, workspaceDir(next)); err != nil {
+	if err := tmux.NewSession(next.SessionName, workspaceDirWithConfig(next, cfg)); err != nil {
 		return fmt.Errorf("recreating target session: %w", err)
 	}
 	return nil

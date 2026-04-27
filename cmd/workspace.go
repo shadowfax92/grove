@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"grove/internal/config"
 	"grove/internal/state"
 )
 
@@ -14,14 +15,33 @@ func workspaceDir(ws *state.Workspace) string {
 	if ws == nil {
 		return ""
 	}
-	if ws.Type == "worktree" && ws.WorktreePath != "" {
-		return ws.WorktreePath
-	}
 	if ws.Path != "" {
 		return ws.Path
 	}
+	if ws.Type == "worktree" && ws.WorktreePath != "" {
+		return ws.WorktreePath
+	}
 	home, _ := os.UserHomeDir()
 	return home
+}
+
+func workspaceDirWithConfig(ws *state.Workspace, cfg *config.Config) string {
+	if ws == nil {
+		return ""
+	}
+	if ws.Type == "worktree" && ws.WorktreePath != "" && cfg != nil {
+		if repo := cfg.FindRepo(ws.Repo); repo != nil && repo.Workdir != "" {
+			return pathWithWorkdir(ws.WorktreePath, repo.Workdir)
+		}
+	}
+	return workspaceDir(ws)
+}
+
+func pathWithWorkdir(root, workdir string) string {
+	if workdir == "" {
+		return root
+	}
+	return filepath.Join(root, workdir)
 }
 
 func workspacePaneLabel(ws *state.Workspace) string {
@@ -129,7 +149,12 @@ func workspaceMatchesByCwd(st *state.State, cwd string) []workspaceMatch {
 }
 
 func workspaceRoot(ws *state.Workspace) (string, bool) {
-	root := workspaceDir(ws)
+	root := ""
+	if ws != nil && ws.Type == "worktree" && ws.WorktreePath != "" {
+		root = ws.WorktreePath
+	} else {
+		root = workspaceDir(ws)
+	}
 	if root == "" {
 		return "", false
 	}

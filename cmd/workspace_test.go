@@ -2,20 +2,41 @@ package cmd
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
+	"grove/internal/config"
 	"grove/internal/state"
 )
 
-func TestWorkspaceDirUsesWorktreePathForWorktrees(t *testing.T) {
+func TestWorkspaceDirUsesPathAsWorktreeStartDir(t *testing.T) {
 	ws := &state.Workspace{
 		Type:         "worktree",
 		WorktreePath: "/tmp/worktree",
-		Path:         "/tmp/plain",
+		Path:         "/tmp/worktree/packages/app",
 	}
 
-	if got, want := workspaceDir(ws), "/tmp/worktree"; got != want {
+	if got, want := workspaceDir(ws), "/tmp/worktree/packages/app"; got != want {
 		t.Fatalf("workspaceDir() = %q, want %q", got, want)
+	}
+}
+
+func TestWorkspaceDirWithConfigUsesConfiguredWorkdirForLegacyWorktree(t *testing.T) {
+	ws := &state.Workspace{
+		Type:         "worktree",
+		Repo:         "mono",
+		WorktreePath: "/tmp/mono/.grove/worktrees/feat-auth",
+	}
+	cfg := &config.Config{
+		Repos: []config.RepoConfig{
+			{Name: "mono", Workdir: "packages/app"},
+		},
+	}
+
+	got := workspaceDirWithConfig(ws, cfg)
+	want := filepath.Join("/tmp/mono/.grove/worktrees/feat-auth", "packages/app")
+	if got != want {
+		t.Fatalf("workspaceDirWithConfig() = %q, want %q", got, want)
 	}
 }
 
@@ -203,6 +224,27 @@ func TestFindWorkspaceByCwdPrefersMostSpecificMatch(t *testing.T) {
 	}
 
 	got, err := findWorkspaceByCwd(st, "/tmp/mono/.grove/worktrees/feat-auth/app")
+	if err != nil {
+		t.Fatalf("findWorkspaceByCwd() error = %v", err)
+	}
+	if got.Name != "mono/feat-auth" {
+		t.Fatalf("findWorkspaceByCwd() = %q, want mono/feat-auth", got.Name)
+	}
+}
+
+func TestFindWorkspaceByCwdUsesWorktreeRootWhenWorktreeHasStartDir(t *testing.T) {
+	st := &state.State{
+		Workspaces: []state.Workspace{
+			{
+				Name:         "mono/feat-auth",
+				Type:         "worktree",
+				WorktreePath: "/tmp/mono/.grove/worktrees/feat-auth",
+				Path:         "/tmp/mono/.grove/worktrees/feat-auth/packages/app",
+			},
+		},
+	}
+
+	got, err := findWorkspaceByCwd(st, "/tmp/mono/.grove/worktrees/feat-auth/packages/browseros")
 	if err != nil {
 		t.Fatalf("findWorkspaceByCwd() error = %v", err)
 	}
