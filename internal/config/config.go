@@ -27,6 +27,7 @@ type ShadowPopupConfig struct {
 type ShadowKeys struct {
 	Vim    string `yaml:"vim"`
 	Shell  string `yaml:"shell"`
+	Git    string `yaml:"git"`
 	Delete string `yaml:"delete"`
 }
 
@@ -88,6 +89,9 @@ func (c *Config) setDefaults() {
 	}
 	if c.Shadow.Keys.Shell == "" {
 		c.Shadow.Keys.Shell = "M-o"
+	}
+	if c.Shadow.Keys.Git == "" {
+		c.Shadow.Keys.Git = "M-g"
 	}
 	if c.Shadow.Keys.Delete == "" {
 		c.Shadow.Keys.Delete = "M-d"

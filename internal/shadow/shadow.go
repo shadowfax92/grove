@@ -19,6 +19,7 @@ func NamesForPane(paneID string) []string {
 	return []string{
 		Name(paneID, "vim"),
 		Name(paneID, "sh"),
+		Name(paneID, "git"),
 	}
 }
 
@@ -71,8 +72,11 @@ func Ensure(sessionName, paneCwd, typ, paneID string) error {
 	}
 
 	command := ""
-	if typ == "vim" {
+	switch typ {
+	case "vim":
 		command = "nvim"
+	case "git":
+		command = "lazygit"
 	}
 
 	if err := tmux.NewSessionWithCommand(sessionName, paneCwd, env, command); err != nil {

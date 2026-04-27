@@ -2,7 +2,7 @@
 
 **Persistent popup sessions for tmux — vim and shell shadows for any pane.**
 
-Press `Alt+I` for an editor popup, `Alt+O` for a shell popup, and `Alt+D` to delete both shadow sessions for the current pane. The popup follows your pane's working directory.
+Press `Alt+I` for an editor popup, `Alt+O` for a shell popup, `Alt+G` for a lazygit popup, and `Alt+D` to delete all shadow sessions for the current pane. The popup follows your pane's working directory.
 
 ## Install
 
@@ -22,7 +22,7 @@ Make sure `~/bin` is on your `PATH`.
 # 1. Bind the popup keys in your tmux session
 grove start
 
-# 2. Press Alt+I for vim popup, Alt+O for shell popup, Alt+D to delete both
+# 2. Press Alt+I for vim popup, Alt+O for shell popup, Alt+G for lazygit popup, Alt+D to delete all
 ```
 
 To make the bindings persist across tmux restarts, add to your `.zshrc`:
@@ -53,6 +53,7 @@ shadow:
   keys:
     vim: M-i
     shell: M-o
+    git: M-g
     delete: M-d
 ```
 

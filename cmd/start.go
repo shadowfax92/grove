@@ -43,6 +43,12 @@ var startCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "warning: failed to bind shadow shell key: %v\n", err)
 		}
 
+		// Bind shadow git (lazygit) popup key
+		shadowGitCmd := fmt.Sprintf(`%s shadow toggle git "#{client_name}" "#{session_name}" "#{pane_id}" >/dev/null 2>&1 || true`, selfCmd)
+		if err := tmux.BindKeyRaw("-n", cfg.Shadow.Keys.Git, "run-shell", "-b", shadowGitCmd); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to bind shadow git key: %v\n", err)
+		}
+
 		// Bind shadow delete key
 		shadowDeleteCommand := fmt.Sprintf(`%s shadow delete "#{client_name}" "#{session_name}" "#{pane_id}" >/dev/null 2>&1 || true`, selfCmd)
 		if err := tmux.BindKeyRaw("-n", cfg.Shadow.Keys.Delete, "run-shell", "-b", shadowDeleteCommand); err != nil {
@@ -55,7 +61,7 @@ var startCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "warning: failed to set cleanup hook: %v\n", err)
 		}
 
-		fmt.Printf("Bound shadow keys: vim=%s, shell=%s, delete=%s\n", cfg.Shadow.Keys.Vim, cfg.Shadow.Keys.Shell, cfg.Shadow.Keys.Delete)
+		fmt.Printf("Bound shadow keys: vim=%s, shell=%s, git=%s, delete=%s\n", cfg.Shadow.Keys.Vim, cfg.Shadow.Keys.Shell, cfg.Shadow.Keys.Git, cfg.Shadow.Keys.Delete)
 		return nil
 	},
 }
