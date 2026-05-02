@@ -29,6 +29,9 @@ type ShadowPopupConfig struct {
 type ShadowKeys struct {
 	Vim      string `yaml:"vim"`
 	Shell    string `yaml:"shell"`
+	Git      string `yaml:"git"`
+	Gitui    string `yaml:"gitui"`
+	Diffview string `yaml:"diffview"`
 	Delete   string `yaml:"delete"`
 	Maximize string `yaml:"maximize"`
 }
@@ -97,6 +100,15 @@ func (c *Config) setDefaults() {
 	}
 	if c.Shadow.Keys.Shell == "" {
 		c.Shadow.Keys.Shell = "M-o"
+	}
+	if c.Shadow.Keys.Git == "" {
+		c.Shadow.Keys.Git = "M-g"
+	}
+	if c.Shadow.Keys.Gitui == "" {
+		c.Shadow.Keys.Gitui = "M-u"
+	}
+	if c.Shadow.Keys.Diffview == "" {
+		c.Shadow.Keys.Diffview = "U"
 	}
 	if c.Shadow.Keys.Delete == "" {
 		c.Shadow.Keys.Delete = "M-d"

@@ -25,7 +25,7 @@ var shadowCmd = &cobra.Command{
 }
 
 var shadowToggleCmd = &cobra.Command{
-	Use:   "toggle <vim|shell> <client_name> <session_name> <pane_id>",
+	Use:   "toggle <vim|shell|git> <client_name> <session_name> <pane_id>",
 	Short: "Toggle a shadow popup for the current tmux client",
 	Args:  cobra.ExactArgs(4),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -131,6 +131,10 @@ func normalizeShadowType(typ string) (string, error) {
 		return "vim", nil
 	case "shell", "sh":
 		return "sh", nil
+	case "git":
+		return "git", nil
+	case "gitui":
+		return "gitui", nil
 	default:
 		return "", fmt.Errorf("invalid shadow type %q", typ)
 	}
