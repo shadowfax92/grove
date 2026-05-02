@@ -87,10 +87,10 @@ func (c *Config) setDefaults() {
 		c.Shadow.Popup.MaxHeight = "100%"
 	}
 	if c.Shadow.Popup.TargetCols == 0 {
-		c.Shadow.Popup.TargetCols = 220
+		c.Shadow.Popup.TargetCols = 360
 	}
 	if c.Shadow.Popup.TargetRows == 0 {
-		c.Shadow.Popup.TargetRows = 60
+		c.Shadow.Popup.TargetRows = 75
 	}
 	if c.Shadow.Keys.Vim == "" {
 		c.Shadow.Keys.Vim = "M-i"
