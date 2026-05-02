@@ -2,7 +2,7 @@
 
 **Persistent popup sessions for tmux — vim and shell shadows for any pane.**
 
-Press `Alt+I` for an editor popup, `Alt+O` for a shell popup, `Alt+G` for a lazygit popup, and `Alt+D` to delete all shadow sessions for the current pane. The popup follows your pane's working directory.
+Press `Alt+I` for an editor popup, `Alt+O` for a shell popup, `Alt+G` for a lazygit popup, `Alt+U` for a gitui popup, `Ctrl-B U` (tmux prefix + U) to open `nvim DiffviewOpen` on the SHA in your clipboard (copy via `y` in gitui), and `Alt+D` to delete all shadow sessions for the current pane. The popup follows your pane's working directory.
 
 ## Install
 

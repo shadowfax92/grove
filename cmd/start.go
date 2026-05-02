@@ -49,6 +49,27 @@ var startCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "warning: failed to bind shadow git key: %v\n", err)
 		}
 
+		// Bind shadow gitui popup key
+		shadowGituiCmd := fmt.Sprintf(`%s shadow toggle gitui "#{client_name}" "#{session_name}" "#{pane_id}" >/dev/null 2>&1 || true`, selfCmd)
+		if err := tmux.BindKeyRaw("-n", cfg.Shadow.Keys.Gitui, "run-shell", "-b", shadowGituiCmd); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to bind shadow gitui key: %v\n", err)
+		}
+
+		// Bind nvim Diffview popup key — opens nvim DiffviewOpen on SHA from clipboard.
+		// Workflow: in gitui press `y` to copy SHA, then this key opens Diffview in a popup.
+		diffviewScript := `sha=$(pbpaste 2>/dev/null | tr -d '[:space:]'); ` +
+			`if printf '%s' "$sha" | grep -Eq '^[0-9a-fA-F]{7,40}$'; then ` +
+			`nvim -c "DiffviewOpen $sha~..$sha"; ` +
+			`else ` +
+			`printf 'Clipboard is not a SHA: %s\n(In gitui: hover commit, press y, then this key.)\nPress any key...' "$sha"; read -n 1 -s; ` +
+			`fi`
+		// Bound to the tmux prefix key (no `-n`), so trigger is `prefix + <key>` (default: Ctrl-B U).
+		if err := tmux.BindKeyRaw(cfg.Shadow.Keys.Diffview,
+			"display-popup", "-E", "-w", "90%", "-h", "90%",
+			"-d", "#{pane_current_path}", diffviewScript); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to bind diffview key: %v\n", err)
+		}
+
 		// Bind shadow delete key
 		shadowDeleteCommand := fmt.Sprintf(`%s shadow delete "#{client_name}" "#{session_name}" "#{pane_id}" >/dev/null 2>&1 || true`, selfCmd)
 		if err := tmux.BindKeyRaw("-n", cfg.Shadow.Keys.Delete, "run-shell", "-b", shadowDeleteCommand); err != nil {
@@ -61,7 +82,9 @@ var startCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "warning: failed to set cleanup hook: %v\n", err)
 		}
 
-		fmt.Printf("Bound shadow keys: vim=%s, shell=%s, git=%s, delete=%s\n", cfg.Shadow.Keys.Vim, cfg.Shadow.Keys.Shell, cfg.Shadow.Keys.Git, cfg.Shadow.Keys.Delete)
+		fmt.Printf("Bound shadow keys: vim=%s, shell=%s, git=%s, gitui=%s, diffview=prefix+%s, delete=%s\n",
+			cfg.Shadow.Keys.Vim, cfg.Shadow.Keys.Shell, cfg.Shadow.Keys.Git,
+			cfg.Shadow.Keys.Gitui, cfg.Shadow.Keys.Diffview, cfg.Shadow.Keys.Delete)
 		return nil
 	},
 }

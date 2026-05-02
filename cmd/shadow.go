@@ -132,6 +132,8 @@ func normalizeShadowType(typ string) (string, error) {
 		return "sh", nil
 	case "git":
 		return "git", nil
+	case "gitui":
+		return "gitui", nil
 	default:
 		return "", fmt.Errorf("invalid shadow type %q", typ)
 	}
