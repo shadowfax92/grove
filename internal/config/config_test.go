@@ -25,10 +25,10 @@ func TestDefaultShadowConfigIncludesShadowKeysAndCenteredMaximize(t *testing.T) 
 	if !strings.Contains(string(data), "max_width: 100%") {
 		t.Fatalf("default config should include full-screen max width 100%%, got:\n%s", string(data))
 	}
-	if !strings.Contains(string(data), "target_cols: 360") {
-		t.Fatalf("default config should include target_cols 360, got:\n%s", string(data))
+	if !strings.Contains(string(data), "target_cols: 320") {
+		t.Fatalf("default config should include target_cols 320, got:\n%s", string(data))
 	}
-	if !strings.Contains(string(data), "target_rows: 75") {
-		t.Fatalf("default config should include target_rows 75, got:\n%s", string(data))
+	if !strings.Contains(string(data), "target_rows: 70") {
+		t.Fatalf("default config should include target_rows 70, got:\n%s", string(data))
 	}
 }
