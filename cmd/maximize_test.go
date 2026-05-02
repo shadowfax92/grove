@@ -31,7 +31,8 @@ func TestShadowMaximizeRestoresNormalPopupSize(t *testing.T) {
 
 	log := readFakeTmuxLog(t, logPath)
 	assertLogContains(t, log, "set-option -t gs/vim/7 @shadow_popup_mode normal")
-	assertLogContains(t, log, "display-popup -c popup-client -w 80% -h 85% -E exec tmux attach-session -t '=gs/vim/7'")
+	// On a 512-col client (fake), target_cols=220 wins (well under 0.85*512).
+	assertLogContains(t, log, "display-popup -c popup-client -w 220 -h 60 -E exec tmux attach-session -t '=gs/vim/7'")
 }
 
 func TestNormalPaneMaximizeSwapsPaneIntoCenteredPopup(t *testing.T) {

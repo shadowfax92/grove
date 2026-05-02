@@ -47,9 +47,11 @@ Location: `~/.config/grove/config.yaml` (created automatically on first run)
 ```yaml
 shadow:
   popup:
-    width: "80%"
+    target_cols: 220   # comfortable popup width in cols (clamped to client size)
+    target_rows: 60    # comfortable popup height in rows
+    width: "80%"       # legacy fallback if target_cols/rows are 0
     height: "95%"
-    max_width: "100%"
+    max_width: "100%"  # maximize fills the screen
     max_height: "100%"
   keys:
     vim: M-i
@@ -57,6 +59,8 @@ shadow:
     delete: M-d
     maximize: M-y      # tmux can't see Ctrl+Shift+<letter>; see Kitty mapping below
 ```
+
+When `target_cols` and `target_rows` are non-zero (the default), the normal popup is sized at `min(client_size, target)` and centered by tmux. If the target would land within 85% of the client's size, the popup expands to 100% to avoid sliver gaps. On an ultrawide (e.g. 49-inch ~512 cols), `target_cols: 220` produces ~28% gaps each side; on a 13-inch laptop (~180 cols), the popup goes full-screen.
 
 Edit the config:
 

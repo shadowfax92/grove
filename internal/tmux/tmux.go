@@ -185,6 +185,27 @@ func DisplayPopup(client, width, height, command string) error {
 	return err
 }
 
+// ClientSize returns the column and row count of the client's terminal.
+func ClientSize(client string) (cols, rows int, err error) {
+	out, err := run("display-message", "-p", "-t", client, "#{client_width} #{client_height}")
+	if err != nil {
+		return 0, 0, err
+	}
+	parts := strings.Fields(out)
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("client size: unexpected output %q", out)
+	}
+	cols, err = strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, fmt.Errorf("client size cols: %w", err)
+	}
+	rows, err = strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, fmt.Errorf("client size rows: %w", err)
+	}
+	return cols, rows, nil
+}
+
 func SetHook(hookName, command string) error {
 	_, err := run("set-hook", "-g", hookName, command)
 	return err

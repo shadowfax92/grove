@@ -78,6 +78,9 @@ case "$1" in
       '#{pane_current_path}')
         printf '%s\n' '/tmp/grove-test'
         ;;
+      '#{client_width} #{client_height}')
+        printf '%s\n' "${TMUX_FAKE_CLIENT_COLS:-512} ${TMUX_FAKE_CLIENT_ROWS:-100}"
+        ;;
     esac
     exit 0
     ;;

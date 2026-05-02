@@ -18,10 +18,12 @@ type ShadowConfig struct {
 }
 
 type ShadowPopupConfig struct {
-	Width     string `yaml:"width"`
-	Height    string `yaml:"height"`
-	MaxWidth  string `yaml:"max_width"`
-	MaxHeight string `yaml:"max_height"`
+	Width      string `yaml:"width"`
+	Height     string `yaml:"height"`
+	MaxWidth   string `yaml:"max_width"`
+	MaxHeight  string `yaml:"max_height"`
+	TargetCols int    `yaml:"target_cols"`
+	TargetRows int    `yaml:"target_rows"`
 }
 
 type ShadowKeys struct {
@@ -83,6 +85,12 @@ func (c *Config) setDefaults() {
 	}
 	if c.Shadow.Popup.MaxHeight == "" {
 		c.Shadow.Popup.MaxHeight = "100%"
+	}
+	if c.Shadow.Popup.TargetCols == 0 {
+		c.Shadow.Popup.TargetCols = 220
+	}
+	if c.Shadow.Popup.TargetRows == 0 {
+		c.Shadow.Popup.TargetRows = 60
 	}
 	if c.Shadow.Keys.Vim == "" {
 		c.Shadow.Keys.Vim = "M-i"

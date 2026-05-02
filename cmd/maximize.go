@@ -176,8 +176,7 @@ func toggleShadowPopupSize(clientName, currentSession, activePane string) error 
 
 	currentMode, _ := tmux.GetSessionVar(currentSession, shadowPopupModeKey)
 	if currentMode == shadowPopupModeMaximized {
-		width = cfg.Shadow.Popup.Width
-		height = cfg.Shadow.Popup.Height
+		width, height = resolvePopupSize(cfg.Shadow.Popup, popupClient)
 		nextMode = shadowPopupModeNormal
 	}
 
