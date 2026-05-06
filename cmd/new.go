@@ -22,6 +22,7 @@ func init() {
 	newCmd.Flags().Bool("no-prepare", false, "Skip prepare commands before worktree creation")
 	newCmd.Flags().Bool("cd", false, "Create workspace and print its path (default)")
 	newCmd.Flags().Bool("tmux", false, "Create a tmux session for the workspace")
+	newCmd.Flags().String("from", "", "Create a new branch from this start point")
 	rootCmd.AddCommand(newCmd)
 }
 
@@ -42,6 +43,8 @@ var newCmd = &cobra.Command{
   grove new                 — pick repo or type session name via fzf, then print the path
   grove new <repo>          — pick or auto-generate branch in repo, then print the path
   grove new <repo> <br>     — create a specific workspace and print the path
+  grove new <repo> <br> --from <base>
+                            — create a specific workspace branch from base
   grove new <name>          — plain workspace (if name doesn't match a repo)
   grove new --tmux mono br  — create the workspace and a tmux session`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -49,6 +52,7 @@ var newCmd = &cobra.Command{
 		noPrepare, _ := cmd.Flags().GetBool("no-prepare")
 		cdMode, _ := cmd.Flags().GetBool("cd")
 		tmuxMode, _ := cmd.Flags().GetBool("tmux")
+		from, _ := cmd.Flags().GetString("from")
 		mode, err := resolveNewMode(cdMode, tmuxMode)
 		if err != nil {
 			return err
@@ -88,7 +92,14 @@ var newCmd = &cobra.Command{
 			branch = args[1]
 		}
 
+		if err := validateNewFromFlag(from, branch); err != nil {
+			return err
+		}
+
 		repo := cfg.FindRepo(name)
+		if from != "" && (repo == nil || repo.Type != "worktree") {
+			return fmt.Errorf("--from can only be used with worktree repos")
+		}
 		if repo != nil {
 			if repo.Type == "plain" {
 				return createPlainRepo(repo, branch, mgr, st, noSwitch, mode)
@@ -96,7 +107,7 @@ var newCmd = &cobra.Command{
 			if repo.Type == "dir" {
 				return createDirWorkspace(repo, branch, mgr, st, noSwitch, mode)
 			}
-			return createWorktree(repo, branch, cfg, mgr, st, noSwitch, noPrepare, mode)
+			return createWorktree(repo, branch, from, cfg, mgr, st, noSwitch, noPrepare, mode)
 		}
 		return createPlain(name, mgr, st, noSwitch, mode)
 	},
@@ -110,6 +121,13 @@ func resolveNewMode(cdMode, tmuxMode bool) (newMode, error) {
 		return newModeTmux, nil
 	}
 	return newModeCD, nil
+}
+
+func validateNewFromFlag(from, branch string) error {
+	if from != "" && branch == "" {
+		return fmt.Errorf("--from requires <repo> <branch>")
+	}
+	return nil
 }
 
 func createPlain(name string, mgr *state.StateManager, st *state.State, noSwitch bool, mode newMode) error {
@@ -148,7 +166,7 @@ func createPlain(name string, mgr *state.StateManager, st *state.State, noSwitch
 	return nil
 }
 
-func createWorktree(repo *config.RepoConfig, branch string, _ *config.Config, mgr *state.StateManager, st *state.State, noSwitch, noPrepare bool, mode newMode) error {
+func createWorktree(repo *config.RepoConfig, branch, from string, _ *config.Config, mgr *state.StateManager, st *state.State, noSwitch, noPrepare bool, mode newMode) error {
 	if branch == "" {
 		existing := existingWorktreeNames(st, repo.Name)
 
@@ -203,7 +221,7 @@ func createWorktree(repo *config.RepoConfig, branch string, _ *config.Config, mg
 		fmt.Fprintf(os.Stderr, "warning: could not update .gitignore: %v\n", err)
 	}
 
-	if err := git.AddWorktree(repo.Path, worktreePath, branch); err != nil {
+	if err := git.AddWorktreeFrom(repo.Path, worktreePath, branch, from); err != nil {
 		return fmt.Errorf("creating worktree: %w", err)
 	}
 

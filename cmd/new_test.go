@@ -37,6 +37,59 @@ func TestResolveNewModeRejectsConflictingFlags(t *testing.T) {
 	}
 }
 
+func TestNewCommandExposesFromFlag(t *testing.T) {
+	flag := newCmd.Flags().Lookup("from")
+	if flag == nil {
+		t.Fatal("new command missing --from flag")
+	}
+	if got, want := flag.Usage, "Create a new branch from this start point"; got != want {
+		t.Fatalf("--from usage = %q, want %q", got, want)
+	}
+}
+
+func TestValidateNewFromFlagRequiresBranch(t *testing.T) {
+	if err := validateNewFromFlag("feat/base", ""); err == nil {
+		t.Fatal("validateNewFromFlag() error = nil, want missing branch error")
+	}
+}
+
+func TestValidateNewFromFlagAllowsBranch(t *testing.T) {
+	if err := validateNewFromFlag("feat/base", "agent"); err != nil {
+		t.Fatalf("validateNewFromFlag() error = %v", err)
+	}
+}
+
+func TestCreateWorktreeUsesFromStartPoint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := initNewTestRepo(t)
+	writeNewTestCommit(t, repoPath, "base.txt", "base")
+	runNewTestGit(t, repoPath, "checkout", "-b", "feat/base")
+	writeNewTestCommit(t, repoPath, "feature.txt", "feature")
+	baseHead := newTestGitOutput(t, repoPath, "rev-parse", "HEAD")
+	runNewTestGit(t, repoPath, "checkout", "main")
+
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	st := &state.State{Version: 1}
+	repo := &config.RepoConfig{
+		Name: "mono",
+		Path: repoPath,
+		Type: "worktree",
+	}
+
+	if err := createWorktree(repo, "agent", "feat/base", nil, mgr, st, true, true, newModeCD); err != nil {
+		t.Fatalf("createWorktree() error = %v", err)
+	}
+
+	worktreePath := filepath.Join(repoPath, ".grove", "worktrees", "agent")
+	if got := newTestGitOutput(t, worktreePath, "rev-parse", "HEAD"); got != baseHead {
+		t.Fatalf("worktree HEAD = %s, want %s", got, baseHead)
+	}
+}
+
 func TestCreateWorktreeStoresConfiguredWorkdirAsStartPath(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -55,7 +108,7 @@ func TestCreateWorktreeStoresConfiguredWorkdirAsStartPath(t *testing.T) {
 		Workdir: "packages/app",
 	}
 
-	if err := createWorktree(repo, "agent", nil, mgr, st, true, true, newModeCD); err != nil {
+	if err := createWorktree(repo, "agent", "", nil, mgr, st, true, true, newModeCD); err != nil {
 		t.Fatalf("createWorktree() error = %v", err)
 	}
 

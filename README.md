@@ -38,16 +38,17 @@ gv dd                  # finish the cwd-backed workspace and cd home
 ## Quick Start
 
 ```sh
-# 1. Edit config to add your repos
-grove config
+# 1. Add the current repo to config
+grove init
 
 # 2. Start grove — reconcile sessions and attach to tmux
 grove start
 
 # 3. Create workspaces
-grove new mono feat-auth        # create worktree and print its path
-grove new --tmux mono feat-auth # create worktree and tmux session
-grove new notes                 # plain workspace
+grove new mono feat-auth              # create worktree and print its path
+grove new mono agent --from feat-auth # create new branch from feat-auth
+grove new --tmux mono feat-auth       # create worktree and tmux session
+grove new notes                       # plain workspace
 ```
 
 If you want shell `cd` behavior, use `gv` instead of `grove`.
@@ -87,13 +88,18 @@ repos:
 
 `repos` defines the repositories Grove can create workspaces for. Worktree repos create git worktrees under `<repo>/.grove/worktrees/<name>/`. Plain repos create plain tmux workspaces rooted at home. Dir repos create named workspaces rooted inside a configured directory.
 
+`grove init` appends a worktree repo entry for the current git root. It infers the config name from the directory, infers the default branch from `origin/HEAD`, `main`, `master`, or the current branch, and leaves `setup: []` for you to fill in later.
+
 ## CLI
 
 ```sh
 grove                        # pick an existing workspace and print its path
+grove init                   # add the current git repo to config
+grove init --name mono --default-branch dev
 grove new                    # pick repo or type a workspace name, then print its path
 grove new mono               # pick or auto-generate branch in mono, then print its path
 grove new mono feat-auth     # create specific workspace and print its path
+grove new mono agent --from feat-auth
 grove new --tmux mono feat-auth
 grove cd                     # pick an existing workspace and print its path
 grove cd mono/feat-auth      # print a specific workspace path
