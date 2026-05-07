@@ -1,1 +1,6 @@
 grove
+
+# Local Gas Town runtime state
+.beads/redirect
+.runtime/
+CLAUDE.local.md

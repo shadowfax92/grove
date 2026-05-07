@@ -16,7 +16,7 @@ func init() {
 }
 
 var configCmd = &cobra.Command{
-	Use:     "config",
+	Use:         "config",
 	Aliases:     []string{"cfg"},
 	Annotations: map[string]string{"group": "Setup:"},
 	Short:       "Open grove config in $EDITOR",
@@ -49,4 +49,3 @@ var configCmd = &cobra.Command{
 		return c.Run()
 	},
 }
-
