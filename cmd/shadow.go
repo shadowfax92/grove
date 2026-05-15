@@ -58,6 +58,11 @@ var shadowToggleCmd = &cobra.Command{
 
 		targetSession := shadow.Name(parentPane, typ)
 		if shadow.IsSession(currentSession) {
+			if currentSession == targetSession {
+				if err := shadow.MarkToggled(currentSession); err != nil {
+					return fmt.Errorf("storing shadow toggle timestamp: %w", err)
+				}
+			}
 			if err := tmux.ClosePopup(popupClient); err != nil {
 				return fmt.Errorf("closing popup: %w", err)
 			}
@@ -77,6 +82,9 @@ var shadowToggleCmd = &cobra.Command{
 
 		if err := shadow.Ensure(targetSession, paneCwd, typ, parentPane); err != nil {
 			return err
+		}
+		if err := shadow.MarkToggled(targetSession); err != nil {
+			return fmt.Errorf("storing shadow toggle timestamp: %w", err)
 		}
 		if err := tmux.SetSessionVar(targetSession, "shadow_client_name", popupClient); err != nil {
 			return fmt.Errorf("storing shadow client: %w", err)

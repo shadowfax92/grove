@@ -101,6 +101,115 @@ func TestSelectCleanupCandidatesTreatsMissingMetadataAsOrphan(t *testing.T) {
 	}
 }
 
+func TestListSessionsUsesShadowMetadataWithTmuxFallbacks(t *testing.T) {
+	openedAt := fixtureNow().Add(-72 * time.Hour)
+	toggledAt := fixtureNow().Add(-15 * time.Minute)
+	createdAt := fixtureNow().Add(-96 * time.Hour)
+	activeAt := fixtureNow().Add(-2 * time.Hour)
+
+	restore := stubShadowSessionInventory(t, []shadowSessionFixture{
+		{
+			name:         "gs/sh/1",
+			parentPane:   "%1",
+			parentExists: true,
+			createdAt:    createdAt,
+			lastActiveAt: activeAt,
+			metadata: map[string]string{
+				"shadow_opened_at":       openedAt.Format(time.RFC3339),
+				"shadow_last_toggled_at": toggledAt.Format(time.RFC3339),
+			},
+		},
+		{
+			name:         "gs/vim/2",
+			parentPane:   "%2",
+			parentExists: true,
+			createdAt:    createdAt,
+			lastActiveAt: activeAt,
+		},
+	})
+	defer restore()
+
+	got, err := ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(ListSessions()) = %d, want 2", len(got))
+	}
+	if !got[0].OpenedAt.Equal(openedAt) {
+		t.Fatalf("OpenedAt = %s, want %s", got[0].OpenedAt, openedAt)
+	}
+	if !got[0].LastToggledAt.Equal(toggledAt) {
+		t.Fatalf("LastToggledAt = %s, want %s", got[0].LastToggledAt, toggledAt)
+	}
+	if !got[1].OpenedAt.Equal(createdAt) {
+		t.Fatalf("fallback OpenedAt = %s, want %s", got[1].OpenedAt, createdAt)
+	}
+	if !got[1].LastToggledAt.Equal(activeAt) {
+		t.Fatalf("fallback LastToggledAt = %s, want %s", got[1].LastToggledAt, activeAt)
+	}
+}
+
+func TestMarkToggledPersistsCurrentTimestamp(t *testing.T) {
+	origSet := setSessionVar
+	origNow := now
+	defer func() {
+		setSessionVar = origSet
+		now = origNow
+	}()
+
+	now = fixtureNow
+	var gotSession, gotKey, gotValue string
+	setSessionVar = func(session, key, value string) error {
+		gotSession, gotKey, gotValue = session, key, value
+		return nil
+	}
+
+	if err := MarkToggled("gs/sh/1"); err != nil {
+		t.Fatalf("MarkToggled() error = %v", err)
+	}
+	if gotSession != "gs/sh/1" || gotKey != "shadow_last_toggled_at" {
+		t.Fatalf("SetSessionVar called with (%q, %q), want (gs/sh/1, shadow_last_toggled_at)", gotSession, gotKey)
+	}
+	if gotValue != fixtureNow().Format(time.RFC3339) {
+		t.Fatalf("stored timestamp = %q, want %q", gotValue, fixtureNow().Format(time.RFC3339))
+	}
+}
+
+func TestEnsureStoresOpenedTimestampWhenCreatingSession(t *testing.T) {
+	origExists := sessionExists
+	origNew := newSessionWithCommand
+	origSet := setSessionVar
+	origNow := now
+	defer func() {
+		sessionExists = origExists
+		newSessionWithCommand = origNew
+		setSessionVar = origSet
+		now = origNow
+	}()
+
+	sessionExists = func(name string) bool {
+		return false
+	}
+	newSessionWithCommand = func(name, startDir string, env []string, command string) error {
+		return nil
+	}
+	now = fixtureNow
+
+	values := map[string]string{}
+	setSessionVar = func(session, key, value string) error {
+		values[key] = value
+		return nil
+	}
+
+	if err := Ensure("gs/sh/1", "/tmp/project", "sh", "%1"); err != nil {
+		t.Fatalf("Ensure() error = %v", err)
+	}
+	if got := values["shadow_opened_at"]; got != fixtureNow().Format(time.RFC3339) {
+		t.Fatalf("shadow_opened_at = %q, want %q", got, fixtureNow().Format(time.RFC3339))
+	}
+}
+
 func TestSelectCleanupCandidatesAllModeIncludesEverything(t *testing.T) {
 	restore := stubShadowSessionInventory(t, []shadowSessionFixture{
 		{
@@ -199,6 +308,7 @@ type shadowSessionFixture struct {
 	parentExists bool
 	lastActiveAt time.Time
 	createdAt    time.Time
+	metadata     map[string]string
 }
 
 func fixtureNow() time.Time {
@@ -217,6 +327,7 @@ func stubShadowSessionInventory(t *testing.T, fixtures []shadowSessionFixture) f
 	parents := make(map[string]string, len(fixtures))
 	parentErrs := make(map[string]error, len(fixtures))
 	parentExists := make(map[string]bool, len(fixtures))
+	metadata := make(map[string]map[string]string, len(fixtures))
 
 	for _, fixture := range fixtures {
 		createdAt := fixture.createdAt
@@ -235,19 +346,23 @@ func stubShadowSessionInventory(t *testing.T, fixtures []shadowSessionFixture) f
 		parents[fixture.name] = fixture.parentPane
 		parentErrs[fixture.name] = fixture.parentErr
 		parentExists[fixture.parentPane] = fixture.parentExists
+		metadata[fixture.name] = fixture.metadata
 	}
 
 	listSessionSnapshotsByPrefix = func(prefix string) ([]tmux.SessionSnapshot, error) {
 		return snapshots, nil
 	}
 	getSessionVar = func(session, key string) (string, error) {
-		if key != "shadow_parent_pane" {
-			return "", nil
+		if key == "shadow_parent_pane" {
+			if err := parentErrs[session]; err != nil {
+				return "", err
+			}
+			return parents[session], nil
 		}
-		if err := parentErrs[session]; err != nil {
-			return "", err
+		if values := metadata[session]; values != nil {
+			return values[key], nil
 		}
-		return parents[session], nil
+		return "", nil
 	}
 	paneExists = func(paneID string) bool {
 		return parentExists[paneID]

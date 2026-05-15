@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
 	"grove/internal/git"
 	"grove/internal/shadow"
@@ -19,6 +20,7 @@ import (
 
 func init() {
 	rmCmd.Flags().BoolP("force", "f", false, "Skip confirmation")
+	rmCmd.Flags().Bool("shadow", false, "Pick from shadow sessions only")
 	rootCmd.AddCommand(rmCmd)
 }
 
@@ -32,10 +34,12 @@ var rmCmd = &cobra.Command{
 Handles both grove-managed workspaces and plain tmux sessions.
 
   grove rm                    — pick from all tmux sessions via fzf (Tab to multi-select)
+  grove rm --shadow           — pick from shadow sessions by recent activity
   grove rm <s1> <s2> ...      — remove specific workspaces or tmux sessions`,
 	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		force, _ := cmd.Flags().GetBool("force")
+		shadowOnly, _ := cmd.Flags().GetBool("shadow")
 
 		mgr, err := state.NewManager()
 		if err != nil {
@@ -57,11 +61,18 @@ Handles both grove-managed workspaces and plain tmux sessions.
 
 		var targets []workspaces.RemoveTarget
 		if len(args) == 0 {
-			targets, err = pickRemoveTargetsFzf(inv)
+			if shadowOnly {
+				targets, err = pickShadowRemoveTargetsFzf()
+			} else {
+				targets, err = pickRemoveTargetsFzf(inv)
+			}
 			if err != nil {
 				return err
 			}
 		} else {
+			if shadowOnly {
+				return fmt.Errorf("--shadow cannot be combined with explicit sessions")
+			}
 			targets, err = inv.ResolveRemoveTargets(args)
 			if err != nil {
 				return err
@@ -202,6 +213,135 @@ func pickRemoveTargetsFzf(inv *workspaces.Inventory) ([]workspaces.RemoveTarget,
 	}
 
 	return selected, nil
+}
+
+func pickShadowRemoveTargetsFzf() ([]workspaces.RemoveTarget, error) {
+	sessions, err := shadow.ListSessions()
+	if err != nil {
+		return nil, err
+	}
+	if len(sessions) == 0 {
+		return nil, fmt.Errorf("no shadow sessions to remove")
+	}
+
+	lookup := make(map[string]workspaces.RemoveTarget, len(sessions))
+	input := renderShadowRemovePickerInput(sessions, lookup)
+
+	fzfCmd := exec.Command(
+		"fzf",
+		"--multi",
+		"--prompt", "shadow rm > ",
+		"--header", "Select shadow sessions to remove (Tab to multi-select). Newest toggles are first.",
+		"--height", "100%",
+		"--reverse",
+		"--delimiter", "\t",
+		"--accept-nth", "1",
+		"--with-nth", "2,3,4,5,6,7",
+	)
+	fzfCmd.Stdin = strings.NewReader(input)
+	fzfCmd.Stderr = os.Stderr
+
+	out, err := fzfCmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 130 {
+			return nil, ErrCancelled
+		}
+		return nil, fmt.Errorf("fzf failed: %w (is fzf installed?)", err)
+	}
+
+	var selected []workspaces.RemoveTarget
+	for _, id := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		target, ok := lookup[id]
+		if !ok {
+			continue
+		}
+		selected = append(selected, target)
+	}
+	if len(selected) == 0 {
+		return nil, ErrCancelled
+	}
+	return selected, nil
+}
+
+func sortShadowSessionsForRemoval(sessions []shadow.Session) []shadow.Session {
+	sorted := make([]shadow.Session, len(sessions))
+	copy(sorted, sessions)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if cmp := compareShadowRemovalTime(sorted[i].LastToggledAt, sorted[j].LastToggledAt); cmp != 0 {
+			return cmp > 0
+		}
+		if cmp := compareShadowRemovalTime(sorted[i].LastActiveAt, sorted[j].LastActiveAt); cmp != 0 {
+			return cmp > 0
+		}
+		if cmp := compareShadowRemovalTime(sorted[i].OpenedAt, sorted[j].OpenedAt); cmp != 0 {
+			return cmp > 0
+		}
+		return sorted[i].SessionName < sorted[j].SessionName
+	})
+	return sorted
+}
+
+func compareShadowRemovalTime(left, right time.Time) int {
+	switch {
+	case left.IsZero() && right.IsZero():
+		return 0
+	case left.IsZero():
+		return -1
+	case right.IsZero():
+		return 1
+	case left.After(right):
+		return 1
+	case right.After(left):
+		return -1
+	default:
+		return 0
+	}
+}
+
+func renderShadowRemovePickerInput(sessions []shadow.Session, lookup map[string]workspaces.RemoveTarget) string {
+	sorted := sortShadowSessionsForRemoval(sessions)
+	maxName := 0
+	for _, session := range sorted {
+		if n := len(session.SessionName); n > maxName {
+			maxName = n
+		}
+	}
+
+	var lines []string
+	for _, session := range sorted {
+		lookup[session.SessionName] = workspaces.RemoveTarget{
+			Kind:        workspaces.RemoveUnmanagedSession,
+			SessionName: session.SessionName,
+			Running:     true,
+		}
+		parent := "orphan"
+		if !session.Orphan && session.ParentPane != "" {
+			parent = "parent " + session.ParentPane
+		}
+		lines = append(lines, fmt.Sprintf("%s\t%-*s\t%-5s\t%-12s\topened %s\t%s %s\tactive %s",
+			session.SessionName,
+			maxName,
+			session.SessionName,
+			session.Type,
+			parent,
+			shadowTimeAgo(session.OpenedAt),
+			"toggled",
+			shadowTimeAgo(session.LastToggledAt),
+			shadowTimeAgo(session.LastActiveAt),
+		))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func shadowTimeAgo(ts time.Time) string {
+	if ts.IsZero() {
+		return "unknown"
+	}
+	return state.RelativeTime(ts.UTC().Format(time.RFC3339)) + " ago"
 }
 
 func removePickerTargets(inv *workspaces.Inventory, includeUnmanaged bool) []workspaces.RemoveTarget {
