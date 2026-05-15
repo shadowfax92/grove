@@ -13,5 +13,9 @@ fish:
 	mkdir -p $(FISH_FUNCTIONS)
 	cp gv.fish $(FISH_FUNCTIONS)/gv.fish
 
+uninstall:
+	rm -f $(PREFIX)/grove
+	rm -f $(FISH_FUNCTIONS)/gv.fish
+
 clean:
 	rm -f grove

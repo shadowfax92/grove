@@ -31,6 +31,7 @@ type PaneInfo struct {
 	WindowIndex int
 	WindowName  string
 	PaneIndex   int
+	PID         int
 	Label       string
 	Command     string
 	Path        string
@@ -324,7 +325,7 @@ func ListWindowInfo() ([]WindowInfo, error) {
 }
 
 func ListPaneInfo() ([]PaneInfo, error) {
-	out, err := run("list-panes", "-a", "-F", "#{session_name}:#{window_index}.#{pane_index}\t#{session_name}\t#{window_index}\t#{window_name}\t#{pane_index}\t#{@pane_label}\t#{pane_current_command}\t#{pane_current_path}")
+	out, err := run("list-panes", "-a", "-F", "#{session_name}:#{window_index}.#{pane_index}\t#{session_name}\t#{window_index}\t#{window_name}\t#{pane_index}\t#{pane_pid}\t#{@pane_label}\t#{pane_current_command}\t#{pane_current_path}")
 	if err != nil {
 		if strings.Contains(err.Error(), "no server running") || strings.Contains(err.Error(), "no sessions") {
 			return nil, nil
@@ -336,21 +337,23 @@ func ListPaneInfo() ([]PaneInfo, error) {
 	}
 	var panes []PaneInfo
 	for _, line := range strings.Split(out, "\n") {
-		parts := strings.SplitN(line, "\t", 8)
-		if len(parts) < 8 {
+		parts := strings.SplitN(line, "\t", 9)
+		if len(parts) < 9 {
 			continue
 		}
 		winIdx, _ := strconv.Atoi(parts[2])
 		paneIdx, _ := strconv.Atoi(parts[4])
+		pid, _ := strconv.Atoi(parts[5])
 		panes = append(panes, PaneInfo{
 			Target:      parts[0],
 			Session:     parts[1],
 			WindowIndex: winIdx,
 			WindowName:  parts[3],
 			PaneIndex:   paneIdx,
-			Label:       parts[5],
-			Command:     parts[6],
-			Path:        parts[7],
+			PID:         pid,
+			Label:       parts[6],
+			Command:     parts[7],
+			Path:        parts[8],
 		})
 	}
 	return panes, nil

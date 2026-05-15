@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"grove/internal/shadow"
 	"grove/internal/state"
@@ -121,5 +123,78 @@ func TestShouldExpandRemovePickerOnlyForShadowQuery(t *testing.T) {
 	}
 	if !shouldExpandRemovePicker("gs/") {
 		t.Fatal("shouldExpandRemovePicker(\"gs/\") = false, want true")
+	}
+}
+
+func TestShadowRemovePickerSortsByRecentToggleThenActivity(t *testing.T) {
+	base := time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
+	sessions := []shadow.Session{
+		{
+			SessionName:   "gs/sh/old-toggle",
+			Type:          "sh",
+			OpenedAt:      base.Add(-72 * time.Hour),
+			LastToggledAt: base.Add(-6 * time.Hour),
+			LastActiveAt:  base.Add(-10 * time.Minute),
+		},
+		{
+			SessionName:   "gs/vim/new-toggle",
+			Type:          "vim",
+			OpenedAt:      base.Add(-48 * time.Hour),
+			LastToggledAt: base.Add(-5 * time.Minute),
+			LastActiveAt:  base.Add(-2 * time.Hour),
+		},
+		{
+			SessionName:  "gs/sh/activity-only",
+			Type:         "sh",
+			OpenedAt:     base.Add(-24 * time.Hour),
+			LastActiveAt: base.Add(-1 * time.Minute),
+		},
+	}
+
+	got := sortShadowSessionsForRemoval(sessions)
+
+	if got[0].SessionName != "gs/vim/new-toggle" {
+		t.Fatalf("first sorted session = %q, want newest toggle", got[0].SessionName)
+	}
+	if got[1].SessionName != "gs/sh/old-toggle" {
+		t.Fatalf("second sorted session = %q, want older toggle before activity fallback", got[1].SessionName)
+	}
+}
+
+func TestRenderShadowRemovePickerInputIncludesMetadataColumns(t *testing.T) {
+	base := time.Now().UTC()
+	lookup := map[string]workspaces.RemoveTarget{}
+
+	out := renderShadowRemovePickerInput([]shadow.Session{{
+		SessionName:   "gs/sh/101",
+		Type:          "sh",
+		ParentPane:    "%101",
+		OpenedAt:      base.Add(-48 * time.Hour),
+		LastToggledAt: base.Add(-2 * time.Hour),
+		LastActiveAt:  base.Add(-30 * time.Minute),
+		Orphan:        false,
+	}}, lookup)
+
+	fields := strings.Split(out, "\t")
+	if len(fields) != 7 {
+		t.Fatalf("rendered shadow picker row field count = %d, want 7: %q", len(fields), out)
+	}
+	wantFields := []string{"gs/sh/101", "gs/sh/101", "sh", "parent %101"}
+	for i, want := range wantFields {
+		if strings.TrimSpace(fields[i]) != want {
+			t.Fatalf("field %d = %q, want %q in row %q", i, fields[i], want, out)
+		}
+	}
+	for i, wantPrefix := range map[int]string{4: "opened ", 5: "toggled ", 6: "active "} {
+		if !strings.HasPrefix(fields[i], wantPrefix) {
+			t.Fatalf("field %d = %q, want prefix %q in row %q", i, fields[i], wantPrefix, out)
+		}
+	}
+	target, ok := lookup["gs/sh/101"]
+	if !ok {
+		t.Fatal("lookup missing rendered shadow target")
+	}
+	if target.Kind != workspaces.RemoveUnmanagedSession || target.SessionName != "gs/sh/101" {
+		t.Fatalf("lookup target = %#v, want unmanaged shadow session", target)
 	}
 }

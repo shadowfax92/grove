@@ -65,7 +65,7 @@ Only works when the current session is a gs/ shadow session.`,
 		}
 
 		// Strip shadow metadata
-		for _, key := range []string{"shadow_cwd", "shadow_parent_pane", "shadow_env_version"} {
+		for _, key := range []string{"shadow_cwd", "shadow_parent_pane", "shadow_env_version", "shadow_opened_at", "shadow_last_toggled_at"} {
 			_ = tmux.UnsetSessionVar(name, key)
 		}
 

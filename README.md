@@ -8,6 +8,7 @@ Grove manages repo worktrees, plain workspaces, and tmux sessions, but the defau
 - `grove new` creates a workspace and prints its path
 - `grove new --tmux` creates the workspace and a tmux session
 - `grove rm` starts with Grove-managed workspaces and lets `gs/` searches reach shadow sessions
+- `grove rm --shadow` opens a shadow-session-only cleanup picker sorted by recent toggle/activity
 
 ## Install
 
@@ -106,7 +107,10 @@ grove cd mono/feat-auth      # print a specific workspace path
 grove done --tmux            # finish current tmux workspace and switch to the next one
 grove done --cd              # finish cwd-backed workspace and print home
 grove rm                     # interactive remove picker
+grove rm --shadow            # interactive shadow-session cleanup picker
 grove rm mono/feat-auth      # remove specific workspace
+grove resources              # show tmux window CPU and memory usage
+grove resources --cleanup    # pick expensive tmux windows via fzf and kill them
 grove shadow cleanup         # remove orphaned shadow sessions
 grove shadow clean --inactive 1d
 grove list                   # show all Grove workspaces and status
@@ -133,9 +137,17 @@ grove notify clear           # clear notifications interactively
 
 `grove rm` starts by showing Grove-managed workspaces only. When you begin filtering with `gs/`, the picker expands so shadow sessions are removable without cluttering the blank-state list.
 
+Use `grove rm --shadow` when you specifically want to clean up old shadow sessions. It lists only `gs/...` sessions, sorted by the last Grove toggle timestamp with tmux activity and session creation as fallbacks for older sessions. The picker shows opened, toggled, and active ages so stale shadows are easy to identify.
+
 ### Shadow Cleanup
 
 `grove shadow cleanup` removes orphaned `gs/...` sessions by default. Use `--dry-run` to preview matches, `--inactive 1h` or `--inactive 1d` to clean old shadow sessions by tmux activity, or `--all` to clear every shadow session.
+
+### Resource Cleanup
+
+`grove resources` lists tmux windows, including `gs/...` shadow sessions, sorted by aggregate resident memory and then CPU. Each row accounts for the current descendant process tree under every pane root PID in that window, which covers normal pane-launched servers, test runners, editors, and shells.
+
+Use `grove resources --cleanup` to open an fzf picker ordered by the same usage data. Selected rows are killed with `tmux kill-window`; killing the only window in a shadow session removes that shadow session.
 
 ## Notifications
 
