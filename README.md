@@ -101,6 +101,8 @@ grove done --tmux            # finish current tmux workspace and switch to the n
 grove done --cd              # finish cwd-backed workspace and print home
 grove rm                     # interactive remove picker
 grove rm mono/feat-auth      # remove specific workspace
+grove resources              # show tmux window CPU and memory usage
+grove resources --cleanup    # pick expensive tmux windows via fzf and kill them
 grove shadow cleanup         # remove orphaned shadow sessions
 grove shadow clean --inactive 1d
 grove list                   # show all Grove workspaces and status
@@ -130,6 +132,12 @@ grove notify clear           # clear notifications interactively
 ### Shadow Cleanup
 
 `grove shadow cleanup` removes orphaned `gs/...` sessions by default. Use `--dry-run` to preview matches, `--inactive 1h` or `--inactive 1d` to clean old shadow sessions by tmux activity, or `--all` to clear every shadow session.
+
+### Resource Cleanup
+
+`grove resources` lists tmux windows, including `gs/...` shadow sessions, sorted by aggregate resident memory and then CPU. Each row accounts for the current descendant process tree under every pane root PID in that window, which covers normal pane-launched servers, test runners, editors, and shells.
+
+Use `grove resources --cleanup` to open an fzf picker ordered by the same usage data. Selected rows are killed with `tmux kill-window`; killing the only window in a shadow session removes that shadow session.
 
 ## Notifications
 
