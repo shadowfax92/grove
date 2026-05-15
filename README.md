@@ -8,6 +8,7 @@ Grove manages repo worktrees, plain workspaces, and tmux sessions, but the defau
 - `grove new` creates a workspace and prints its path
 - `grove new --tmux` creates the workspace and a tmux session
 - `grove rm` starts with Grove-managed workspaces and lets `gs/` searches reach shadow sessions
+- `grove rm --shadow` opens a shadow-session-only cleanup picker sorted by recent toggle/activity
 
 ## Install
 
@@ -100,6 +101,7 @@ grove cd mono/feat-auth      # print a specific workspace path
 grove done --tmux            # finish current tmux workspace and switch to the next one
 grove done --cd              # finish cwd-backed workspace and print home
 grove rm                     # interactive remove picker
+grove rm --shadow            # interactive shadow-session cleanup picker
 grove rm mono/feat-auth      # remove specific workspace
 grove resources              # show tmux window CPU and memory usage
 grove resources --cleanup    # pick expensive tmux windows via fzf and kill them
@@ -128,6 +130,8 @@ grove notify clear           # clear notifications interactively
 ### Remove Picker
 
 `grove rm` starts by showing Grove-managed workspaces only. When you begin filtering with `gs/`, the picker expands so shadow sessions are removable without cluttering the blank-state list.
+
+Use `grove rm --shadow` when you specifically want to clean up old shadow sessions. It lists only `gs/...` sessions, sorted by the last Grove toggle timestamp with tmux activity and session creation as fallbacks for older sessions. The picker shows opened, toggled, and active ages so stale shadows are easy to identify.
 
 ### Shadow Cleanup
 

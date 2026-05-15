@@ -4,3 +4,4 @@ grove
 .beads/redirect
 .runtime/
 CLAUDE.local.md
+.llm/

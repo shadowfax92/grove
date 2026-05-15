@@ -12,6 +12,11 @@ import (
 const Prefix = "gs"
 const EnvVersion = "1"
 
+const (
+	openedAtKey      = "shadow_opened_at"
+	lastToggledAtKey = "shadow_last_toggled_at"
+)
+
 type CleanupOptions struct {
 	InactiveOlderThan time.Duration
 	RemoveAll         bool
@@ -27,12 +32,13 @@ const (
 )
 
 type CleanupCandidate struct {
-	SessionName  string
-	Type         string
-	ParentPane   string
-	CreatedAt    time.Time
-	LastActiveAt time.Time
-	Reason       CleanupReason
+	SessionName   string
+	Type          string
+	ParentPane    string
+	CreatedAt     time.Time
+	LastToggledAt time.Time
+	LastActiveAt  time.Time
+	Reason        CleanupReason
 }
 
 type CleanupFailure struct {
@@ -47,21 +53,36 @@ type CleanupReport struct {
 }
 
 type shadowSessionState struct {
-	name         string
-	typ          string
-	parentPane   string
-	createdAt    time.Time
-	lastActiveAt time.Time
-	orphan       bool
+	name          string
+	typ           string
+	parentPane    string
+	openedAt      time.Time
+	lastToggledAt time.Time
+	lastActiveAt  time.Time
+	orphan        bool
 }
 
 var (
 	listSessionSnapshotsByPrefix = tmux.ListSessionSnapshotsByPrefix
 	getSessionVar                = tmux.GetSessionVar
+	setSessionVar                = tmux.SetSessionVar
+	sessionExists                = tmux.SessionExists
+	newSessionWithCommand        = tmux.NewSessionWithCommand
 	paneExists                   = tmux.PaneExists
 	killSession                  = defaultKillSession
 	now                          = time.Now
 )
+
+// Session describes a live Grove shadow session with cleanup-oriented metadata.
+type Session struct {
+	SessionName   string
+	Type          string
+	ParentPane    string
+	OpenedAt      time.Time
+	LastToggledAt time.Time
+	LastActiveAt  time.Time
+	Orphan        bool
+}
 
 func Name(paneID, typ string) string {
 	id := strings.TrimPrefix(paneID, "%")
@@ -120,13 +141,13 @@ func PopupClient(currentSession, fallback string) (string, error) {
 // If the session exists but its cwd doesn't match paneCwd, it is
 // killed and recreated so the shadow always follows the pane's project.
 func Ensure(sessionName, paneCwd, typ, paneID string) error {
-	if tmux.SessionExists(sessionName) {
-		storedCwd, _ := tmux.GetSessionVar(sessionName, "shadow_cwd")
-		envVersion, _ := tmux.GetSessionVar(sessionName, "shadow_env_version")
+	if sessionExists(sessionName) {
+		storedCwd, _ := getSessionVar(sessionName, "shadow_cwd")
+		envVersion, _ := getSessionVar(sessionName, "shadow_env_version")
 		if storedCwd == paneCwd && envVersion == EnvVersion {
 			return nil
 		}
-		tmux.KillSession(sessionName)
+		killSession(sessionName)
 	}
 
 	env := []string{
@@ -140,25 +161,58 @@ func Ensure(sessionName, paneCwd, typ, paneID string) error {
 		command = "nvim"
 	}
 
-	if err := tmux.NewSessionWithCommand(sessionName, paneCwd, env, command); err != nil {
+	if err := newSessionWithCommand(sessionName, paneCwd, env, command); err != nil {
 		return fmt.Errorf("creating shadow session: %w", err)
 	}
-	if err := tmux.SetSessionVar(sessionName, "shadow_cwd", paneCwd); err != nil {
+	openedAt := now().UTC().Format(time.RFC3339)
+	if err := setSessionVar(sessionName, "shadow_cwd", paneCwd); err != nil {
 		return fmt.Errorf("storing shadow cwd: %w", err)
 	}
-	if err := tmux.SetSessionVar(sessionName, "shadow_parent_pane", paneID); err != nil {
+	if err := setSessionVar(sessionName, "shadow_parent_pane", paneID); err != nil {
 		return fmt.Errorf("storing shadow parent pane: %w", err)
 	}
-	if err := tmux.SetSessionVar(sessionName, "shadow_env_version", EnvVersion); err != nil {
+	if err := setSessionVar(sessionName, "shadow_env_version", EnvVersion); err != nil {
 		return fmt.Errorf("storing shadow env version: %w", err)
 	}
+	if err := setSessionVar(sessionName, openedAtKey, openedAt); err != nil {
+		return fmt.Errorf("storing shadow opened timestamp: %w", err)
+	}
 	return nil
+}
+
+// MarkToggled records the latest explicit user interaction with a shadow session.
+// It complements tmux activity so stale shadows can be sorted by Grove intent.
+func MarkToggled(sessionName string) error {
+	return setSessionVar(sessionName, lastToggledAtKey, now().UTC().Format(time.RFC3339))
 }
 
 // CleanupOrphans kills shadow sessions whose parent pane no longer exists.
 func CleanupOrphans() error {
 	_, err := Cleanup(CleanupOptions{})
 	return err
+}
+
+// ListSessions returns all Grove shadow sessions with Grove metadata and tmux fallbacks.
+// Older sessions without Grove timestamps use tmux created/activity times.
+func ListSessions() ([]Session, error) {
+	states, err := listShadowSessions()
+	if err != nil {
+		return nil, err
+	}
+
+	sessions := make([]Session, 0, len(states))
+	for _, state := range states {
+		sessions = append(sessions, Session{
+			SessionName:   state.name,
+			Type:          state.typ,
+			ParentPane:    state.parentPane,
+			OpenedAt:      state.openedAt,
+			LastToggledAt: state.lastToggledAt,
+			LastActiveAt:  state.lastActiveAt,
+			Orphan:        state.orphan,
+		})
+	}
+	return sessions, nil
 }
 
 func SelectCleanupCandidates(opts CleanupOptions) ([]CleanupCandidate, error) {
@@ -216,10 +270,11 @@ func listShadowSessions() ([]shadowSessionState, error) {
 	sessions := make([]shadowSessionState, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		session := shadowSessionState{
-			name:         snapshot.Name,
-			typ:          sessionType(snapshot.Name),
-			createdAt:    snapshot.Created,
-			lastActiveAt: snapshot.Activity,
+			name:          snapshot.Name,
+			typ:           sessionType(snapshot.Name),
+			openedAt:      sessionMetadataTime(snapshot.Name, openedAtKey, snapshot.Created),
+			lastToggledAt: sessionMetadataTime(snapshot.Name, lastToggledAtKey, snapshot.Activity),
+			lastActiveAt:  snapshot.Activity,
 		}
 
 		parentPane, err := getSessionVar(snapshot.Name, "shadow_parent_pane")
@@ -243,14 +298,27 @@ func sessionType(name string) string {
 	return parts[1]
 }
 
+func sessionMetadataTime(sessionName, key string, fallback time.Time) time.Time {
+	raw, err := getSessionVar(sessionName, key)
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return fallback
+	}
+	ts, err := time.Parse(time.RFC3339, strings.TrimSpace(raw))
+	if err != nil {
+		return fallback
+	}
+	return ts.UTC()
+}
+
 func (s shadowSessionState) candidate(reason CleanupReason) CleanupCandidate {
 	return CleanupCandidate{
-		SessionName:  s.name,
-		Type:         s.typ,
-		ParentPane:   s.parentPane,
-		CreatedAt:    s.createdAt,
-		LastActiveAt: s.lastActiveAt,
-		Reason:       reason,
+		SessionName:   s.name,
+		Type:          s.typ,
+		ParentPane:    s.parentPane,
+		CreatedAt:     s.openedAt,
+		LastToggledAt: s.lastToggledAt,
+		LastActiveAt:  s.lastActiveAt,
+		Reason:        reason,
 	}
 }
 
