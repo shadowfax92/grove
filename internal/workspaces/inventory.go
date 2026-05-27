@@ -2,7 +2,6 @@ package workspaces
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -13,8 +12,7 @@ import (
 )
 
 type ManagedEntry struct {
-	Workspace    state.Workspace
-	ExistsOnDisk bool
+	Workspace state.Workspace
 }
 
 type OrphanWorktree struct {
@@ -60,10 +58,7 @@ func Build(st *state.State, cfg *config.Config) (*Inventory, error) {
 
 	for _, ws := range st.Workspaces {
 		idx := len(inv.Managed)
-		inv.Managed = append(inv.Managed, ManagedEntry{
-			Workspace:    ws,
-			ExistsOnDisk: workspaceExists(ws),
-		})
+		inv.Managed = append(inv.Managed, ManagedEntry{Workspace: ws})
 		inv.managedBySession[ws.SessionName] = idx
 		if _, ok := inv.managedByName[ws.Name]; !ok {
 			inv.managedByName[ws.Name] = idx
@@ -234,20 +229,4 @@ func buildOrphans(st *state.State, cfg *config.Config) ([]OrphanWorktree, error)
 		return orphans[i].RepoName < orphans[j].RepoName
 	})
 	return orphans, nil
-}
-
-func workspaceExists(ws state.Workspace) bool {
-	path := workspacePath(ws)
-	if path == "" {
-		return false
-	}
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-func workspacePath(ws state.Workspace) string {
-	if ws.Type == "worktree" && ws.WorktreePath != "" {
-		return ws.WorktreePath
-	}
-	return ws.Path
 }
