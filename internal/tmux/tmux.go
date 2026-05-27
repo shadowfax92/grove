@@ -162,7 +162,17 @@ func ListSessionInfo() ([]SessionInfo, error) {
 	return sessions, nil
 }
 
+// PaneID returns the unique id of the pane this grove process runs in.
+//
+// It prefers $TMUX_PANE — tmux sets this per-process at spawn time and it
+// never changes when focus moves. `display-message` without a target instead
+// resolves to the client's *active* pane, so a background agent triggering a
+// rename after the user switched panes would label the wrong one. Fall back to
+// display-message only when the env var is missing (e.g. invoked via a hook).
 func PaneID() (string, error) {
+	if p := os.Getenv("TMUX_PANE"); p != "" {
+		return p, nil
+	}
 	return run("display-message", "-p", "#{pane_id}")
 }
 
@@ -204,12 +214,22 @@ func KillWindow(target string) error {
 }
 
 func RenameCurrentWindow(name string) error {
-	_, err := run("rename-window", name)
+	target, err := PaneID()
+	if err != nil {
+		return err
+	}
+	// Target the calling pane's window (tmux resolves a pane id to its window)
+	// rather than the client's active window, which may have moved.
+	_, err = run("rename-window", "-t", target, name)
 	return err
 }
 
 func DisableCurrentWindowAutoRename() error {
-	_, err := run("set-option", "-w", "automatic-rename", "off")
+	target, err := PaneID()
+	if err != nil {
+		return err
+	}
+	_, err = run("set-option", "-w", "-t", target, "automatic-rename", "off")
 	return err
 }
 
