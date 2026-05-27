@@ -15,7 +15,6 @@ var (
 	clrCyan    = lipgloss.Color("6")
 	clrHiGreen = lipgloss.Color("10")
 	clrYellow  = lipgloss.Color("11")
-	clrGreen   = lipgloss.Color("2")
 )
 
 func init() {
@@ -68,31 +67,21 @@ var listCmd = &cobra.Command{
 				name = branchStyle.Render(row.label)
 			}
 
-			status := ""
 			lastUsed := ""
 			if ok {
 				workspace := entry.Workspace
-				if entry.Running {
-					status = lipgloss.NewStyle().Foreground(clrGreen).Bold(true).Render("running")
-				} else {
-					status = dim.Render("stopped")
-				}
-
 				lastUsed = dim.Render("—")
 				if workspace.LastUsedAt != "" {
 					lastUsed = dim.Render(state.RelativeTime(workspace.LastUsedAt) + " ago")
 				}
-				if len(workspace.Notifications) > 0 {
-					lastUsed += " " + lipgloss.NewStyle().Foreground(clrYellow).Bold(true).Render("★")
-				}
 			}
 
-			rows = append(rows, []string{name, status, lastUsed})
+			rows = append(rows, []string{name, lastUsed})
 		}
 
 		t := table.New().
 			Border(lipgloss.HiddenBorder()).
-			Headers("SESSION", "STATUS", "LAST USED").
+			Headers("SESSION", "LAST USED").
 			Rows(rows...).
 			StyleFunc(func(row, col int) lipgloss.Style {
 				s := lipgloss.NewStyle().PaddingRight(2)

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,51 +11,34 @@ import (
 	"grove/internal/git"
 	"grove/internal/names"
 	"grove/internal/state"
-	"grove/internal/tmux"
 
 	"github.com/spf13/cobra"
 )
 
 func init() {
-	newCmd.Flags().Bool("no-switch", false, "With --tmux, create the session without switching to it")
 	newCmd.Flags().Bool("no-prepare", false, "Skip prepare commands before worktree creation")
-	newCmd.Flags().Bool("cd", false, "Create workspace and print its path (default)")
-	newCmd.Flags().Bool("tmux", false, "Create a tmux session for the workspace")
+	newCmd.Flags().Bool("cd", false, "Deprecated: retained for compatibility (new always prints the path)")
+	_ = newCmd.Flags().MarkHidden("cd")
 	newCmd.Flags().String("from", "", "Create a new branch from this start point")
 	rootCmd.AddCommand(newCmd)
 }
-
-type newMode int
-
-const (
-	newModeCD newMode = iota
-	newModeTmux
-)
 
 var newCmd = &cobra.Command{
 	Use:         "new [name] [branch]",
 	Aliases:     []string{"n"},
 	Annotations: map[string]string{"group": "Workspaces:"},
-	Short:       "Create a new workspace",
-	Long: `Create a new workspace.
+	Short:       "Create a new workspace and print its path",
+	Long: `Create a new workspace and print its path.
 
   grove new                 — pick repo or type session name via fzf, then print the path
   grove new <repo>          — pick or auto-generate branch in repo, then print the path
   grove new <repo> <br>     — create a specific workspace and print the path
   grove new <repo> <br> --from <base>
                             — create a specific workspace branch from base
-  grove new <name>          — plain workspace (if name doesn't match a repo)
-  grove new --tmux mono br  — create the workspace and a tmux session`,
+  grove new <name>          — plain workspace (if name doesn't match a repo)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		noSwitch, _ := cmd.Flags().GetBool("no-switch")
 		noPrepare, _ := cmd.Flags().GetBool("no-prepare")
-		cdMode, _ := cmd.Flags().GetBool("cd")
-		tmuxMode, _ := cmd.Flags().GetBool("tmux")
 		from, _ := cmd.Flags().GetString("from")
-		mode, err := resolveNewMode(cdMode, tmuxMode)
-		if err != nil {
-			return err
-		}
 
 		cfg, err := config.Load()
 		if err != nil {
@@ -102,25 +84,15 @@ var newCmd = &cobra.Command{
 		}
 		if repo != nil {
 			if repo.Type == "plain" {
-				return createPlainRepo(repo, branch, mgr, st, noSwitch, mode)
+				return createPlainRepo(repo, branch, mgr, st)
 			}
 			if repo.Type == "dir" {
-				return createDirWorkspace(repo, branch, mgr, st, noSwitch, mode)
+				return createDirWorkspace(repo, branch, mgr, st)
 			}
-			return createWorktree(repo, branch, from, cfg, mgr, st, noSwitch, noPrepare, mode)
+			return createWorktree(repo, branch, from, mgr, st, noPrepare)
 		}
-		return createPlain(name, mgr, st, noSwitch, mode)
+		return createPlain(name, mgr, st)
 	},
-}
-
-func resolveNewMode(cdMode, tmuxMode bool) (newMode, error) {
-	if cdMode && tmuxMode {
-		return newModeCD, fmt.Errorf("choose at most one mode: --cd or --tmux")
-	}
-	if tmuxMode {
-		return newModeTmux, nil
-	}
-	return newModeCD, nil
 }
 
 func validateNewFromFlag(from, branch string) error {
@@ -130,43 +102,28 @@ func validateNewFromFlag(from, branch string) error {
 	return nil
 }
 
-func createPlain(name string, mgr *state.StateManager, st *state.State, noSwitch bool, mode newMode) error {
+func createPlain(name string, mgr *state.StateManager, st *state.State) error {
 	sessionName := fmt.Sprintf("g/%s", name)
 	if mgr.FindBySession(st, sessionName) != nil {
 		return fmt.Errorf("workspace %q already exists", name)
 	}
 
 	dir, _ := os.UserHomeDir()
-
-	ws := state.Workspace{
+	mgr.AddWorkspace(st, state.Workspace{
 		Name:        name,
 		Type:        "plain",
 		Path:        dir,
 		SessionName: sessionName,
-	}
-	mgr.AddWorkspace(st, ws)
+	})
 	if err := mgr.Save(st); err != nil {
 		return err
 	}
 
-	if mode == newModeCD {
-		finishDirOnlyWorkspace(dir, ws)
-		return nil
-	}
-
-	if err := tmux.NewSession(sessionName, dir); err != nil {
-		return fmt.Errorf("creating session: %w", err)
-	}
-
-	fmt.Printf("Created workspace %q\n", name)
-
-	if !noSwitch && tmux.IsInsideTmux() {
-		return tmux.SwitchClient(sessionName)
-	}
+	fmt.Println(dir)
 	return nil
 }
 
-func createWorktree(repo *config.RepoConfig, branch, from string, _ *config.Config, mgr *state.StateManager, st *state.State, noSwitch, noPrepare bool, mode newMode) error {
+func createWorktree(repo *config.RepoConfig, branch, from string, mgr *state.StateManager, st *state.State, noPrepare bool) error {
 	if branch == "" {
 		existing := existingWorktreeNames(st, repo.Name)
 
@@ -204,12 +161,11 @@ func createWorktree(repo *config.RepoConfig, branch, from string, _ *config.Conf
 	worktreePath := filepath.Join(repo.Path, ".grove", "worktrees", branch)
 
 	if !noPrepare {
-		statusOut, childOut := commandWriters(mode == newModeCD)
 		for _, prepCmd := range repo.Prepare {
-			fmt.Fprintf(statusOut, "Preparing: %s\n", prepCmd)
+			fmt.Fprintf(os.Stderr, "Preparing: %s\n", prepCmd)
 			c := exec.Command("sh", "-c", prepCmd)
 			c.Dir = repo.Path
-			c.Stdout = childOut
+			c.Stdout = os.Stderr
 			c.Stderr = os.Stderr
 			if err := c.Run(); err != nil {
 				return fmt.Errorf("prepare command %q failed: %w", prepCmd, err)
@@ -227,12 +183,11 @@ func createWorktree(repo *config.RepoConfig, branch, from string, _ *config.Conf
 
 	setupDir := pathWithWorkdir(worktreePath, repo.Workdir)
 
-	statusOut, childOut := commandWriters(mode == newModeCD)
 	for _, setupCmd := range repo.Setup {
-		fmt.Fprintf(statusOut, "Running: %s\n", setupCmd)
+		fmt.Fprintf(os.Stderr, "Running: %s\n", setupCmd)
 		c := exec.Command("sh", "-c", setupCmd)
 		c.Dir = setupDir
-		c.Stdout = childOut
+		c.Stdout = os.Stderr
 		c.Stderr = os.Stderr
 		if err := c.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: setup command failed: %v\n", err)
@@ -256,24 +211,11 @@ func createWorktree(repo *config.RepoConfig, branch, from string, _ *config.Conf
 		return err
 	}
 
-	if mode == newModeCD {
-		finishDirOnlyWorkspace(setupDir, ws)
-		return nil
-	}
-
-	if err := tmux.CreateSessionWithLayout(sessionName, setupDir, repo.Layout); err != nil {
-		return fmt.Errorf("creating session: %w", err)
-	}
-
-	fmt.Printf("Created worktree workspace %s/%s\n", repo.Name, branch)
-
-	if !noSwitch && tmux.IsInsideTmux() {
-		return tmux.SwitchClient(sessionName)
-	}
+	fmt.Println(setupDir)
 	return nil
 }
 
-func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State, noSwitch bool, mode newMode) error {
+func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State) error {
 	if name == "" {
 		existing := existingDirNames(st, repo.Name)
 		prompted, _, err := promptNameFzf("name > ", "Type a name or enter for random", nil)
@@ -297,37 +239,23 @@ func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateMa
 		startDir = filepath.Join(repo.Path, repo.Workdir)
 	}
 
-	ws := state.Workspace{
+	mgr.AddWorkspace(st, state.Workspace{
 		Name:        fmt.Sprintf("%s/%s", repo.Name, name),
 		Type:        "dir",
 		Repo:        repo.Name,
 		RepoPath:    repo.Path,
 		Path:        startDir,
 		SessionName: sessionName,
-	}
-	mgr.AddWorkspace(st, ws)
+	})
 	if err := mgr.Save(st); err != nil {
 		return err
 	}
 
-	if mode == newModeCD {
-		finishDirOnlyWorkspace(startDir, ws)
-		return nil
-	}
-
-	if err := tmux.CreateSessionWithLayout(sessionName, startDir, repo.Layout); err != nil {
-		return fmt.Errorf("creating session: %w", err)
-	}
-
-	fmt.Printf("Created dir workspace %s/%s\n", repo.Name, name)
-
-	if !noSwitch && tmux.IsInsideTmux() {
-		return tmux.SwitchClient(sessionName)
-	}
+	fmt.Println(startDir)
 	return nil
 }
 
-func createPlainRepo(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State, noSwitch bool, mode newMode) error {
+func createPlainRepo(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State) error {
 	if name == "" {
 		existing := existingDirNames(st, repo.Name)
 		prompted, _, err := promptNameFzf("name > ", "Type a name or enter for random", nil)
@@ -347,33 +275,18 @@ func createPlainRepo(repo *config.RepoConfig, name string, mgr *state.StateManag
 	}
 
 	home, _ := os.UserHomeDir()
-
-	ws := state.Workspace{
+	mgr.AddWorkspace(st, state.Workspace{
 		Name:        fmt.Sprintf("%s/%s", repo.Name, name),
 		Type:        "plain",
 		Repo:        repo.Name,
 		Path:        home,
 		SessionName: sessionName,
-	}
-	mgr.AddWorkspace(st, ws)
+	})
 	if err := mgr.Save(st); err != nil {
 		return err
 	}
 
-	if mode == newModeCD {
-		finishDirOnlyWorkspace(home, ws)
-		return nil
-	}
-
-	if err := tmux.NewSession(sessionName, home); err != nil {
-		return fmt.Errorf("creating session: %w", err)
-	}
-
-	fmt.Printf("Created plain workspace %s/%s\n", repo.Name, name)
-
-	if !noSwitch && tmux.IsInsideTmux() {
-		return tmux.SwitchClient(sessionName)
-	}
+	fmt.Println(home)
 	return nil
 }
 
@@ -472,29 +385,4 @@ func existingWorktreeNames(st *state.State, repoName string) []string {
 		}
 	}
 	return result
-}
-
-func commandWriters(dirOnly bool) (io.Writer, io.Writer) {
-	if dirOnly {
-		return os.Stderr, os.Stderr
-	}
-	return os.Stdout, os.Stdout
-}
-
-func finishDirOnlyWorkspace(path string, ws state.Workspace) {
-	fmt.Println(path)
-	maybeSetCurrentPaneLabel(&ws)
-}
-
-func maybeSetCurrentPaneLabel(ws *state.Workspace) {
-	if !tmux.IsInsideTmux() {
-		return
-	}
-	label := workspacePaneLabel(ws)
-	if label == "" {
-		return
-	}
-	if err := tmux.SetCurrentPaneLabel(label); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not set pane label: %v\n", err)
-	}
 }

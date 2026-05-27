@@ -11,7 +11,6 @@ import (
 	"grove/internal/config"
 	"grove/internal/git"
 	"grove/internal/state"
-	"grove/internal/tmux"
 	"grove/internal/workspaces"
 
 	"github.com/spf13/cobra"
@@ -19,22 +18,18 @@ import (
 
 func init() {
 	cleanupCmd.Flags().BoolP("force", "f", false, "Skip confirmation")
-	cleanupCmd.Flags().Bool("all", false, "Clean all stale workspaces without fzf selection")
+	cleanupCmd.Flags().Bool("all", false, "Remove all orphaned worktrees without fzf selection")
 	rootCmd.AddCommand(cleanupCmd)
 }
 
 var cleanupCmd = &cobra.Command{
 	Use:         "cleanup",
 	Annotations: map[string]string{"group": "Workspaces:"},
-	Short:       "Remove stale workspaces and orphaned worktrees",
-	Long: `Find and remove workspaces without running tmux sessions and orphaned worktrees.
-
-Targets:
-  • Workspaces in state with no running tmux session (e.g., created via --cd)
-  • Orphaned worktrees on disk not tracked in state
+	Short:       "Remove orphaned worktrees not tracked by grove",
+	Long: `Find and remove worktrees on disk under .grove/worktrees that grove no longer tracks in state.
 
   grove cleanup         — pick via fzf (Tab to multi-select)
-  grove cleanup --all   — select all stale workspaces
+  grove cleanup --all   — select all orphaned worktrees
   grove cleanup -f      — skip confirmation`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		force, _ := cmd.Flags().GetBool("force")
@@ -44,16 +39,10 @@ Targets:
 		if err != nil {
 			return err
 		}
-
 		mgr, err := state.NewManager()
 		if err != nil {
 			return err
 		}
-		if err := mgr.Lock(); err != nil {
-			return err
-		}
-		defer mgr.Unlock()
-
 		st, err := mgr.Load()
 		if err != nil {
 			return err
@@ -63,21 +52,12 @@ Targets:
 			return err
 		}
 
-		fmt.Fprintf(os.Stderr, "Scanning %d workspaces and %d repos…\n", len(st.Workspaces), len(cfg.Repos))
 		candidates := inv.CleanupTargets()
 		if len(candidates) == 0 {
 			fmt.Fprintln(os.Stderr, "Nothing to clean up.")
 			return nil
 		}
-		stale, orphans := 0, 0
-		for _, c := range candidates {
-			if c.Kind == workspaces.CleanupManagedWorkspace {
-				stale++
-			} else {
-				orphans++
-			}
-		}
-		fmt.Fprintf(os.Stderr, "Found %d stale workspaces, %d orphaned worktrees\n", stale, orphans)
+		fmt.Fprintf(os.Stderr, "Found %d orphaned worktrees\n", len(candidates))
 
 		var selected []workspaces.CleanupTarget
 		if all {
@@ -88,72 +68,43 @@ Targets:
 				return err
 			}
 		}
-
 		if len(selected) == 0 {
 			return nil
 		}
 
-		if !force {
-			if len(selected) == 1 {
-				fmt.Printf("Remove %s? [y/N] ", selected[0].Label)
-			} else {
-				fmt.Printf("Remove %d workspaces?\n", len(selected))
-				for _, t := range selected {
-					fmt.Printf("  %s\n", t.Label)
-				}
-				fmt.Print("[y/N] ")
-			}
-			reader := bufio.NewReader(os.Stdin)
-			answer, _ := reader.ReadString('\n')
-			if strings.TrimSpace(strings.ToLower(answer)) != "y" {
-				fmt.Println("Cancelled.")
-				return nil
-			}
+		if !force && !confirmCleanup(selected) {
+			fmt.Println("Cancelled.")
+			return nil
 		}
 
-		var removeTargets []workspaces.RemoveTarget
-		for _, t := range selected {
-			if t.Kind == workspaces.CleanupManagedWorkspace {
-				removeTargets = append(removeTargets, workspaces.RemoveTarget{
-					Kind:        workspaces.RemoveManagedWorkspace,
-					Workspace:   t.Workspace,
-					SessionName: t.Workspace.SessionName,
-				})
-			}
-		}
-		workspaces.RemoveManagedEntries(st, removeTargets)
-		if err := mgr.Save(st); err != nil {
-			return err
-		}
-
-		var failed []state.Workspace
 		for i, t := range selected {
 			fmt.Fprintf(os.Stderr, "[%d/%d] Removing %s…\n", i+1, len(selected), t.Label)
-			if t.Kind == workspaces.CleanupManagedWorkspace && tmux.SessionExists(t.Workspace.SessionName) {
-				_ = tmux.KillSession(t.Workspace.SessionName)
+			if _, statErr := os.Stat(t.WorktreePath); statErr != nil {
+				continue
 			}
-			if t.WorktreePath != "" {
-				if _, statErr := os.Stat(t.WorktreePath); statErr == nil {
-					if err := git.RemoveWorktree(t.RepoPath, t.WorktreePath); err != nil {
-						fmt.Fprintf(os.Stderr, "  warning: failed to remove worktree %s: %v\n", t.WorktreePath, err)
-						if t.Kind == workspaces.CleanupManagedWorkspace {
-							failed = append(failed, t.Workspace)
-						}
-						continue
-					}
-				}
+			if err := git.RemoveWorktree(t.RepoPath, t.WorktreePath); err != nil {
+				fmt.Fprintf(os.Stderr, "  warning: failed to remove worktree %s: %v\n", t.WorktreePath, err)
+				continue
 			}
 			fmt.Fprintf(os.Stderr, "  done\n")
 		}
-
-		if len(failed) > 0 {
-			for _, ws := range failed {
-				mgr.AddWorkspace(st, ws)
-			}
-			return mgr.Save(st)
-		}
 		return nil
 	},
+}
+
+func confirmCleanup(selected []workspaces.CleanupTarget) bool {
+	if len(selected) == 1 {
+		fmt.Printf("Remove %s? [y/N] ", selected[0].Label)
+	} else {
+		fmt.Printf("Remove %d worktrees?\n", len(selected))
+		for _, t := range selected {
+			fmt.Printf("  %s\n", t.Label)
+		}
+		fmt.Print("[y/N] ")
+	}
+	reader := bufio.NewReader(os.Stdin)
+	answer, _ := reader.ReadString('\n')
+	return strings.TrimSpace(strings.ToLower(answer)) == "y"
 }
 
 func pickCleanupFzf(candidates []workspaces.CleanupTarget) ([]workspaces.CleanupTarget, error) {
@@ -161,7 +112,7 @@ func pickCleanupFzf(candidates []workspaces.CleanupTarget) ([]workspaces.Cleanup
 	for i, c := range candidates {
 		tag := c.Detail
 		if tag == "" {
-			tag = "stopped"
+			tag = "orphan"
 		}
 		lines = append(lines, fmt.Sprintf("%d\t%-30s\t%s", i, c.Label, tag))
 	}
@@ -169,7 +120,7 @@ func pickCleanupFzf(candidates []workspaces.CleanupTarget) ([]workspaces.Cleanup
 	fzfCmd := exec.Command("fzf",
 		"--multi",
 		"--prompt", "cleanup > ",
-		"--header", "Select workspaces to remove (Tab to multi-select)",
+		"--header", "Select orphaned worktrees to remove (Tab to multi-select)",
 		"--height", "100%",
 		"--reverse",
 		"--delimiter", "\t",
@@ -199,6 +150,5 @@ func pickCleanupFzf(candidates []workspaces.CleanupTarget) ([]workspaces.Cleanup
 		}
 		selected = append(selected, candidates[idx])
 	}
-
 	return selected, nil
 }

@@ -12,27 +12,19 @@ import (
 type State struct {
 	Version    int         `json:"version"`
 	Workspaces []Workspace `json:"workspaces"`
-	LastActive string      `json:"last_active"`
-	Collapsed  []string    `json:"collapsed,omitempty"`
-}
-
-type Notification struct {
-	Message   string `json:"message"`
-	CreatedAt string `json:"created_at"`
 }
 
 type Workspace struct {
-	Name          string         `json:"name"`
-	Type          string         `json:"type"` // "worktree", "dir", or "plain"
-	Repo          string         `json:"repo,omitempty"`
-	RepoPath      string         `json:"repo_path,omitempty"`
-	WorktreePath  string         `json:"worktree_path,omitempty"`
-	Branch        string         `json:"branch,omitempty"`
-	Path          string         `json:"path,omitempty"`
-	SessionName   string         `json:"session_name"`
-	CreatedAt     string         `json:"created_at"`
-	LastUsedAt    string         `json:"last_used_at,omitempty"`
-	Notifications []Notification `json:"notifications,omitempty"`
+	Name         string `json:"name"`
+	Type         string `json:"type"` // "worktree", "dir", or "plain"
+	Repo         string `json:"repo,omitempty"`
+	RepoPath     string `json:"repo_path,omitempty"`
+	WorktreePath string `json:"worktree_path,omitempty"`
+	Branch       string `json:"branch,omitempty"`
+	Path         string `json:"path,omitempty"`
+	SessionName  string `json:"session_name"`
+	CreatedAt    string `json:"created_at"`
+	LastUsedAt   string `json:"last_used_at,omitempty"`
 }
 
 type StateManager struct {
@@ -150,27 +142,6 @@ func (m *StateManager) FindBySession(s *State, sessionName string) *Workspace {
 		}
 	}
 	return nil
-}
-
-func (m *StateManager) AppendNotification(s *State, sessionName, message string) {
-	for i := range s.Workspaces {
-		if s.Workspaces[i].SessionName == sessionName {
-			s.Workspaces[i].Notifications = append(s.Workspaces[i].Notifications, Notification{
-				Message:   message,
-				CreatedAt: time.Now().UTC().Format(time.RFC3339),
-			})
-			return
-		}
-	}
-}
-
-func (m *StateManager) ClearNotifications(s *State, sessionName string) {
-	for i := range s.Workspaces {
-		if s.Workspaces[i].SessionName == sessionName {
-			s.Workspaces[i].Notifications = nil
-			return
-		}
-	}
 }
 
 func (m *StateManager) TouchWorkspace(s *State, sessionName string) {

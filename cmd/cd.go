@@ -64,7 +64,24 @@ var cdCmd = &cobra.Command{
 			ws = entry.Workspace
 		}
 
+		touchWorkspaceLastUsed(mgr, ws.SessionName)
 		fmt.Println(workspaceDirWithConfig(&ws, cfg))
 		return nil
 	},
+}
+
+// touchWorkspaceLastUsed bumps last_used_at for the picked workspace so cd
+// ordering and future auto-cleanup reflect recency. Best-effort: cd is the hot
+// path, so a failed lock/save is ignored rather than blocking the path print.
+func touchWorkspaceLastUsed(mgr *state.StateManager, sessionName string) {
+	if err := mgr.Lock(); err != nil {
+		return
+	}
+	defer mgr.Unlock()
+	st, err := mgr.Load()
+	if err != nil {
+		return
+	}
+	mgr.TouchWorkspace(st, sessionName)
+	_ = mgr.Save(st)
 }

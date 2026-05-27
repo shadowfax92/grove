@@ -3,12 +3,14 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"grove/internal/config"
 	"grove/internal/state"
+	"grove/internal/workspaces"
 )
 
 func workspaceDir(ws *state.Workspace) string {
@@ -42,67 +44,6 @@ func pathWithWorkdir(root, workdir string) string {
 		return root
 	}
 	return filepath.Join(root, workdir)
-}
-
-func workspacePaneLabel(ws *state.Workspace) string {
-	if ws == nil {
-		return ""
-	}
-	if ws.Type == "worktree" && ws.Branch != "" {
-		return ws.Branch
-	}
-	return strings.TrimPrefix(ws.SessionName, "g/")
-}
-
-type paneLabelInputs struct {
-	cwd       string
-	home      string
-	workspace *state.Workspace
-	branch    string
-	repoRoot  string
-	headSha   string
-}
-
-func resolvePaneLabel(in paneLabelInputs) string {
-	if in.branch != "" {
-		if isMainBranch(in.branch) && in.repoRoot != "" {
-			return filepath.Base(in.repoRoot)
-		}
-		return in.branch
-	}
-	if in.repoRoot != "" && in.headSha != "" {
-		return filepath.Base(in.repoRoot) + "@" + in.headSha
-	}
-	if in.home != "" && samePath(in.cwd, in.home) {
-		return "home"
-	}
-	if base := filepath.Base(in.cwd); base != "" && base != "." && base != string(filepath.Separator) {
-		return base
-	}
-	if in.workspace != nil {
-		return workspacePaneLabel(in.workspace)
-	}
-	return ""
-}
-
-func isMainBranch(branch string) bool {
-	switch branch {
-	case "main", "master", "trunk":
-		return true
-	}
-	return false
-}
-
-func samePath(a, b string) bool {
-	pa, err := filepath.Abs(a)
-	if err != nil {
-		return false
-	}
-	pb, err := filepath.Abs(b)
-	if err != nil {
-		return false
-	}
-	return pa == pb
 }
 
 func findWorkspaceRef(mgr *state.StateManager, st *state.State, ref string) *state.Workspace {
@@ -185,28 +126,44 @@ func workspaceMatchNames(st *state.State, matches []workspaceMatch, rootLen int)
 	return names
 }
 
-func registerWorkspace(name, sessionName, path string) {
-	mgr, err := state.NewManager()
-	if err != nil {
-		return
+// pickSessionFzf renders managed workspaces in an fzf picker and returns the
+// selected session name. Shared by `grove cd`.
+func pickSessionFzf(prompt string, entries []workspaces.ManagedEntry) (string, error) {
+	if len(entries) == 0 {
+		return "", fmt.Errorf("no workspaces")
 	}
-	if err := mgr.Lock(); err != nil {
-		return
-	}
-	defer mgr.Unlock()
 
-	st, err := mgr.Load()
+	var lines []string
+	for _, entry := range entries {
+		ws := entry.Workspace
+		age := ""
+		if ws.LastUsedAt != "" {
+			age = state.RelativeTime(ws.LastUsedAt)
+		}
+		lines = append(lines, fmt.Sprintf("%s\t%-30s %s", ws.SessionName, ws.Name, age))
+	}
+
+	fzfCmd := exec.Command("fzf",
+		"--prompt", prompt,
+		"--height", "100%",
+		"--reverse",
+		"--delimiter", "\t",
+		"--with-nth", "2",
+	)
+	fzfCmd.Stdin = strings.NewReader(strings.Join(lines, "\n"))
+	fzfCmd.Stderr = os.Stderr
+
+	out, err := fzfCmd.Output()
 	if err != nil {
-		return
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 130 {
+			return "", ErrCancelled
+		}
+		return "", fmt.Errorf("fzf failed: %w (is fzf installed?)", err)
 	}
-	if mgr.FindBySession(st, sessionName) != nil {
-		return
+
+	line := strings.TrimSpace(string(out))
+	if idx := strings.Index(line, "\t"); idx >= 0 {
+		return line[:idx], nil
 	}
-	mgr.AddWorkspace(st, state.Workspace{
-		Name:        name,
-		Type:        "plain",
-		SessionName: sessionName,
-		Path:        path,
-	})
-	_ = mgr.Save(st)
+	return line, nil
 }

@@ -10,17 +10,11 @@ import (
 	"grove/internal/config"
 	"grove/internal/git"
 	"grove/internal/state"
-	"grove/internal/tmux"
 )
 
 type ManagedEntry struct {
 	Workspace    state.Workspace
-	Running      bool
 	ExistsOnDisk bool
-}
-
-type UnmanagedSession struct {
-	SessionName string
 }
 
 type OrphanWorktree struct {
@@ -30,37 +24,17 @@ type OrphanWorktree struct {
 	Branch   string
 }
 
-type RemoveTargetKind string
-
-const (
-	RemoveManagedWorkspace RemoveTargetKind = "managed_workspace"
-	RemoveUnmanagedSession RemoveTargetKind = "unmanaged_session"
-)
-
 type RemoveTarget struct {
-	Kind        RemoveTargetKind
 	Workspace   state.Workspace
 	SessionName string
-	Running     bool
 }
 
 func (t RemoveTarget) Label() string {
-	if t.Kind == RemoveManagedWorkspace {
-		return t.Workspace.Name
-	}
-	return t.SessionName
+	return t.Workspace.Name
 }
 
-type CleanupTargetKind string
-
-const (
-	CleanupManagedWorkspace CleanupTargetKind = "managed_workspace"
-	CleanupOrphanWorktree   CleanupTargetKind = "orphan_worktree"
-)
-
+// CleanupTarget is an orphan worktree on disk that grove no longer tracks.
 type CleanupTarget struct {
-	Kind         CleanupTargetKind
-	Workspace    state.Workspace
 	RepoPath     string
 	WorktreePath string
 	Label        string
@@ -68,58 +42,33 @@ type CleanupTarget struct {
 }
 
 type Inventory struct {
-	Managed   []ManagedEntry
-	Unmanaged []UnmanagedSession
-	Orphans   []OrphanWorktree
+	Managed []ManagedEntry
+	Orphans []OrphanWorktree
 
 	managedBySession map[string]int
 	managedByName    map[string]int
-	unmanagedSet     map[string]bool
 }
 
-var listSessions = tmux.ListSessions
 var listWorktrees = git.ListWorktrees
 
 func Build(st *state.State, cfg *config.Config) (*Inventory, error) {
-	liveSessions, err := listSessions()
-	if err != nil {
-		return nil, err
-	}
-
-	liveSet := make(map[string]bool, len(liveSessions))
-	for _, sessionName := range liveSessions {
-		liveSet[sessionName] = true
-	}
-
 	inv := &Inventory{
 		Managed:          make([]ManagedEntry, 0, len(st.Workspaces)),
 		managedBySession: make(map[string]int, len(st.Workspaces)),
 		managedByName:    make(map[string]int, len(st.Workspaces)),
-		unmanagedSet:     make(map[string]bool),
 	}
 
 	for _, ws := range st.Workspaces {
-		entry := ManagedEntry{
-			Workspace:    ws,
-			Running:      liveSet[ws.SessionName],
-			ExistsOnDisk: workspaceExists(ws),
-		}
 		idx := len(inv.Managed)
-		inv.Managed = append(inv.Managed, entry)
+		inv.Managed = append(inv.Managed, ManagedEntry{
+			Workspace:    ws,
+			ExistsOnDisk: workspaceExists(ws),
+		})
 		inv.managedBySession[ws.SessionName] = idx
 		if _, ok := inv.managedByName[ws.Name]; !ok {
 			inv.managedByName[ws.Name] = idx
 		}
-		delete(liveSet, ws.SessionName)
 	}
-
-	for sessionName := range liveSet {
-		inv.Unmanaged = append(inv.Unmanaged, UnmanagedSession{SessionName: sessionName})
-		inv.unmanagedSet[sessionName] = true
-	}
-	sort.Slice(inv.Unmanaged, func(i, j int) bool {
-		return inv.Unmanaged[i].SessionName < inv.Unmanaged[j].SessionName
-	})
 
 	orphans, err := buildOrphans(st, cfg)
 	if err != nil {
@@ -176,20 +125,11 @@ func (inv *Inventory) ManagedByLastUsed() []ManagedEntry {
 }
 
 func (inv *Inventory) RemoveCandidates() []RemoveTarget {
-	candidates := make([]RemoveTarget, 0, len(inv.Managed)+len(inv.Unmanaged))
+	candidates := make([]RemoveTarget, 0, len(inv.Managed))
 	for _, entry := range inv.ManagedByLastUsed() {
 		candidates = append(candidates, RemoveTarget{
-			Kind:        RemoveManagedWorkspace,
 			Workspace:   entry.Workspace,
 			SessionName: entry.Workspace.SessionName,
-			Running:     entry.Running,
-		})
-	}
-	for _, session := range inv.Unmanaged {
-		candidates = append(candidates, RemoveTarget{
-			Kind:        RemoveUnmanagedSession,
-			SessionName: session.SessionName,
-			Running:     true,
 		})
 	}
 	return candidates
@@ -199,33 +139,19 @@ func (inv *Inventory) ResolveRemoveTargets(refs []string) ([]RemoveTarget, error
 	targets := make([]RemoveTarget, 0, len(refs))
 	seen := make(map[string]bool, len(refs))
 	for _, ref := range refs {
-		if entry, ok := inv.FindManaged(ref); ok {
-			sessionName := entry.Workspace.SessionName
-			if seen[sessionName] {
-				continue
-			}
-			targets = append(targets, RemoveTarget{
-				Kind:        RemoveManagedWorkspace,
-				Workspace:   entry.Workspace,
-				SessionName: sessionName,
-				Running:     entry.Running,
-			})
-			seen[sessionName] = true
+		entry, ok := inv.FindManaged(ref)
+		if !ok {
+			return nil, fmt.Errorf("workspace %q not found", ref)
+		}
+		sessionName := entry.Workspace.SessionName
+		if seen[sessionName] {
 			continue
 		}
-		if inv.unmanagedSet[ref] {
-			if seen[ref] {
-				continue
-			}
-			targets = append(targets, RemoveTarget{
-				Kind:        RemoveUnmanagedSession,
-				SessionName: ref,
-				Running:     true,
-			})
-			seen[ref] = true
-			continue
-		}
-		return nil, fmt.Errorf("session %q not found", ref)
+		targets = append(targets, RemoveTarget{
+			Workspace:   entry.Workspace,
+			SessionName: sessionName,
+		})
+		seen[sessionName] = true
 	}
 	return targets, nil
 }
@@ -234,17 +160,10 @@ func RemoveManagedEntries(st *state.State, targets []RemoveTarget) {
 	if len(targets) == 0 {
 		return
 	}
-
 	removeSet := make(map[string]bool, len(targets))
 	for _, target := range targets {
-		if target.Kind == RemoveManagedWorkspace {
-			removeSet[target.SessionName] = true
-		}
+		removeSet[target.SessionName] = true
 	}
-	if len(removeSet) == 0 {
-		return
-	}
-
 	filtered := st.Workspaces[:0]
 	for _, ws := range st.Workspaces {
 		if !removeSet[ws.SessionName] {
@@ -255,34 +174,9 @@ func RemoveManagedEntries(st *state.State, targets []RemoveTarget) {
 }
 
 func (inv *Inventory) CleanupTargets() []CleanupTarget {
-	targets := make([]CleanupTarget, 0, len(inv.Managed)+len(inv.Orphans))
-	for _, entry := range inv.Managed {
-		if entry.Running {
-			continue
-		}
-		target := CleanupTarget{
-			Kind:      CleanupManagedWorkspace,
-			Workspace: entry.Workspace,
-			Label:     entry.Workspace.Name,
-		}
-		if entry.Workspace.Type == "worktree" {
-			target.RepoPath = entry.Workspace.RepoPath
-			target.WorktreePath = entry.Workspace.WorktreePath
-		}
-		switch {
-		case entry.Workspace.LastUsedAt != "":
-			target.Detail = state.RelativeTime(entry.Workspace.LastUsedAt) + " ago"
-		case entry.Workspace.CreatedAt != "":
-			target.Detail = state.RelativeTime(entry.Workspace.CreatedAt) + " ago"
-		default:
-			target.Detail = "stopped"
-		}
-		targets = append(targets, target)
-	}
-
+	targets := make([]CleanupTarget, 0, len(inv.Orphans))
 	for _, orphan := range inv.Orphans {
 		targets = append(targets, CleanupTarget{
-			Kind:         CleanupOrphanWorktree,
 			RepoPath:     orphan.RepoPath,
 			WorktreePath: orphan.Path,
 			Label:        fmt.Sprintf("%s/%s", orphan.RepoName, orphan.Branch),

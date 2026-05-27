@@ -11,32 +11,6 @@ import (
 	"grove/internal/state"
 )
 
-func TestResolveNewModeDefaultsToCD(t *testing.T) {
-	got, err := resolveNewMode(false, false)
-	if err != nil {
-		t.Fatalf("resolveNewMode() error = %v", err)
-	}
-	if got != newModeCD {
-		t.Fatalf("resolveNewMode() = %v, want %v", got, newModeCD)
-	}
-}
-
-func TestResolveNewModeAllowsTmux(t *testing.T) {
-	got, err := resolveNewMode(false, true)
-	if err != nil {
-		t.Fatalf("resolveNewMode() error = %v", err)
-	}
-	if got != newModeTmux {
-		t.Fatalf("resolveNewMode() = %v, want %v", got, newModeTmux)
-	}
-}
-
-func TestResolveNewModeRejectsConflictingFlags(t *testing.T) {
-	if _, err := resolveNewMode(true, true); err == nil {
-		t.Fatal("resolveNewMode() error = nil, want conflict error")
-	}
-}
-
 func TestNewCommandExposesFromFlag(t *testing.T) {
 	flag := newCmd.Flags().Lookup("from")
 	if flag == nil {
@@ -80,7 +54,7 @@ func TestCreateWorktreeUsesFromStartPoint(t *testing.T) {
 		Type: "worktree",
 	}
 
-	if err := createWorktree(repo, "agent", "feat/base", nil, mgr, st, true, true, newModeCD); err != nil {
+	if err := createWorktree(repo, "agent", "feat/base", mgr, st, true); err != nil {
 		t.Fatalf("createWorktree() error = %v", err)
 	}
 
@@ -108,7 +82,7 @@ func TestCreateWorktreeStoresConfiguredWorkdirAsStartPath(t *testing.T) {
 		Workdir: "packages/app",
 	}
 
-	if err := createWorktree(repo, "agent", "", nil, mgr, st, true, true, newModeCD); err != nil {
+	if err := createWorktree(repo, "agent", "", mgr, st, true); err != nil {
 		t.Fatalf("createWorktree() error = %v", err)
 	}
 

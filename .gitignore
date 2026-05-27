@@ -5,3 +5,4 @@ grove
 .runtime/
 CLAUDE.local.md
 .llm/
+.DS_Store

@@ -17,56 +17,30 @@ function gv
     end
 
     switch $subcmd
-        case nd
+        case n nd new
             set -l output (grove new $rest)
             or return $status
             set -l path (string trim -- $output[-1])
             test -n "$path"
             and cd -- $path
-        case nt
-            grove new --tmux $rest
-        case dd
-            set -l output (grove done --cd $rest)
-            or return $status
-            set -l path (string trim -- $output[-1])
-            test -n "$path"
-            and cd -- $path
-        case n new
-            if contains -- --tmux $rest
-                grove new $rest
-            else
-                set -l output (grove new $rest)
-                or return $status
-                set -l path (string trim -- $output[-1])
-                test -n "$path"
-                and cd -- $path
-            end
         case cd
             set -l output (grove cd $rest)
             or return $status
             set -l path (string trim -- $output[-1])
             test -n "$path"
             and cd -- $path
-        case d done
-            if contains -- --cd $rest
-                set -l output (grove done $rest)
-                or return $status
-                set -l path (string trim -- $output[-1])
-                test -n "$path"
-                and cd -- $path
-            else
-                grove done $rest
-            end
-        case s sw switch
-            grove switch $rest
+        case d dd done
+            set -l output (grove done $rest)
+            or return $status
+            set -l path (string trim -- $output[-1])
+            test -n "$path"
+            and cd -- $path
         case ls l list
             grove list $rest
         case rm remove
             grove rm $rest
         case cfg config
             grove config $rest
-        case sh shadow
-            grove shadow $rest
         case '*'
             grove $argv
     end
