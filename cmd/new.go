@@ -17,8 +17,7 @@ import (
 
 func init() {
 	newCmd.Flags().Bool("no-prepare", false, "Skip prepare commands before worktree creation")
-	newCmd.Flags().Bool("cd", false, "Deprecated: retained for compatibility (new always prints the path)")
-	_ = newCmd.Flags().MarkHidden("cd")
+	newCmd.Flags().Bool("cd", false, "(deprecated) no-op — new always prints the path; kept so old wrappers don't error")
 	newCmd.Flags().String("from", "", "Create a new branch from this start point")
 	rootCmd.AddCommand(newCmd)
 }
