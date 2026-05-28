@@ -11,7 +11,6 @@ import (
 )
 
 func init() {
-	doneCmd.Flags().Bool("cd", false, "(deprecated) no-op — done always prints the path; kept so old keybinds don't error")
 	rootCmd.AddCommand(doneCmd)
 }
 

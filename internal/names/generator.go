@@ -3,6 +3,7 @@ package names
 import (
 	"fmt"
 	"math/rand"
+	"time"
 )
 
 var animals = []string{
@@ -49,7 +50,24 @@ var animals = []string{
 	"zebra",
 }
 
+// Generate returns a random animal name (e.g. "otter") not present in existing.
 func Generate(existing []string) string {
+	return pick(existing, func(animal string) string { return animal })
+}
+
+// GenerateBranch returns an auto branch name like "fix/otter-27-05-26".
+// The dd-mm-yy suffix keeps the same animal distinct across days, so existing
+// only needs to guard against the rare same-day collision.
+func GenerateBranch(existing []string) string {
+	date := time.Now().Format("02-01-06")
+	return pick(existing, func(animal string) string {
+		return fmt.Sprintf("fix/%s-%s", animal, date)
+	})
+}
+
+// pick returns the first name (built by format from an animal) not already in
+// existing, falling back to numeric suffixes once every animal is taken.
+func pick(existing []string, format func(animal string) string) string {
 	used := make(map[string]bool, len(existing))
 	for _, name := range existing {
 		used[name] = true
@@ -57,15 +75,14 @@ func Generate(existing []string) string {
 
 	perm := rand.Perm(len(animals))
 	for _, i := range perm {
-		if !used[animals[i]] {
-			return animals[i]
+		if candidate := format(animals[i]); !used[candidate] {
+			return candidate
 		}
 	}
 
 	for n := 2; ; n++ {
 		for _, a := range animals {
-			candidate := fmt.Sprintf("%s%d", a, n)
-			if !used[candidate] {
+			if candidate := format(fmt.Sprintf("%s%d", a, n)); !used[candidate] {
 				return candidate
 			}
 		}

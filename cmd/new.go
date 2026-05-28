@@ -17,7 +17,6 @@ import (
 
 func init() {
 	newCmd.Flags().Bool("no-prepare", false, "Skip prepare commands before worktree creation")
-	newCmd.Flags().Bool("cd", false, "(deprecated) no-op — new always prints the path; kept so old wrappers don't error")
 	newCmd.Flags().String("from", "", "Create a new branch from this start point")
 	rootCmd.AddCommand(newCmd)
 }
@@ -27,13 +26,14 @@ var newCmd = &cobra.Command{
 	Aliases:     []string{"n"},
 	Annotations: map[string]string{"group": "Workspaces:"},
 	Short:       "Create a new workspace and print its path",
-	Long: `Create a new workspace and print its path.
+	Long: `Create a new workspace and print its path. With the gv wrapper, grove new
+creates the workspace and cd's into it.
 
-  grove new                 — pick repo or type session name via fzf, then print the path
-  grove new <repo>          — pick or auto-generate branch in repo, then print the path
-  grove new <repo> <br>     — create a specific workspace and print the path
-  grove new <repo> <br> --from <base>
-                            — create a specific workspace branch from base
+  grove new                 — pick a repo (or type a plain workspace name), then create + cd
+  grove new <repo>          — auto-create a fix/<animal>-<dd-mm-yy> branch in repo + cd
+  grove new <repo> <branch> — create (or check out) a specific branch + cd
+  grove new <repo> <branch> --from <base>
+                            — create <branch> from <base>
   grove new <name>          — plain workspace (if name doesn't match a repo)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		noPrepare, _ := cmd.Flags().GetBool("no-prepare")
@@ -124,32 +124,7 @@ func createPlain(name string, mgr *state.StateManager, st *state.State) error {
 
 func createWorktree(repo *config.RepoConfig, branch, from string, mgr *state.StateManager, st *state.State, noPrepare bool) error {
 	if branch == "" {
-		existing := existingWorktreeNames(st, repo.Name)
-
-		branches, _ := git.ListRecentBranches(repo.Path, 7)
-		usedSet := make(map[string]bool)
-		for _, e := range existing {
-			usedSet[e] = true
-		}
-		var available []string
-		for _, b := range branches {
-			if !usedSet[b] {
-				available = append(available, b)
-			}
-		}
-
-		prompted, selected, err := promptNameFzf("branch > ", "Select branch, type new name, or enter for random", available)
-		if err != nil {
-			return err
-		}
-		if prompted != "" {
-			if !selected && (git.LocalBranchExists(repo.Path, prompted) || git.RemoteBranchExists(repo.Path, prompted)) {
-				return fmt.Errorf("branch %q already exists — select it from the list to use it", prompted)
-			}
-			branch = prompted
-		} else {
-			branch = names.Generate(existing)
-		}
+		branch = names.GenerateBranch(existingWorktreeNames(st, repo.Name))
 	}
 
 	sessionName := fmt.Sprintf("g/%s/%s", repo.Name, branch)
@@ -217,7 +192,7 @@ func createWorktree(repo *config.RepoConfig, branch, from string, mgr *state.Sta
 func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State) error {
 	if name == "" {
 		existing := existingDirNames(st, repo.Name)
-		prompted, _, err := promptNameFzf("name > ", "Type a name or enter for random", nil)
+		prompted, err := promptNameFzf("name > ", "Type a name or enter for random")
 		if err != nil {
 			return err
 		}
@@ -257,7 +232,7 @@ func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateMa
 func createPlainRepo(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State) error {
 	if name == "" {
 		existing := existingDirNames(st, repo.Name)
-		prompted, _, err := promptNameFzf("name > ", "Type a name or enter for random", nil)
+		prompted, err := promptNameFzf("name > ", "Type a name or enter for random")
 		if err != nil {
 			return err
 		}
@@ -340,10 +315,9 @@ func pickRepoOrNameFzf(cfg *config.Config) (string, error) {
 
 const autoGenerateLabel = "(auto-generate)"
 
-// promptNameFzf returns (name, selectedFromList, error).
-func promptNameFzf(prompt, header string, options []string) (string, bool, error) {
-	lines := append([]string{autoGenerateLabel}, options...)
-
+// promptNameFzf shows an fzf prompt with a single "(auto-generate)" entry and
+// returns the typed name, or "" when the user picks auto-generate or enters nothing.
+func promptNameFzf(prompt, header string) (string, error) {
 	fzfCmd := exec.Command("fzf",
 		"--prompt", prompt,
 		"--header", header,
@@ -351,29 +325,27 @@ func promptNameFzf(prompt, header string, options []string) (string, bool, error
 		"--height", "100%",
 		"--reverse",
 	)
-	fzfCmd.Stdin = strings.NewReader(strings.Join(lines, "\n"))
+	fzfCmd.Stdin = strings.NewReader(autoGenerateLabel)
 	fzfCmd.Stderr = os.Stderr
 
 	out, err := fzfCmd.Output()
 	if err != nil && len(out) == 0 {
-		return "", false, ErrCancelled
+		return "", ErrCancelled
 	}
 
 	outputLines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	selected := false
 	result := ""
 	if len(outputLines) >= 2 && outputLines[1] != "" {
 		result = outputLines[1]
-		selected = true
 	} else if len(outputLines) >= 1 {
 		result = outputLines[0]
 	}
 	result = strings.TrimSpace(result)
 
 	if result == autoGenerateLabel || result == "" {
-		return "", false, nil
+		return "", nil
 	}
-	return result, selected, nil
+	return result, nil
 }
 
 func existingWorktreeNames(st *state.State, repoName string) []string {

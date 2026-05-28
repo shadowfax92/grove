@@ -6,9 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"time"
 )
 
 type WorktreeInfo struct {
@@ -210,43 +208,6 @@ func ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
 	}
 
 	return worktrees, nil
-}
-
-func ListRecentBranches(repoPath string, days int) ([]string, error) {
-	cutoff := time.Now().AddDate(0, 0, -days).Unix()
-
-	cmd := exec.Command("git", "for-each-ref",
-		"--sort=-committerdate",
-		"--format=%(committerdate:unix) %(refname:short)",
-		"refs/heads/", "refs/remotes/origin/")
-	cmd.Dir = repoPath
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, err
-	}
-
-	var branches []string
-	seen := make(map[string]bool)
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, " ", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		ts, err := strconv.ParseInt(parts[0], 10, 64)
-		if err != nil || ts < cutoff {
-			continue
-		}
-		name := parts[1]
-		if strings.HasPrefix(name, "origin/") {
-			name = name[len("origin/"):]
-		}
-		if name == "" || name == "HEAD" || seen[name] {
-			continue
-		}
-		seen[name] = true
-		branches = append(branches, name)
-	}
-	return branches, nil
 }
 
 func EnsureGitignore(repoPath string) error {
