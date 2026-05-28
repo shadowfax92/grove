@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 
 	"grove/internal/git"
 	"grove/internal/state"
@@ -71,15 +72,7 @@ var rmCmd = &cobra.Command{
 			return err
 		}
 
-		var failed []state.Workspace
-		for _, t := range targets {
-			if err := removeWorktreeForTarget(t); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: failed to remove worktree %s: %v\n", t.Workspace.WorktreePath, err)
-				failed = append(failed, t.Workspace)
-				continue
-			}
-			fmt.Printf("Removed %q\n", t.Label())
-		}
+		failed := removeWorktrees(targets, removeWorktreeForTarget)
 
 		if len(failed) > 0 {
 			for _, ws := range failed {
@@ -115,6 +108,46 @@ func removeWorktreeForTarget(t workspaces.RemoveTarget) error {
 		return nil
 	}
 	return git.RemoveWorktree(ws.RepoPath, ws.WorktreePath)
+}
+
+// removeWorktrees deletes each target's worktree, running distinct repos
+// concurrently while keeping removals within a single repo sequential. Git's
+// per-repo worktree admin area under $GIT_DIR/worktrees — and especially the
+// `worktree prune` fallback in git.RemoveWorktree — is not safe to mutate from
+// two processes at once, so only cross-repo work is parallelized. Each goroutine
+// writes its own disjoint errs slots, so no lock is needed; results are reported
+// in the original target order after all goroutines finish so output never
+// interleaves. Returns the workspaces whose removal failed so the caller can
+// restore them to state.
+func removeWorktrees(targets []workspaces.RemoveTarget, remove func(workspaces.RemoveTarget) error) []state.Workspace {
+	byRepo := make(map[string][]int)
+	for i, t := range targets {
+		byRepo[t.Workspace.RepoPath] = append(byRepo[t.Workspace.RepoPath], i)
+	}
+
+	errs := make([]error, len(targets))
+	var wg sync.WaitGroup
+	for _, idxs := range byRepo {
+		wg.Add(1)
+		go func(idxs []int) {
+			defer wg.Done()
+			for _, i := range idxs {
+				errs[i] = remove(targets[i])
+			}
+		}(idxs)
+	}
+	wg.Wait()
+
+	var failed []state.Workspace
+	for i, t := range targets {
+		if errs[i] != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to remove worktree %s: %v\n", t.Workspace.WorktreePath, errs[i])
+			failed = append(failed, t.Workspace)
+			continue
+		}
+		fmt.Printf("Removed %q\n", t.Label())
+	}
+	return failed
 }
 
 func pickRemoveTargetsFzf(inv *workspaces.Inventory) ([]workspaces.RemoveTarget, error) {
