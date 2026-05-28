@@ -7,7 +7,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
+
+// pruneMu serializes `git worktree prune`. Removing distinct worktrees in
+// parallel is safe (each touches its own $GIT_DIR/worktrees/<id>), but prune
+// rewrites the repo-wide worktrees listing, so two firing at once — when several
+// removals hit this fallback concurrently — can race each other.
+var pruneMu sync.Mutex
 
 type WorktreeInfo struct {
 	Path   string
@@ -168,9 +175,11 @@ func RemoveWorktree(repoPath, worktreePath string) error {
 		if err := os.RemoveAll(worktreePath); err != nil {
 			return fmt.Errorf("removing worktree directory: %w", err)
 		}
+		pruneMu.Lock()
 		pruneCmd := exec.Command("git", "worktree", "prune")
 		pruneCmd.Dir = repoPath
 		_ = pruneCmd.Run()
+		pruneMu.Unlock()
 	}
 	return nil
 }

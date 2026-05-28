@@ -3,8 +3,9 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"grove/internal/state"
 	"grove/internal/workspaces"
@@ -34,38 +35,58 @@ func TestRemoveManagedEntriesRemovesSelectedWorkspaces(t *testing.T) {
 	}
 }
 
-func TestRemoveWorktreesGroupsByRepoAndMapsFailures(t *testing.T) {
-	// a2 is the 3rd target but shares repoA with a1; its failure must map back to
-	// its own slot (not b1's) even though grouping reshuffles iteration order.
-	targets := []workspaces.RemoveTarget{
-		{Workspace: state.Workspace{Name: "a1", RepoPath: "/repoA", WorktreePath: "/repoA/a1"}},
-		{Workspace: state.Workspace{Name: "b1", RepoPath: "/repoB", WorktreePath: "/repoB/b1"}},
-		{Workspace: state.Workspace{Name: "a2", RepoPath: "/repoA", WorktreePath: "/repoA/a2"}},
+func TestRemoveWorktreesCapsConcurrencyAndCollectsFailures(t *testing.T) {
+	const n = 20
+	targets := make([]workspaces.RemoveTarget, n)
+	for i := range targets {
+		// All in one repo on purpose: the cap must hold regardless of repo, and
+		// concurrent same-repo removals are the case we now rely on being safe.
+		targets[i] = workspaces.RemoveTarget{Workspace: state.Workspace{
+			Name:         fmt.Sprintf("ws-%02d", i),
+			RepoPath:     "/repo",
+			WorktreePath: fmt.Sprintf("/repo/.grove/worktrees/ws-%02d", i),
+		}}
 	}
 
-	var mu sync.Mutex
-	seqByRepo := map[string][]string{}
+	var active, maxActive, calls int64
 	remove := func(target workspaces.RemoveTarget) error {
-		mu.Lock()
-		seqByRepo[target.Workspace.RepoPath] = append(seqByRepo[target.Workspace.RepoPath], target.Workspace.Name)
-		mu.Unlock()
-		if target.Workspace.Name == "a2" {
+		cur := atomic.AddInt64(&active, 1)
+		for { // record high-water mark of concurrent removals
+			old := atomic.LoadInt64(&maxActive)
+			if cur <= old || atomic.CompareAndSwapInt64(&maxActive, old, cur) {
+				break
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+		atomic.AddInt64(&calls, 1)
+		atomic.AddInt64(&active, -1)
+		if target.Workspace.Name == "ws-03" || target.Workspace.Name == "ws-11" {
 			return fmt.Errorf("boom")
 		}
 		return nil
 	}
 
 	defer silenceStdio(t)()
-	failed := removeWorktrees(targets, remove)
+	failed := removeWorktrees(targets, defaultRemoveJobs, remove)
 
-	if len(failed) != 1 || failed[0].Name != "a2" {
-		t.Fatalf("failed = %+v, want exactly [a2]", failed)
+	if got := atomic.LoadInt64(&calls); got != n {
+		t.Fatalf("remove called %d times, want %d", got, n)
 	}
-	if got := seqByRepo["/repoA"]; len(got) != 2 || got[0] != "a1" || got[1] != "a2" {
-		t.Fatalf("repoA removal order = %v, want [a1 a2] (sequential within a repo)", got)
+	if got := atomic.LoadInt64(&maxActive); got > defaultRemoveJobs {
+		t.Fatalf("peak concurrency = %d, want <= %d", got, defaultRemoveJobs)
 	}
-	if got := seqByRepo["/repoB"]; len(got) != 1 || got[0] != "b1" {
-		t.Fatalf("repoB removal order = %v, want [b1]", got)
+	if got := atomic.LoadInt64(&maxActive); got < 2 {
+		t.Fatalf("peak concurrency = %d, expected parallel execution", got)
+	}
+	if len(failed) != 2 {
+		t.Fatalf("failed = %+v, want 2 entries", failed)
+	}
+	names := map[string]bool{}
+	for _, ws := range failed {
+		names[ws.Name] = true
+	}
+	if !names["ws-03"] || !names["ws-11"] {
+		t.Fatalf("failed names = %v, want ws-03 and ws-11", names)
 	}
 }
 
