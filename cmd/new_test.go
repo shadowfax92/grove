@@ -54,7 +54,7 @@ func TestCreateWorktreeUsesFromStartPoint(t *testing.T) {
 		Type: "worktree",
 	}
 
-	if err := createWorktree(repo, "agent", "feat/base", mgr, st, true); err != nil {
+	if err := createWorktree(repo, "agent", "feat/base", mgr, st, true, false); err != nil {
 		t.Fatalf("createWorktree() error = %v", err)
 	}
 
@@ -82,7 +82,7 @@ func TestCreateWorktreeStoresConfiguredWorkdirAsStartPath(t *testing.T) {
 		Workdir: "packages/app",
 	}
 
-	if err := createWorktree(repo, "agent", "", mgr, st, true); err != nil {
+	if err := createWorktree(repo, "agent", "", mgr, st, true, false); err != nil {
 		t.Fatalf("createWorktree() error = %v", err)
 	}
 

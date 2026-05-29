@@ -1,24 +1,17 @@
 package names
 
 import (
-	"strings"
+	"regexp"
 	"testing"
-	"time"
 )
 
 func TestGenerateBranchFormat(t *testing.T) {
 	branch := GenerateBranch(nil)
 
-	if !strings.HasPrefix(branch, "fix/") {
-		t.Fatalf("GenerateBranch() = %q, want fix/ prefix", branch)
-	}
-	suffix := "-" + time.Now().Format("02-01-06")
-	if !strings.HasSuffix(branch, suffix) {
-		t.Fatalf("GenerateBranch() = %q, want %q suffix", branch, suffix)
-	}
-	animal := strings.TrimSuffix(strings.TrimPrefix(branch, "fix/"), suffix)
-	if animal == "" {
-		t.Fatalf("GenerateBranch() = %q, missing animal segment", branch)
+	// fix/<mmdd>-<hhmm>-<animal>
+	pattern := regexp.MustCompile(`^fix/\d{4}-\d{4}-[a-z]`)
+	if !pattern.MatchString(branch) {
+		t.Fatalf("GenerateBranch() = %q, want fix/<mmdd>-<hhmm>-<animal>", branch)
 	}
 }
 

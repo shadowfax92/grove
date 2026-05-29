@@ -17,6 +17,7 @@ import (
 
 func init() {
 	newCmd.Flags().Bool("no-prepare", false, "Skip prepare commands before worktree creation")
+	newCmd.Flags().BoolP("manual", "m", false, "Prompt for the branch name instead of auto-generating")
 	newCmd.Flags().String("from", "", "Create a new branch from this start point")
 	rootCmd.AddCommand(newCmd)
 }
@@ -30,13 +31,16 @@ var newCmd = &cobra.Command{
 creates the workspace and cd's into it.
 
   grove new                 — pick a repo (or type a plain workspace name), then create + cd
-  grove new <repo>          — auto-create a fix/<animal>-<dd-mm-yy> branch in repo + cd
+  grove new <repo>          — auto-create a fix/<mmdd>-<hhmm>-<animal> branch in repo + cd
+  grove new -m              — pick a repo, then prompt for the branch name
+  grove new <repo> -m       — prompt for the branch name instead of auto-generating
   grove new <repo> <branch> — create (or check out) a specific branch + cd
   grove new <repo> <branch> --from <base>
                             — create <branch> from <base>
   grove new <name>          — plain workspace (if name doesn't match a repo)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		noPrepare, _ := cmd.Flags().GetBool("no-prepare")
+		manual, _ := cmd.Flags().GetBool("manual")
 		from, _ := cmd.Flags().GetString("from")
 
 		cfg, err := config.Load()
@@ -88,7 +92,7 @@ creates the workspace and cd's into it.
 			if repo.Type == "dir" {
 				return createDirWorkspace(repo, branch, mgr, st)
 			}
-			return createWorktree(repo, branch, from, mgr, st, noPrepare)
+			return createWorktree(repo, branch, from, mgr, st, noPrepare, manual)
 		}
 		return createPlain(name, mgr, st)
 	},
@@ -122,7 +126,14 @@ func createPlain(name string, mgr *state.StateManager, st *state.State) error {
 	return nil
 }
 
-func createWorktree(repo *config.RepoConfig, branch, from string, mgr *state.StateManager, st *state.State, noPrepare bool) error {
+func createWorktree(repo *config.RepoConfig, branch, from string, mgr *state.StateManager, st *state.State, noPrepare, manual bool) error {
+	if branch == "" && manual {
+		prompted, err := promptNameFzf("branch > ", "Type a branch name or Enter for auto")
+		if err != nil {
+			return err
+		}
+		branch = prompted
+	}
 	if branch == "" {
 		branch = names.GenerateBranch(existingWorktreeNames(st, repo.Name))
 	}
