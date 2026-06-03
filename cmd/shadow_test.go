@@ -103,6 +103,9 @@ case "$1" in
     exit 0
     ;;
   display-message)
+    if [ "$3" = "$TMUX_FAKE_MISSING_PANE" ]; then
+      exit 1
+    fi
     case "$5" in
       '#{pane_current_path}')
         printf '%s\n' '/tmp/grove-test'
@@ -195,4 +198,32 @@ func assertLogContainsSubstring(t *testing.T, log []string, want string) {
 		}
 	}
 	t.Fatalf("tmux log missing substring %q; got:\n%s", want, strings.Join(log, "\n"))
+}
+
+func assertLogNotContains(t *testing.T, log []string, want string) {
+	t.Helper()
+
+	for _, line := range log {
+		if line == want {
+			t.Fatalf("tmux log unexpectedly contained %q; got:\n%s", want, strings.Join(log, "\n"))
+		}
+	}
+}
+
+func assertLogOrder(t *testing.T, log []string, first, second string) {
+	t.Helper()
+
+	firstIndex := -1
+	secondIndex := -1
+	for i, line := range log {
+		if line == first && firstIndex == -1 {
+			firstIndex = i
+		}
+		if line == second && secondIndex == -1 {
+			secondIndex = i
+		}
+	}
+	if firstIndex == -1 || secondIndex == -1 || firstIndex >= secondIndex {
+		t.Fatalf("tmux log order mismatch, wanted %q before %q; got:\n%s", first, second, strings.Join(log, "\n"))
+	}
 }

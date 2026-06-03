@@ -78,5 +78,23 @@ func TestNormalPaneMaximizeRestoreSwapsPaneBack(t *testing.T) {
 	log := readFakeTmuxLog(t, logPath)
 	assertLogContains(t, log, "display-popup -C -c main-client")
 	assertLogContains(t, log, "swap-pane -s %7 -t %42")
+	assertLogContains(t, log, "select-pane -t %7")
 	assertLogContains(t, log, "kill-session -t =gm/7")
+	assertLogOrder(t, log, "swap-pane -s %7 -t %42", "display-popup -C -c main-client")
+	assertLogOrder(t, log, "select-pane -t %7", "display-popup -C -c main-client")
+}
+
+func TestNormalPaneMaximizeRestoreDoesNotKillRealPaneWhenPlaceholderMissing(t *testing.T) {
+	logPath := installFakeTmux(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("TMUX_FAKE_MISSING_PANE", "%42")
+
+	err := executeRootForTest(t, "maximize", "fallback-client", "gm/7", "%7")
+	if err == nil {
+		t.Fatal("normal pane maximize restore should fail when placeholder is missing")
+	}
+
+	log := readFakeTmuxLog(t, logPath)
+	assertLogNotContains(t, log, "display-popup -C -c main-client")
+	assertLogNotContains(t, log, "kill-session -t =gm/7")
 }

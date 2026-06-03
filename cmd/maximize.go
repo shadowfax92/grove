@@ -148,17 +148,25 @@ func restoreMaximizedPane(clientName, currentSession string) error {
 		return fmt.Errorf("getting maximize placeholder pane: %w", err)
 	}
 
-	if err := tmux.ClosePopup(popupClient); err != nil {
-		return fmt.Errorf("closing popup: %w", err)
-	}
-	if !tmux.PaneExists(originPane) || !tmux.PaneExists(placeholderPane) {
+	if !tmux.PaneExists(originPane) {
+		_ = tmux.ClosePopup(popupClient)
 		return tmux.KillSession(currentSession)
+	}
+	if !tmux.PaneExists(placeholderPane) {
+		return fmt.Errorf("cannot restore maximize popup: placeholder pane %s is missing", placeholderPane)
 	}
 	if err := tmux.SwapPane(originPane, placeholderPane); err != nil {
 		return fmt.Errorf("restoring pane from maximize popup: %w", err)
 	}
+	if err := tmux.SelectPane(originPane); err != nil {
+		return fmt.Errorf("selecting restored pane: %w", err)
+	}
+	closeErr := tmux.ClosePopup(popupClient)
 	if err := tmux.KillSession(currentSession); err != nil {
 		return fmt.Errorf("removing maximize session: %w", err)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("closing popup: %w", closeErr)
 	}
 	return nil
 }
