@@ -81,7 +81,7 @@ grove config
 
 If the pane's directory has changed since the shadow was created, the shadow is recreated in the new directory. When panes are closed, orphaned shadow sessions are automatically cleaned up.
 
-`Ctrl+Shift+Y` opens a full-screen focus popup, then creates blank 25% gutters inside that popup so the active buffer sits in the centered 50% column. Because the popup covers the full tmux client, the background panes are hidden instead of showing through the side padding. For normal panes, Grove swaps the pane with a temporary placeholder before opening the popup, then swaps it back on restore so the original layout slot is preserved.
+`Ctrl+Shift+Y` opens a full-screen focus popup, then creates blank 18% gutters inside that popup so the active buffer sits in the centered 64% column. Because the popup covers the full tmux client, the background panes are hidden instead of showing through the side padding. For normal panes, Grove swaps the pane with a temporary placeholder before opening the popup, then swaps it back on restore so the original layout slot is preserved.
 
 ### Ctrl+Shift+Y in Kitty
 

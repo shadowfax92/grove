@@ -23,9 +23,10 @@ const (
 	maximizePopupClientKey    = "maximize_popup_client"
 	focusPopupWidth           = "100%"
 	focusPopupHeight          = "100%"
-	focusLeftGutterPercent    = 25
-	focusRightGutterPercent   = 33
-	blankPaneCommand          = "while :; do sleep 3600; done"
+	focusLeftGutterPercent    = 18
+	// The right split is relative to the post-left-gutter 82% pane.
+	focusRightGutterPercent = 22
+	blankPaneCommand        = "while :; do sleep 3600; done"
 )
 
 func init() {
