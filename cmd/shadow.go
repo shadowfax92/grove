@@ -78,6 +78,9 @@ var shadowToggleCmd = &cobra.Command{
 		if err := tmux.SetSessionVar(targetSession, "shadow_client_name", popupClient); err != nil {
 			return fmt.Errorf("storing shadow client: %w", err)
 		}
+		if err := cleanupShadowFocusLayout(targetSession); err != nil {
+			return err
+		}
 		if err := tmux.SetSessionVar(targetSession, shadowPopupModeKey, shadowPopupModeNormal); err != nil {
 			return fmt.Errorf("storing popup mode: %w", err)
 		}

@@ -166,6 +166,28 @@ func TogglePaneZoom(target string) error {
 	return err
 }
 
+func SplitPaneHorizontal(target, startDir string, before bool, percent int, command string) (string, error) {
+	args := []string{"split-window", "-h"}
+	if before {
+		args = append(args, "-b")
+	}
+	args = append(args, "-t", target, "-p", strconv.Itoa(percent), "-c", startDir, "-P", "-F", "#{pane_id}")
+	if command != "" {
+		args = append(args, command)
+	}
+	return run(args...)
+}
+
+func SelectPane(target string) error {
+	_, err := run("select-pane", "-t", target)
+	return err
+}
+
+func KillPane(target string) error {
+	_, err := run("kill-pane", "-t", target)
+	return err
+}
+
 func SwapPane(source, target string) error {
 	_, err := run("swap-pane", "-s", source, "-t", target)
 	return err

@@ -12,13 +12,20 @@ import (
 )
 
 const (
-	shadowPopupModeKey       = "shadow_popup_mode"
-	shadowPopupModeNormal    = "normal"
-	shadowPopupModeMaximized = "maximized"
-	maximizePrefix           = "gm"
-	maximizeOriginPaneKey    = "maximize_origin_pane"
-	maximizePlaceholderKey   = "maximize_placeholder_pane"
-	maximizePopupClientKey   = "maximize_popup_client"
+	shadowPopupModeKey        = "shadow_popup_mode"
+	shadowPopupModeNormal     = "normal"
+	shadowPopupModeMaximized  = "maximized"
+	shadowPopupLeftGutterKey  = "shadow_popup_left_gutter"
+	shadowPopupRightGutterKey = "shadow_popup_right_gutter"
+	maximizePrefix            = "gm"
+	maximizeOriginPaneKey     = "maximize_origin_pane"
+	maximizePlaceholderKey    = "maximize_placeholder_pane"
+	maximizePopupClientKey    = "maximize_popup_client"
+	focusPopupWidth           = "100%"
+	focusPopupHeight          = "100%"
+	focusLeftGutterPercent    = 25
+	focusRightGutterPercent   = 33
+	blankPaneCommand          = "while :; do sleep 3600; done"
 )
 
 func init() {
@@ -56,11 +63,6 @@ func maximizeName(paneID string) string {
 }
 
 func maximizePaneAsPopup(clientName, activePane string) error {
-	cfg, err := config.LoadFast()
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-
 	sessionName, placeholderPane, err := createMaximizeSession(activePane)
 	if err != nil {
 		return err
@@ -73,9 +75,14 @@ func maximizePaneAsPopup(clientName, activePane string) error {
 		_ = tmux.KillSession(sessionName)
 		return fmt.Errorf("moving pane into maximize popup: %w", err)
 	}
+	if err := tmux.SelectPane(activePane); err != nil {
+		_ = tmux.SwapPane(activePane, placeholderPane)
+		_ = tmux.KillSession(sessionName)
+		return fmt.Errorf("selecting maximized pane: %w", err)
+	}
 
 	command := fmt.Sprintf("exec tmux attach-session -t '=%s'", sessionName)
-	if err := tmux.DisplayPopup(clientName, cfg.Shadow.Popup.MaxWidth, cfg.Shadow.Popup.MaxHeight, command); err != nil {
+	if err := tmux.DisplayPopup(clientName, focusPopupWidth, focusPopupHeight, command); err != nil {
 		_ = tmux.SwapPane(activePane, placeholderPane)
 		_ = tmux.KillSession(sessionName)
 		return fmt.Errorf("opening maximize popup: %w", err)
@@ -96,7 +103,7 @@ func createMaximizeSession(activePane string) (string, string, error) {
 			return "", "", fmt.Errorf("removing stale maximize session: %w", err)
 		}
 	}
-	if err := tmux.NewSessionWithCommand(sessionName, paneCwd, nil, "while :; do sleep 3600; done"); err != nil {
+	if err := tmux.NewSessionWithCommand(sessionName, paneCwd, nil, blankPaneCommand); err != nil {
 		return "", "", fmt.Errorf("creating maximize session: %w", err)
 	}
 
@@ -104,6 +111,10 @@ func createMaximizeSession(activePane string) (string, string, error) {
 	if err != nil {
 		_ = tmux.KillSession(sessionName)
 		return "", "", fmt.Errorf("finding placeholder pane: %w", err)
+	}
+	if err := createCenteredGutters(placeholderPane, paneCwd); err != nil {
+		_ = tmux.KillSession(sessionName)
+		return "", "", fmt.Errorf("creating maximize gutters: %w", err)
 	}
 	return sessionName, placeholderPane, nil
 }
@@ -170,8 +181,8 @@ func toggleShadowPopupSize(clientName, currentSession, activePane string) error 
 		return shadow.CleanupOrphans()
 	}
 
-	width := cfg.Shadow.Popup.MaxWidth
-	height := cfg.Shadow.Popup.MaxHeight
+	width := focusPopupWidth
+	height := focusPopupHeight
 	nextMode := shadowPopupModeMaximized
 
 	currentMode, _ := tmux.GetSessionVar(currentSession, shadowPopupModeKey)
@@ -185,6 +196,13 @@ func toggleShadowPopupSize(clientName, currentSession, activePane string) error 
 	if err := tmux.ClosePopup(popupClient); err != nil {
 		return fmt.Errorf("closing popup: %w", err)
 	}
+	if nextMode == shadowPopupModeMaximized {
+		if err := prepareShadowFocusLayout(currentSession, activePane); err != nil {
+			return err
+		}
+	} else if err := cleanupShadowFocusLayout(currentSession); err != nil {
+		return err
+	}
 	if err := tmux.SetSessionVar(currentSession, shadowPopupModeKey, nextMode); err != nil {
 		return fmt.Errorf("storing popup mode: %w", err)
 	}
@@ -192,5 +210,90 @@ func toggleShadowPopupSize(clientName, currentSession, activePane string) error 
 		return fmt.Errorf("opening popup: %w", err)
 	}
 
+	return nil
+}
+
+func createCenteredGutters(centerPane, startDir string) error {
+	leftGutter, err := tmux.SplitPaneHorizontal(centerPane, startDir, true, focusLeftGutterPercent, blankPaneCommand)
+	if err != nil {
+		return fmt.Errorf("creating left gutter: %w", err)
+	}
+	rightGutter, err := tmux.SplitPaneHorizontal(centerPane, startDir, false, focusRightGutterPercent, blankPaneCommand)
+	if err != nil {
+		_ = tmux.KillPane(leftGutter)
+		return fmt.Errorf("creating right gutter: %w", err)
+	}
+	if err := tmux.SelectPane(centerPane); err != nil {
+		_ = tmux.KillPane(leftGutter)
+		_ = tmux.KillPane(rightGutter)
+		return fmt.Errorf("selecting centered pane: %w", err)
+	}
+	return nil
+}
+
+func prepareShadowFocusLayout(sessionName, centerPane string) error {
+	if err := cleanupShadowFocusLayout(sessionName); err != nil {
+		return err
+	}
+
+	paneCwd, err := tmux.PaneCwd(centerPane)
+	if err != nil {
+		return fmt.Errorf("getting shadow pane cwd: %w", err)
+	}
+	leftGutter, rightGutter, err := createTrackedCenteredGutters(centerPane, paneCwd)
+	if err != nil {
+		return err
+	}
+	if err := tmux.SetSessionVar(sessionName, shadowPopupLeftGutterKey, leftGutter); err != nil {
+		_ = tmux.KillPane(leftGutter)
+		_ = tmux.KillPane(rightGutter)
+		return fmt.Errorf("storing left shadow gutter: %w", err)
+	}
+	if err := tmux.SetSessionVar(sessionName, shadowPopupRightGutterKey, rightGutter); err != nil {
+		_ = tmux.KillPane(leftGutter)
+		_ = tmux.KillPane(rightGutter)
+		return fmt.Errorf("storing right shadow gutter: %w", err)
+	}
+	return nil
+}
+
+func createTrackedCenteredGutters(centerPane, startDir string) (string, string, error) {
+	leftGutter, err := tmux.SplitPaneHorizontal(centerPane, startDir, true, focusLeftGutterPercent, blankPaneCommand)
+	if err != nil {
+		return "", "", fmt.Errorf("creating left gutter: %w", err)
+	}
+	rightGutter, err := tmux.SplitPaneHorizontal(centerPane, startDir, false, focusRightGutterPercent, blankPaneCommand)
+	if err != nil {
+		_ = tmux.KillPane(leftGutter)
+		return "", "", fmt.Errorf("creating right gutter: %w", err)
+	}
+	if err := tmux.SelectPane(centerPane); err != nil {
+		_ = tmux.KillPane(leftGutter)
+		_ = tmux.KillPane(rightGutter)
+		return "", "", fmt.Errorf("selecting centered pane: %w", err)
+	}
+	return leftGutter, rightGutter, nil
+}
+
+func cleanupShadowFocusLayout(sessionName string) error {
+	if err := cleanupShadowGutter(sessionName, shadowPopupLeftGutterKey); err != nil {
+		return err
+	}
+	return cleanupShadowGutter(sessionName, shadowPopupRightGutterKey)
+}
+
+func cleanupShadowGutter(sessionName, key string) error {
+	paneID, err := tmux.GetSessionVar(sessionName, key)
+	if err != nil || paneID == "" {
+		return nil
+	}
+	if tmux.PaneExists(paneID) {
+		if err := tmux.KillPane(paneID); err != nil {
+			return fmt.Errorf("removing shadow gutter %s: %w", paneID, err)
+		}
+	}
+	if err := tmux.SetSessionVar(sessionName, key, ""); err != nil {
+		return fmt.Errorf("clearing shadow gutter state: %w", err)
+	}
 	return nil
 }
