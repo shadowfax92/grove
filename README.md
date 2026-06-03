@@ -51,7 +51,7 @@ shadow:
     target_rows: 70    # comfortable popup height in rows
     width: "80%"       # legacy fallback if target_cols/rows are 0
     height: "95%"
-    max_width: "100%"  # maximize fills the screen
+    max_width: "40%"   # maximize keeps ~30% empty space on each side
     max_height: "100%"
   keys:
     vim: M-i
@@ -81,7 +81,7 @@ grove config
 
 If the pane's directory has changed since the shadow was created, the shadow is recreated in the new directory. When panes are closed, orphaned shadow sessions are automatically cleaned up.
 
-`Ctrl+Shift+Y` opens a full-screen maximize popup using `max_width` and `max_height` (both default to `100%` for a distraction-free focus view). Set them lower for a centered popup with gaps. For normal panes, Grove swaps the pane with a temporary placeholder before opening the popup, then swaps it back on restore so the original layout slot is preserved.
+`Ctrl+Shift+Y` opens a full-height centered maximize popup using `max_width` and `max_height`. The default `max_width: "40%"` leaves roughly 30% empty space on each side of an ultrawide monitor while keeping the active buffer centered. For normal panes, Grove swaps the pane with a temporary placeholder before opening the popup, then swaps it back on restore so the original layout slot is preserved.
 
 ### Ctrl+Shift+Y in Kitty
 

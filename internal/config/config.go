@@ -84,7 +84,7 @@ func (c *Config) setDefaults() {
 		c.Shadow.Popup.Height = "85%"
 	}
 	if c.Shadow.Popup.MaxWidth == "" {
-		c.Shadow.Popup.MaxWidth = "100%"
+		c.Shadow.Popup.MaxWidth = "40%"
 	}
 	if c.Shadow.Popup.MaxHeight == "" {
 		c.Shadow.Popup.MaxHeight = "100%"
