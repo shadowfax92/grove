@@ -21,9 +21,6 @@ func TestNewWorktreeRepoUsesInitDefaults(t *testing.T) {
 	if got, want := repo.DefaultBranch, "main"; got != want {
 		t.Fatalf("DefaultBranch = %q, want %q", got, want)
 	}
-	if got, want := repo.Layout, "dev"; got != want {
-		t.Fatalf("Layout = %q, want %q", got, want)
-	}
 	if repo.Type != "" {
 		t.Fatalf("Type = %q, want empty worktree default", repo.Type)
 	}
@@ -50,7 +47,6 @@ func TestAddRepoToFileAppendsWorktreeRepo(t *testing.T) {
 		"repos:",
 		"  - path: " + existingPath,
 		"    name: existing",
-		"    layout: dev",
 		"",
 	}, "\n"))
 
@@ -75,7 +71,6 @@ func TestAddRepoToFileAppendsWorktreeRepo(t *testing.T) {
 			t.Fatalf("config missing %q:\n%s", want, out)
 		}
 	}
-
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		t.Fatalf("parsing updated config: %v", err)

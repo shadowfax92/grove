@@ -93,6 +93,60 @@ func TestCreateWorktreeStoresConfiguredWorkdirAsStartPath(t *testing.T) {
 	}
 }
 
+func TestCreateDirWorkspaceRunsPrepareCommands(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := t.TempDir()
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	st := &state.State{Version: 1}
+	repo := &config.RepoConfig{
+		Name: "main",
+		Path: repoPath,
+		Type: "dir",
+		Prepare: []string{
+			"printf prepared > prepared.txt",
+		},
+	}
+
+	if err := createDirWorkspace(repo, "agent", mgr, st, false); err != nil {
+		t.Fatalf("createDirWorkspace() error = %v", err)
+	}
+
+	if got, err := os.ReadFile(filepath.Join(repoPath, "prepared.txt")); err != nil || string(got) != "prepared" {
+		t.Fatalf("prepared.txt = %q, %v; want prepared", got, err)
+	}
+}
+
+func TestCreateDirWorkspaceSkipsPrepareWhenRequested(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := t.TempDir()
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	st := &state.State{Version: 1}
+	repo := &config.RepoConfig{
+		Name: "main",
+		Path: repoPath,
+		Type: "dir",
+		Prepare: []string{
+			"printf prepared > prepared.txt",
+		},
+	}
+
+	if err := createDirWorkspace(repo, "agent", mgr, st, true); err != nil {
+		t.Fatalf("createDirWorkspace() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(repoPath, "prepared.txt")); !os.IsNotExist(err) {
+		t.Fatalf("prepared.txt stat error = %v, want not exist", err)
+	}
+}
+
 func initNewTestRepo(t *testing.T) string {
 	t.Helper()
 

@@ -16,7 +16,7 @@ import (
 )
 
 func init() {
-	newCmd.Flags().Bool("no-prepare", false, "Skip prepare commands before worktree creation")
+	newCmd.Flags().Bool("no-prepare", false, "Skip prepare commands before workspace creation")
 	newCmd.Flags().BoolP("manual", "m", false, "Prompt for the branch name instead of auto-generating")
 	newCmd.Flags().String("from", "", "Create a new branch from this start point")
 	rootCmd.AddCommand(newCmd)
@@ -90,7 +90,7 @@ creates the workspace and cd's into it.
 				return createPlainRepo(repo, branch, mgr, st)
 			}
 			if repo.Type == "dir" {
-				return createDirWorkspace(repo, branch, mgr, st)
+				return createDirWorkspace(repo, branch, mgr, st, noPrepare)
 			}
 			return createWorktree(repo, branch, from, mgr, st, noPrepare, manual)
 		}
@@ -146,15 +146,8 @@ func createWorktree(repo *config.RepoConfig, branch, from string, mgr *state.Sta
 	worktreePath := filepath.Join(repo.Path, ".grove", "worktrees", branch)
 
 	if !noPrepare {
-		for _, prepCmd := range repo.Prepare {
-			fmt.Fprintf(os.Stderr, "Preparing: %s\n", prepCmd)
-			c := exec.Command("sh", "-c", prepCmd)
-			c.Dir = repo.Path
-			c.Stdout = os.Stderr
-			c.Stderr = os.Stderr
-			if err := c.Run(); err != nil {
-				return fmt.Errorf("prepare command %q failed: %w", prepCmd, err)
-			}
+		if err := runPrepareCommands(repo); err != nil {
+			return err
 		}
 	}
 
@@ -200,7 +193,7 @@ func createWorktree(repo *config.RepoConfig, branch, from string, mgr *state.Sta
 	return nil
 }
 
-func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State) error {
+func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State, noPrepare bool) error {
 	if name == "" {
 		existing := existingDirNames(st, repo.Name)
 		prompted, err := promptNameFzf("name > ", "Type a name or enter for random")
@@ -217,6 +210,12 @@ func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateMa
 	sessionName := fmt.Sprintf("g/%s/%s", repo.Name, name)
 	if mgr.FindBySession(st, sessionName) != nil {
 		return fmt.Errorf("workspace %q already exists", repo.Name+"/"+name)
+	}
+
+	if !noPrepare {
+		if err := runPrepareCommands(repo); err != nil {
+			return err
+		}
 	}
 
 	startDir := repo.Path
@@ -237,6 +236,21 @@ func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateMa
 	}
 
 	fmt.Println(startDir)
+	return nil
+}
+
+// runPrepareCommands runs repo-scoped shell commands before Grove records a workspace.
+func runPrepareCommands(repo *config.RepoConfig) error {
+	for _, prepCmd := range repo.Prepare {
+		fmt.Fprintf(os.Stderr, "Preparing: %s\n", prepCmd)
+		c := exec.Command("sh", "-c", prepCmd)
+		c.Dir = repo.Path
+		c.Stdout = os.Stderr
+		c.Stderr = os.Stderr
+		if err := c.Run(); err != nil {
+			return fmt.Errorf("prepare command %q failed: %w", prepCmd, err)
+		}
+	}
 	return nil
 }
 

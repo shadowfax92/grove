@@ -18,7 +18,6 @@ type RepoConfig struct {
 	Name          string   `yaml:"name"`
 	Type          string   `yaml:"type"`
 	DefaultBranch string   `yaml:"default_branch"`
-	Layout        string   `yaml:"layout"`
 	Workdir       string   `yaml:"workdir"`
 	Prepare       []string `yaml:"prepare"`
 	Setup         []string `yaml:"setup"`
@@ -41,7 +40,6 @@ func NewWorktreeRepo(path, name, defaultBranch string) RepoConfig {
 		Path:          path,
 		Name:          name,
 		DefaultBranch: defaultBranch,
-		Layout:        "dev",
 		Prepare: []string{
 			DefaultPrepareCleanCommand,
 			"git checkout " + defaultBranch,
@@ -348,9 +346,6 @@ func renderRepoEntry(repo RepoConfig) string {
 	}
 	if repo.DefaultBranch != "" {
 		b.WriteString("    default_branch: " + yamlScalar(repo.DefaultBranch) + "\n")
-	}
-	if repo.Layout != "" {
-		b.WriteString("    layout: " + yamlScalar(repo.Layout) + "\n")
 	}
 	if repo.Workdir != "" {
 		b.WriteString("    workdir: " + yamlScalar(repo.Workdir) + "\n")

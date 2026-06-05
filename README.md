@@ -12,7 +12,7 @@ Grove manages repo worktrees, plain workspaces, and tmux sessions, but the defau
 
 ## Install
 
-Requires Go 1.21+, tmux 3.3+, [fzf](https://github.com/junegunn/fzf), and optionally [`layouts`](https://github.com/shadowfax92/layouts) for session layouts.
+Requires Go 1.21+, tmux 3.3+, and [fzf](https://github.com/junegunn/fzf).
 
 ```sh
 git clone <repo-url> grove
@@ -74,7 +74,6 @@ shadow:
 repos:
   - path: ~/code/mono
     name: mono
-    layout: dev
     setup:
       - bun install
       - cp .env.example .env
