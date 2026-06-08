@@ -2,17 +2,11 @@
 
 Tmux workspaces powered by git worktrees.
 
-Grove manages repo worktrees, plain workspaces, and tmux sessions, but the default interaction is now picker-first and path-first:
-
-- `grove` picks an existing workspace and prints its path
-- `grove new` creates a workspace and prints its path
-- `grove new --tmux` creates the workspace and a tmux session
-- `grove rm` starts with Grove-managed workspaces and lets `gs/` searches reach shadow sessions
-- `grove rm --shadow` opens a shadow-session-only cleanup picker sorted by recent toggle/activity
+Grove keeps workspace state, creates git worktrees, and prints paths so shell wrappers can move you there. The core CLI is path-first: commands print the destination path, and the `gv` fish helper turns those paths into `cd`.
 
 ## Install
 
-Requires Go 1.21+, tmux 3.3+, and [fzf](https://github.com/junegunn/fzf).
+Requires Go 1.21+, git, tmux, and [fzf](https://github.com/junegunn/fzf).
 
 ```sh
 git clone <repo-url> grove
@@ -20,20 +14,17 @@ cd grove
 make install
 ```
 
-For fish, install the `gv` helper:
-
-```sh
-make fish
-```
+`make install` builds `grove`, installs it to `~/bin/grove`, signs it on macOS, and installs the fish `gv` helper to `~/.config/fish/functions/gv.fish`.
 
 Useful fish flows:
 
 ```fish
-gv                     # pick an existing workspace and cd into it
-gv n mono feat-auth    # create a workspace and cd into it
-gv nt mono feat-auth   # create a workspace and tmux session
-gv cd mono/feat-auth   # cd into an existing workspace
-gv dd                  # finish the cwd-backed workspace and cd home
+gv                          # pick an existing workspace and cd into it
+gv n mono feat/build-auth    # create a worktree and cd into it
+gv n --here fix/local-bug    # worktree the current git repo and cd into it
+gv cd mono/feat/build-auth   # cd into an existing workspace
+gv dd                        # finish the cwd-backed workspace and cd home
+gv ls                        # list workspaces
 ```
 
 ## Quick Start
@@ -42,118 +33,118 @@ gv dd                  # finish the cwd-backed workspace and cd home
 # 1. Add the current repo to config
 grove init
 
-# 2. Start grove — reconcile sessions and attach to tmux
-grove start
+# 2. Create worktrees
+grove new mono feat/build-auth          # prints ~/worktrees/mono/feat-build-auth
+grove new mono agent --from feat/base   # create agent from feat/base
+grove new --here chore/readme           # add cwd repo if needed, then create worktree
 
-# 3. Create workspaces
-grove new mono feat-auth              # create worktree and print its path
-grove new mono agent --from feat-auth # create new branch from feat-auth
-grove new --tmux mono feat-auth       # create worktree and tmux session
-grove new notes                       # plain workspace
+# 3. Find and remove workspaces
+grove cd mono/feat/build-auth
+grove done mono/feat/build-auth
+grove cleanup
 ```
 
-If you want shell `cd` behavior, use `gv` instead of `grove`.
+Use `gv` instead of `grove` when you want the shell to `cd` into the printed path.
 
 ## Config
 
 Location: `~/.config/grove/config.yaml`
 
-```yaml
-notify:
-  forward:
-    - mac-notify send "$MESSAGE" --source "$SESSION" --id "$SESSION"
+New config files include a global worktree root:
 
-shadow:
-  popup:
-    width: "80%"
-    height: "85%"
-  keys:
-    vim: "M-v"
-    shell: "M-b"
+```yaml
+worktree_root: ~/worktrees
 
 repos:
   - path: ~/code/mono
     name: mono
+    default_branch: main
+    prepare:
+      - git diff --quiet && git diff --cached --quiet || (echo "uncommitted changes in base repo" && exit 1)
+      - git checkout main
+      - git pull
     setup:
       - bun install
-      - cp .env.example .env
 
-  - path: ~/code/workers
-    name: workers
-    setup:
-      - npm install
+  - path: ~/code/special
+    name: special
+    default_branch: main
+    worktree_root: ~/scratch/special-worktrees
+
+  - path: ~/notes
+    name: notes
+    type: dir
 ```
 
-`notify.forward` runs shell commands when a workspace notification is sent. `$SESSION` and `$MESSAGE` are substituted.
+`worktree_root` at the top level is the shared base for normal repo worktrees. Grove creates worktrees at:
 
-`repos` defines the repositories Grove can create workspaces for. Worktree repos create git worktrees under `<repo>/.grove/worktrees/<name>/`. Plain repos create plain tmux workspaces rooted at home. Dir repos create named workspaces rooted inside a configured directory.
+```text
+<worktree_root>/<repo-name>/<branch-dashed>/
+```
 
-`grove init` appends a worktree repo entry for the current git root. It infers the config name from the directory, infers the default branch from `origin/HEAD`, `main`, `master`, or the current branch, and leaves `setup: []` for you to fill in later.
+For example, `grove new mono feat/build-auth` creates:
 
-## CLI
+```text
+~/worktrees/mono/feat-build-auth/
+```
+
+Repo-level `worktree_root` is an override for that repo. With `worktree_root: ~/scratch/special-worktrees` on `special`, Grove creates `~/scratch/special-worktrees/<branch-dashed>/` without adding the repo name again.
+
+If neither top-level nor repo-level `worktree_root` is set, Grove preserves the legacy location:
+
+```text
+<repo>/.grove/worktrees/<branch>/
+```
+
+### Repo Fields
+
+- `path`: base repo path.
+- `name`: config name used by commands and session names.
+- `type`: `worktree` by default. Use `dir` for directory-backed workspaces or `plain` for home-rooted plain workspaces.
+- `default_branch`: branch checked out by the default prepare commands.
+- `worktree_root`: optional per-repo override.
+- `workdir`: subdirectory to print and enter after a worktree is created.
+- `prepare`: commands run in the base repo before workspace creation.
+- `setup`: commands run in the new workspace after worktree creation.
+
+`grove init` appends a worktree repo entry for the current git root. It infers the config name from the directory, infers the default branch from `origin/HEAD`, `main`, `master`, or the current branch, and leaves `setup: []` for later.
+
+## Commands
 
 ```sh
-grove                        # pick an existing workspace and print its path
-grove init                   # add the current git repo to config
+grove                              # pick an existing workspace and print its path
+grove cd [workspace]               # pick or print an existing workspace path
+grove list                         # show Grove workspaces
+
+grove init                         # add the current git repo to config
 grove init --name mono --default-branch dev
-grove new                    # pick repo or type a workspace name, then print its path
-grove new mono               # pick or auto-generate branch in mono, then print its path
-grove new mono feat-auth     # create specific workspace and print its path
-grove new mono agent --from feat-auth
-grove new --tmux mono feat-auth
-grove cd                     # pick an existing workspace and print its path
-grove cd mono/feat-auth      # print a specific workspace path
-grove done --tmux            # finish current tmux workspace and switch to the next one
-grove done --cd              # finish cwd-backed workspace and print home
-grove rm                     # interactive remove picker
-grove rm --shadow            # interactive shadow-session cleanup picker
-grove rm mono/feat-auth      # remove specific workspace
-grove resources              # show tmux window CPU and memory usage
-grove resources --cleanup    # pick expensive tmux windows via fzf and kill them
-grove shadow cleanup         # remove orphaned shadow sessions
-grove shadow clean --inactive 1d
-grove list                   # show all Grove workspaces and status
-grove switch                 # pick workspace via fzf and switch tmux
-grove config                 # open config in $EDITOR
-grove config --path          # print config path
-grove notify "build done"    # send notification to current workspace
-grove notify clear           # clear notifications interactively
+grove config                       # open config in $EDITOR
+grove config --path                # print config path
+
+grove new                          # pick repo or type a plain workspace name
+grove new mono                     # auto-create a branch in mono
+grove new -m                       # prompt for branch name
+grove new mono feat/build-auth     # create or check out a specific branch
+grove new mono agent --from feat/base
+grove new --here fix/local-bug     # worktree the current git root
+grove new --no-prepare mono agent  # skip prepare commands
+
+grove which                        # print registered repo name for cwd
+grove which ~/code/mono/pkg        # print registered repo name for a path
+
+grove done [workspace]             # remove a workspace and print the next path
+grove rm [workspace...]            # remove workspaces and their worktrees
+grove rm -j 2                      # lower concurrent worktree deletion
+grove cleanup                      # remove orphaned worktrees under Grove roots
+grove cleanup --all -f             # remove all orphaned worktrees without prompts
 ```
 
-## Interaction Model
+`grove which [path]` exits non-zero for unregistered paths. It matches configured repo paths and Grove-managed worktrees.
 
-### Workspaces
+## Workspaces
 
-- Repo workspaces are git worktrees created under `<repo>/.grove/worktrees/<name>/`.
-- Plain workspaces are standalone Grove sessions rooted at home.
-- Session names use `g/<repo>/<branch>` for repo workspaces and `g/<name>` for plain workspaces.
+Worktree workspaces are git worktrees. Session and workspace names use `g/<repo>/<branch>`, while the directory name under shared roots uses a dashed branch name so `feat/build-auth` becomes `feat-build-auth`.
 
-### Start
+Dir workspaces reuse a configured directory instead of creating a worktree. Plain workspaces are standalone sessions rooted at home.
 
-`grove start` reads config and state, recreates missing tmux sessions for existing workspaces, installs the shadow-session keybindings, and attaches to tmux.
-
-### Remove Picker
-
-`grove rm` starts by showing Grove-managed workspaces only. When you begin filtering with `gs/`, the picker expands so shadow sessions are removable without cluttering the blank-state list.
-
-Use `grove rm --shadow` when you specifically want to clean up old shadow sessions. It lists only `gs/...` sessions, sorted by the last Grove toggle timestamp with tmux activity and session creation as fallbacks for older sessions. The picker shows opened, toggled, and active ages so stale shadows are easy to identify.
-
-### Shadow Cleanup
-
-`grove shadow cleanup` removes orphaned `gs/...` sessions by default. Use `--dry-run` to preview matches, `--inactive 1h` or `--inactive 1d` to clean old shadow sessions by tmux activity, or `--all` to clear every shadow session.
-
-### Resource Cleanup
-
-`grove resources` lists tmux windows, including `gs/...` shadow sessions, sorted by aggregate resident memory and then CPU. Each row accounts for the current descendant process tree under every pane root PID in that window, which covers normal pane-launched servers, test runners, editors, and shells.
-
-Use `grove resources --cleanup` to open an fzf picker ordered by the same usage data. Selected rows are killed with `tmux kill-window`; killing the only window in a shadow session removes that shadow session.
-
-## Notifications
-
-Any process running inside a Grove workspace can send a notification:
-
-```sh
-grove notify "build complete"
-```
-
-Notifications are stored in Grove state and shown in `grove list`. Switching to a workspace or clearing the notification removes the badge.
+`grove cleanup` finds git worktrees that exist on disk under Grove-owned roots but are no longer tracked in Grove state. It understands the global root layout, repo-level root overrides, and the legacy `.grove/worktrees` layout.
