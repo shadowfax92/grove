@@ -6,3 +6,4 @@ grove
 CLAUDE.local.md
 .llm/
 .DS_Store
+.grove/
