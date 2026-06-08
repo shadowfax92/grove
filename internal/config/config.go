@@ -10,7 +10,8 @@ import (
 )
 
 type Config struct {
-	Repos []RepoConfig `yaml:"repos"`
+	WorktreeRoot string       `yaml:"worktree_root,omitempty"`
+	Repos        []RepoConfig `yaml:"repos"`
 }
 
 type RepoConfig struct {
@@ -25,6 +26,7 @@ type RepoConfig struct {
 }
 
 const DefaultPrepareCleanCommand = `git diff --quiet && git diff --cached --quiet || (echo "uncommitted changes in base repo" && exit 1)`
+const DefaultWorktreeRoot = "~/worktrees"
 
 func DefaultConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
@@ -35,13 +37,12 @@ func DefaultConfigPath() (string, error) {
 }
 
 // NewWorktreeRepo builds the default config entry created by `grove init`.
-// The prepare commands keep the base checkout clean and on the configured branch before forking worktrees.
+// Shared worktree placement comes from the top-level config unless this entry is later given an override.
 func NewWorktreeRepo(path, name, defaultBranch string) RepoConfig {
 	return RepoConfig{
 		Path:          path,
 		Name:          name,
 		DefaultBranch: defaultBranch,
-		WorktreeRoot:  filepath.Join("~", "worktrees", name),
 		Prepare: []string{
 			DefaultPrepareCleanCommand,
 			"git checkout " + defaultBranch,
@@ -141,6 +142,7 @@ func (c *Config) resolve() error {
 		return err
 	}
 
+	c.WorktreeRoot = expandTilde(c.WorktreeRoot, home)
 	for i := range c.Repos {
 		c.Repos[i].Path = expandTilde(c.Repos[i].Path, home)
 		c.Repos[i].WorktreeRoot = expandTilde(c.Repos[i].WorktreeRoot, home)
@@ -153,6 +155,27 @@ func (c *Config) resolve() error {
 	}
 
 	return nil
+}
+
+// EffectiveWorktreeRoot returns the root used before appending a dashed branch directory.
+func (c *Config) EffectiveWorktreeRoot(repo *RepoConfig) string {
+	if repo == nil {
+		return ""
+	}
+	if repo.WorktreeRoot != "" {
+		return repo.WorktreeRoot
+	}
+	if c == nil || c.WorktreeRoot == "" {
+		return ""
+	}
+	name := repo.Name
+	if name == "" {
+		name = filepath.Base(repo.Path)
+	}
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		return ""
+	}
+	return filepath.Join(c.WorktreeRoot, name)
 }
 
 func (c *Config) validate() error {
@@ -192,14 +215,12 @@ func createDefault(path string) (*Config, error) {
 		return nil, err
 	}
 
-	cfg := &Config{
-		Repos: []RepoConfig{},
-	}
-	if err := cfg.resolve(); err != nil {
-		return nil, err
+	raw := Config{
+		WorktreeRoot: DefaultWorktreeRoot,
+		Repos:        []RepoConfig{},
 	}
 
-	data, err := yaml.Marshal(cfg)
+	data, err := yaml.Marshal(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +230,11 @@ func createDefault(path string) (*Config, error) {
 		return nil, err
 	}
 
-	return cfg, nil
+	cfg := raw
+	if err := cfg.resolve(); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
 }
 
 func expandTilde(path, home string) string {

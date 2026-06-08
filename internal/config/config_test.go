@@ -21,8 +21,8 @@ func TestNewWorktreeRepoUsesInitDefaults(t *testing.T) {
 	if got, want := repo.DefaultBranch, "main"; got != want {
 		t.Fatalf("DefaultBranch = %q, want %q", got, want)
 	}
-	if got, want := repo.WorktreeRoot, "~/worktrees/project"; got != want {
-		t.Fatalf("WorktreeRoot = %q, want %q", got, want)
+	if repo.WorktreeRoot != "" {
+		t.Fatalf("WorktreeRoot = %q, want empty repo override", repo.WorktreeRoot)
 	}
 	if repo.Type != "" {
 		t.Fatalf("Type = %q, want empty worktree default", repo.Type)
@@ -46,6 +46,7 @@ func TestAddRepoToFileAppendsWorktreeRepo(t *testing.T) {
 	projectPath := t.TempDir()
 	writeConfigFile(t, configPath, strings.Join([]string{
 		"# Grove configuration",
+		"worktree_root: ~/worktrees",
 		"shadow: {}",
 		"repos:",
 		"  - path: " + existingPath,
@@ -65,15 +66,18 @@ func TestAddRepoToFileAppendsWorktreeRepo(t *testing.T) {
 	out := string(data)
 	for _, want := range []string{
 		"# Grove configuration",
+		"worktree_root: ~/worktrees",
 		"name: project",
 		"default_branch: main",
-		"worktree_root: ~/worktrees/project",
 		"git checkout main",
 		"setup: []",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("config missing %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "    worktree_root:") {
+		t.Fatalf("config rendered repo-level worktree_root unexpectedly:\n%s", out)
 	}
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
@@ -90,16 +94,41 @@ func TestAddRepoToFileAppendsWorktreeRepo(t *testing.T) {
 	}
 }
 
-func TestLoadExpandsWorktreeRoot(t *testing.T) {
+func TestLoadCreatesDefaultGlobalWorktreeRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if got, want := cfg.WorktreeRoot, filepath.Join(home, "worktrees"); got != want {
+		t.Fatalf("WorktreeRoot = %q, want %q", got, want)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".config", "grove", "config.yaml"))
+	if err != nil {
+		t.Fatalf("reading default config: %v", err)
+	}
+	if out := string(data); !strings.Contains(out, "worktree_root: ~/worktrees") {
+		t.Fatalf("default config missing global worktree_root:\n%s", out)
+	}
+}
+
+func TestLoadExpandsWorktreeRoots(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	repoPath := t.TempDir()
+	overrideRepoPath := t.TempDir()
 	configPath := filepath.Join(home, ".config", "grove", "config.yaml")
 	writeConfigFile(t, configPath, strings.Join([]string{
+		"worktree_root: ~/worktrees",
 		"repos:",
 		"  - path: " + repoPath,
 		"    name: project",
-		"    worktree_root: ~/worktrees/project",
+		"  - path: " + overrideRepoPath,
+		"    name: custom",
+		"    worktree_root: ~/custom-worktrees",
 		"",
 	}, "\n"))
 
@@ -108,8 +137,30 @@ func TestLoadExpandsWorktreeRoot(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	if got, want := cfg.Repos[0].WorktreeRoot, filepath.Join(home, "worktrees", "project"); got != want {
+	if got, want := cfg.WorktreeRoot, filepath.Join(home, "worktrees"); got != want {
 		t.Fatalf("WorktreeRoot = %q, want %q", got, want)
+	}
+	if got, want := cfg.Repos[1].WorktreeRoot, filepath.Join(home, "custom-worktrees"); got != want {
+		t.Fatalf("repo override WorktreeRoot = %q, want %q", got, want)
+	}
+}
+
+func TestEffectiveWorktreeRoot(t *testing.T) {
+	cfg := &Config{WorktreeRoot: "/tmp/worktrees"}
+	repo := &RepoConfig{Name: "project", Path: "/tmp/project"}
+
+	if got, want := cfg.EffectiveWorktreeRoot(repo), "/tmp/worktrees/project"; got != want {
+		t.Fatalf("EffectiveWorktreeRoot(global) = %q, want %q", got, want)
+	}
+
+	repo.WorktreeRoot = "/tmp/custom"
+	if got, want := cfg.EffectiveWorktreeRoot(repo), "/tmp/custom"; got != want {
+		t.Fatalf("EffectiveWorktreeRoot(override) = %q, want %q", got, want)
+	}
+
+	repo.WorktreeRoot = ""
+	if got := (&Config{}).EffectiveWorktreeRoot(repo); got != "" {
+		t.Fatalf("EffectiveWorktreeRoot(no root) = %q, want empty", got)
 	}
 }
 
