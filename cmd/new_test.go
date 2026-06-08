@@ -264,6 +264,50 @@ func TestCreateWorktreeHereFromManagedWorktreeUsesRegisteredRepo(t *testing.T) {
 	}
 }
 
+func TestCreateWorktreeHereUsesNestedGitRepoOverRegisteredParent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	parentPath := initNewTestRepo(t)
+	writeNewTestCommit(t, parentPath, "base.txt", "base")
+	nestedPath := filepath.Join(parentPath, "deps", "nested")
+	if err := os.MkdirAll(nestedPath, 0755); err != nil {
+		t.Fatalf("creating nested repo dir: %v", err)
+	}
+	runNewTestGit(t, nestedPath, "init", "-b", "main")
+	runNewTestGit(t, nestedPath, "config", "user.name", "Grove Test")
+	runNewTestGit(t, nestedPath, "config", "user.email", "grove@example.test")
+	writeNewTestCommit(t, nestedPath, "nested.txt", "nested")
+
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	st := &state.State{Version: 1}
+	parentRoot := t.TempDir()
+	cfg := &config.Config{Repos: []config.RepoConfig{{
+		Name:         "parent",
+		Path:         parentPath,
+		Type:         "worktree",
+		WorktreeRoot: parentRoot,
+	}}}
+
+	if err := createWorktreeHere(nestedPath, "feat/nested", "", cfg, mgr, st, true); err != nil {
+		t.Fatalf("createWorktreeHere() error = %v", err)
+	}
+
+	if got, want := st.Workspaces[0].Repo, filepath.Base(nestedPath); got != want {
+		t.Fatalf("workspace Repo = %q, want %q", got, want)
+	}
+	wantWorktreePath := filepath.Join(home, "worktrees", filepath.Base(nestedPath), "feat-nested")
+	if got := st.Workspaces[0].WorktreePath; got != wantWorktreePath {
+		t.Fatalf("workspace WorktreePath = %q, want %q", got, wantWorktreePath)
+	}
+	if got := newTestGitOutput(t, wantWorktreePath, "branch", "--show-current"); got != "feat/nested" {
+		t.Fatalf("worktree branch = %q, want feat/nested", got)
+	}
+}
+
 func TestCreateWorktreeUsesHashSuffixForDashedBranchCollision(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

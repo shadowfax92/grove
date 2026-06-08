@@ -221,7 +221,22 @@ func createWorktree(repo *config.RepoConfig, branch, from string, mgr *state.Sta
 }
 
 func createWorktreeHere(cwd, branch, from string, cfg *config.Config, mgr *state.StateManager, st *state.State, noPrepare bool) error {
-	if repoName, err := repoNameForPath(cfg, st, cwd); err == nil {
+	repoRoot := git.RepoRoot(cwd)
+	if repoRoot == "" {
+		return fmt.Errorf("not inside a git repository")
+	}
+
+	if repo := findRepoByPath(cfg, repoRoot); repo != nil {
+		if repo.Type != "" && repo.Type != "worktree" {
+			return fmt.Errorf("repo %s is registered as type %s, not worktree", repo.Name, repo.Type)
+		}
+		return createWorktree(repo, branch, from, mgr, st, noPrepare, false)
+	}
+
+	if repoName := repoNameForManagedWorktreeRoot(st, repoRoot); repoName != "" {
+		if cfg == nil {
+			return fmt.Errorf("repo %s is tracked in state but config is unavailable", repoName)
+		}
 		repo := cfg.FindRepo(repoName)
 		if repo == nil {
 			return fmt.Errorf("repo %s is tracked in state but missing from config", repoName)
@@ -232,39 +247,47 @@ func createWorktreeHere(cwd, branch, from string, cfg *config.Config, mgr *state
 		return createWorktree(repo, branch, from, mgr, st, noPrepare, false)
 	}
 
-	repoRoot := git.RepoRoot(cwd)
-	if repoRoot == "" {
-		return fmt.Errorf("not inside a git repository")
+	defaultBranch := git.DefaultBranch(repoRoot)
+	if defaultBranch == "" {
+		return fmt.Errorf("could not infer default branch; run grove init --default-branch first")
 	}
-
-	repo := findRepoByPath(cfg, repoRoot)
+	newRepo := config.NewWorktreeRepo(repoRoot, filepath.Base(repoRoot), defaultBranch)
+	configPath, err := config.DefaultConfigPath()
+	if err != nil {
+		return err
+	}
+	if err := config.AddRepoToFile(configPath, newRepo); err != nil {
+		return err
+	}
+	refreshed, err := config.Load()
+	if err != nil {
+		return err
+	}
+	repo := findRepoByPath(refreshed, repoRoot)
 	if repo == nil {
-		defaultBranch := git.DefaultBranch(repoRoot)
-		if defaultBranch == "" {
-			return fmt.Errorf("could not infer default branch; run grove init --default-branch first")
-		}
-		newRepo := config.NewWorktreeRepo(repoRoot, filepath.Base(repoRoot), defaultBranch)
-		configPath, err := config.DefaultConfigPath()
-		if err != nil {
-			return err
-		}
-		if err := config.AddRepoToFile(configPath, newRepo); err != nil {
-			return err
-		}
-		refreshed, err := config.Load()
-		if err != nil {
-			return err
-		}
-		repo = findRepoByPath(refreshed, repoRoot)
-		if repo == nil {
-			return fmt.Errorf("repo %s was added to config but could not be loaded", repoRoot)
-		}
+		return fmt.Errorf("repo %s was added to config but could not be loaded", repoRoot)
 	}
 	if repo.Type != "" && repo.Type != "worktree" {
 		return fmt.Errorf("repo %s is registered as type %s, not worktree", repo.Name, repo.Type)
 	}
 
 	return createWorktree(repo, branch, from, mgr, st, noPrepare, false)
+}
+
+func repoNameForManagedWorktreeRoot(st *state.State, repoRoot string) string {
+	if st == nil {
+		return ""
+	}
+	target := cleanAbsPath(repoRoot)
+	for _, ws := range st.Workspaces {
+		if ws.Repo == "" || ws.WorktreePath == "" {
+			continue
+		}
+		if cleanAbsPath(ws.WorktreePath) == target {
+			return ws.Repo
+		}
+	}
+	return ""
 }
 
 func findRepoByPath(cfg *config.Config, repoPath string) *config.RepoConfig {
