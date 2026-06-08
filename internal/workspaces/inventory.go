@@ -231,8 +231,8 @@ func buildOrphans(st *state.State, cfg *config.Config) ([]OrphanWorktree, error)
 }
 
 func repoOwnsWorktreePath(repo config.RepoConfig, path string) bool {
-	groveWorktreePrefix := string(filepath.Separator) + ".grove" + string(filepath.Separator) + "worktrees" + string(filepath.Separator)
-	if strings.Contains(path, groveWorktreePrefix) {
+	legacyRoot := filepath.Join(repo.Path, ".grove", "worktrees")
+	if pathWithinClean(legacyRoot, path) {
 		return true
 	}
 	if repo.WorktreeRoot == "" {

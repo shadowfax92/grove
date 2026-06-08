@@ -66,6 +66,7 @@ func TestCleanupTargetsReturnsOrphanWorktreesOnly(t *testing.T) {
 		return []git.WorktreeInfo{
 			{Path: repoPath + "/.grove/worktrees/tracked", Branch: "tracked"},
 			{Path: repoPath + "/.grove/worktrees/orphan", Branch: "orphan"},
+			{Path: "/tmp/other/.grove/worktrees/foreign", Branch: "foreign"},
 			{Path: repoPath + "/external", Branch: "external"},
 			{Path: repoPath + "/.grove/worktrees/bare", Bare: true},
 		}, nil
