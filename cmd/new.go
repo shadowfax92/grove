@@ -273,10 +273,23 @@ func cleanAbsPath(path string) string {
 	}
 	if realPath, err := filepath.EvalSymlinks(path); err == nil {
 		path = realPath
-		if abs, err := filepath.Abs(path); err == nil {
-			path = abs
-		}
+		return filepath.Clean(path)
 	}
+
+	current := path
+	suffix := ""
+	for {
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		suffix = filepath.Join(filepath.Base(current), suffix)
+		if realParent, err := filepath.EvalSymlinks(parent); err == nil {
+			return filepath.Clean(filepath.Join(realParent, suffix))
+		}
+		current = parent
+	}
+
 	return filepath.Clean(path)
 }
 
