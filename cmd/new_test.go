@@ -33,6 +33,24 @@ func TestValidateNewFromFlagAllowsBranch(t *testing.T) {
 	}
 }
 
+func TestNewHereBranchRequiresExactlyOneBranch(t *testing.T) {
+	for _, args := range [][]string{nil, []string{"repo", "branch"}} {
+		if _, err := newHereBranch(args); err == nil {
+			t.Fatalf("newHereBranch(%#v) error = nil, want validation error", args)
+		}
+	}
+}
+
+func TestNewHereBranchReturnsBranch(t *testing.T) {
+	branch, err := newHereBranch([]string{"feat/here"})
+	if err != nil {
+		t.Fatalf("newHereBranch() error = %v", err)
+	}
+	if branch != "feat/here" {
+		t.Fatalf("branch = %q, want feat/here", branch)
+	}
+}
+
 func TestCreateWorktreeUsesFromStartPoint(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -125,6 +143,77 @@ func TestCreateWorktreeStoresConfiguredWorkdirAsStartPath(t *testing.T) {
 	want := filepath.Join(worktreePath, "packages/app")
 	if got := st.Workspaces[0].Path; got != want {
 		t.Fatalf("workspace Path = %q, want %q", got, want)
+	}
+}
+
+func TestCreateWorktreeHereAddsUnregisteredRepo(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoPath := initNewTestRepo(t)
+	writeNewTestCommit(t, repoPath, "base.txt", "base")
+
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	st := &state.State{Version: 1}
+	cfg := &config.Config{}
+
+	if err := createWorktreeHere(repoPath, "feat/here-thing", "", cfg, mgr, st, true); err != nil {
+		t.Fatalf("createWorktreeHere() error = %v", err)
+	}
+
+	repoName := filepath.Base(repoPath)
+	worktreePath := filepath.Join(home, "worktrees", repoName, "feat-here-thing")
+	if got := newTestGitOutput(t, worktreePath, "branch", "--show-current"); got != "feat/here-thing" {
+		t.Fatalf("worktree branch = %q, want feat/here-thing", got)
+	}
+	if got := st.Workspaces[0].WorktreePath; got != worktreePath {
+		t.Fatalf("workspace WorktreePath = %q, want %q", got, worktreePath)
+	}
+
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	if got, want := len(loaded.Repos), 1; got != want {
+		t.Fatalf("config repo count = %d, want %d", got, want)
+	}
+	if got := loaded.Repos[0].Name; got != repoName {
+		t.Fatalf("config repo name = %q, want %q", got, repoName)
+	}
+}
+
+func TestCreateWorktreeHereReusesRegisteredRepo(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := initNewTestRepo(t)
+	writeNewTestCommit(t, repoPath, "base.txt", "base")
+	root := t.TempDir()
+
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	st := &state.State{Version: 1}
+	cfg := &config.Config{Repos: []config.RepoConfig{{
+		Name:         "custom",
+		Path:         repoPath,
+		Type:         "worktree",
+		WorktreeRoot: root,
+	}}}
+
+	if err := createWorktreeHere(repoPath, "fix/sort-order", "", cfg, mgr, st, true); err != nil {
+		t.Fatalf("createWorktreeHere() error = %v", err)
+	}
+
+	worktreePath := filepath.Join(root, "fix-sort-order")
+	if got := st.Workspaces[0].Repo; got != "custom" {
+		t.Fatalf("workspace Repo = %q, want custom", got)
+	}
+	if got := st.Workspaces[0].WorktreePath; got != worktreePath {
+		t.Fatalf("workspace WorktreePath = %q, want %q", got, worktreePath)
 	}
 }
 
