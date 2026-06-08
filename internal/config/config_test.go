@@ -21,6 +21,9 @@ func TestNewWorktreeRepoUsesInitDefaults(t *testing.T) {
 	if got, want := repo.DefaultBranch, "main"; got != want {
 		t.Fatalf("DefaultBranch = %q, want %q", got, want)
 	}
+	if got, want := repo.WorktreeRoot, "~/worktrees/project"; got != want {
+		t.Fatalf("WorktreeRoot = %q, want %q", got, want)
+	}
 	if repo.Type != "" {
 		t.Fatalf("Type = %q, want empty worktree default", repo.Type)
 	}
@@ -64,6 +67,7 @@ func TestAddRepoToFileAppendsWorktreeRepo(t *testing.T) {
 		"# Grove configuration",
 		"name: project",
 		"default_branch: main",
+		"worktree_root: ~/worktrees/project",
 		"git checkout main",
 		"setup: []",
 	} {
@@ -83,6 +87,29 @@ func TestAddRepoToFileAppendsWorktreeRepo(t *testing.T) {
 	}
 	if got, want := cfg.Repos[1].Path, projectPath; got != want {
 		t.Fatalf("appended repo path = %q, want %q", got, want)
+	}
+}
+
+func TestLoadExpandsWorktreeRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repoPath := t.TempDir()
+	configPath := filepath.Join(home, ".config", "grove", "config.yaml")
+	writeConfigFile(t, configPath, strings.Join([]string{
+		"repos:",
+		"  - path: " + repoPath,
+		"    name: project",
+		"    worktree_root: ~/worktrees/project",
+		"",
+	}, "\n"))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if got, want := cfg.Repos[0].WorktreeRoot, filepath.Join(home, "worktrees", "project"); got != want {
+		t.Fatalf("WorktreeRoot = %q, want %q", got, want)
 	}
 }
 
