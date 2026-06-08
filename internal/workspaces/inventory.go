@@ -206,7 +206,7 @@ func buildOrphans(st *state.State, cfg *config.Config) ([]OrphanWorktree, error)
 			if wt.Bare || trackedPaths[cleanPath(wt.Path)] {
 				continue
 			}
-			if !repoOwnsWorktreePath(repo, wt.Path) {
+			if !repoOwnsWorktreePath(cfg, repo, wt.Path) {
 				continue
 			}
 			branch := wt.Branch
@@ -230,15 +230,19 @@ func buildOrphans(st *state.State, cfg *config.Config) ([]OrphanWorktree, error)
 	return orphans, nil
 }
 
-func repoOwnsWorktreePath(repo config.RepoConfig, path string) bool {
+func repoOwnsWorktreePath(cfg *config.Config, repo config.RepoConfig, path string) bool {
 	legacyRoot := filepath.Join(repo.Path, ".grove", "worktrees")
 	if pathWithinClean(legacyRoot, path) {
 		return true
 	}
-	if repo.WorktreeRoot == "" {
+	root := ""
+	if cfg != nil {
+		root = cfg.EffectiveWorktreeRoot(&repo)
+	}
+	if root == "" {
 		return false
 	}
-	return pathWithinClean(repo.WorktreeRoot, path)
+	return pathWithinClean(root, path)
 }
 
 func pathWithinClean(root, path string) bool {

@@ -98,6 +98,46 @@ func TestCleanupTargetsReturnsOrphanWorktreesOnly(t *testing.T) {
 }
 
 func TestCleanupTargetsIncludesConfiguredWorktreeRootOrphans(t *testing.T) {
+	globalRoot := "/tmp/worktrees"
+	worktreeRoot := globalRoot + "/mono"
+	restore := stubListWorktrees(func(repoPath string) ([]git.WorktreeInfo, error) {
+		return []git.WorktreeInfo{
+			{Path: worktreeRoot + "/tracked", Branch: "tracked"},
+			{Path: worktreeRoot + "/orphan", Branch: "orphan"},
+			{Path: "/tmp/worktrees/other/orphan", Branch: "external"},
+		}, nil
+	})
+	defer restore()
+
+	repoPath := "/tmp/mono"
+	st := &state.State{
+		Workspaces: []state.Workspace{
+			{Name: "mono/tracked", Type: "worktree", Repo: "mono", RepoPath: repoPath, WorktreePath: worktreeRoot + "/tracked", SessionName: "g/mono/tracked"},
+		},
+	}
+	cfg := &config.Config{
+		WorktreeRoot: globalRoot,
+		Repos:        []config.RepoConfig{{Name: "mono", Path: repoPath, Type: "worktree"}},
+	}
+
+	inv, err := Build(st, cfg)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	targets := inv.CleanupTargets()
+	if got, want := len(targets), 1; got != want {
+		t.Fatalf("cleanup target count = %d, want %d", got, want)
+	}
+	if got, want := targets[0].WorktreePath, worktreeRoot+"/orphan"; got != want {
+		t.Fatalf("orphan path = %q, want %q", got, want)
+	}
+	if got, want := targets[0].Label, "mono/orphan"; got != want {
+		t.Fatalf("orphan label = %q, want %q", got, want)
+	}
+}
+
+func TestCleanupTargetsIncludesRepoWorktreeRootOverrideOrphans(t *testing.T) {
 	worktreeRoot := "/tmp/worktrees/mono"
 	restore := stubListWorktrees(func(repoPath string) ([]git.WorktreeInfo, error) {
 		return []git.WorktreeInfo{

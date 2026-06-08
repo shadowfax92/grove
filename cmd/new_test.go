@@ -72,7 +72,7 @@ func TestCreateWorktreeUsesFromStartPoint(t *testing.T) {
 		Type: "worktree",
 	}
 
-	if err := createWorktree(repo, "agent", "feat/base", mgr, st, true, false); err != nil {
+	if err := createWorktree(&config.Config{}, repo, "agent", "feat/base", mgr, st, true, false); err != nil {
 		t.Fatalf("createWorktree() error = %v", err)
 	}
 
@@ -85,7 +85,7 @@ func TestCreateWorktreeUsesFromStartPoint(t *testing.T) {
 	}
 }
 
-func TestCreateWorktreeUsesConfiguredRootAndDashedBranch(t *testing.T) {
+func TestCreateWorktreeUsesGlobalRootAndDashedBranch(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	repoPath := initNewTestRepo(t)
@@ -98,20 +98,51 @@ func TestCreateWorktreeUsesConfiguredRootAndDashedBranch(t *testing.T) {
 	}
 	st := &state.State{Version: 1}
 	repo := &config.RepoConfig{
-		Name:         "mono",
-		Path:         repoPath,
-		Type:         "worktree",
-		WorktreeRoot: root,
+		Name: "mono",
+		Path: repoPath,
+		Type: "worktree",
 	}
+	cfg := &config.Config{WorktreeRoot: root}
 
-	if err := createWorktree(repo, "feat/build-payments", "", mgr, st, true, false); err != nil {
+	if err := createWorktree(cfg, repo, "feat/build-payments", "", mgr, st, true, false); err != nil {
 		t.Fatalf("createWorktree() error = %v", err)
 	}
 
-	worktreePath := filepath.Join(root, "feat-build-payments")
+	worktreePath := filepath.Join(root, "mono", "feat-build-payments")
 	if got := newTestGitOutput(t, worktreePath, "branch", "--show-current"); got != "feat/build-payments" {
 		t.Fatalf("worktree branch = %q, want feat/build-payments", got)
 	}
+	if got := st.Workspaces[0].WorktreePath; got != worktreePath {
+		t.Fatalf("workspace WorktreePath = %q, want %q", got, worktreePath)
+	}
+}
+
+func TestCreateWorktreeUsesRepoRootOverride(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := initNewTestRepo(t)
+	writeNewTestCommit(t, repoPath, "base.txt", "base")
+	root := t.TempDir()
+	overrideRoot := t.TempDir()
+
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	st := &state.State{Version: 1}
+	repo := &config.RepoConfig{
+		Name:         "mono",
+		Path:         repoPath,
+		Type:         "worktree",
+		WorktreeRoot: overrideRoot,
+	}
+	cfg := &config.Config{WorktreeRoot: root}
+
+	if err := createWorktree(cfg, repo, "feat/build-payments", "", mgr, st, true, false); err != nil {
+		t.Fatalf("createWorktree() error = %v", err)
+	}
+
+	worktreePath := filepath.Join(overrideRoot, "feat-build-payments")
 	if got := st.Workspaces[0].WorktreePath; got != worktreePath {
 		t.Fatalf("workspace WorktreePath = %q, want %q", got, worktreePath)
 	}
@@ -135,7 +166,7 @@ func TestCreateWorktreeStoresConfiguredWorkdirAsStartPath(t *testing.T) {
 		Workdir: "packages/app",
 	}
 
-	if err := createWorktree(repo, "agent", "", mgr, st, true, false); err != nil {
+	if err := createWorktree(&config.Config{}, repo, "agent", "", mgr, st, true, false); err != nil {
 		t.Fatalf("createWorktree() error = %v", err)
 	}
 
@@ -182,6 +213,9 @@ func TestCreateWorktreeHereAddsUnregisteredRepo(t *testing.T) {
 	}
 	if got := loaded.Repos[0].Name; got != repoName {
 		t.Fatalf("config repo name = %q, want %q", got, repoName)
+	}
+	if got, want := loaded.WorktreeRoot, filepath.Join(home, "worktrees"); got != want {
+		t.Fatalf("config WorktreeRoot = %q, want %q", got, want)
 	}
 }
 
@@ -236,7 +270,7 @@ func TestCreateWorktreeHereFromManagedWorktreeUsesRegisteredRepo(t *testing.T) {
 		WorktreeRoot: root,
 	}}}
 
-	if err := createWorktree(&cfg.Repos[0], "feat/source", "", mgr, st, true, false); err != nil {
+	if err := createWorktree(cfg, &cfg.Repos[0], "feat/source", "", mgr, st, true, false); err != nil {
 		t.Fatalf("createWorktree(source) error = %v", err)
 	}
 	cwd := filepath.Join(st.Workspaces[0].WorktreePath, "packages", "app")
@@ -321,23 +355,24 @@ func TestCreateWorktreeUsesHashSuffixForDashedBranchCollision(t *testing.T) {
 	}
 	st := &state.State{Version: 1}
 	repo := &config.RepoConfig{
-		Name:         "mono",
-		Path:         repoPath,
-		Type:         "worktree",
-		WorktreeRoot: root,
+		Name: "mono",
+		Path: repoPath,
+		Type: "worktree",
 	}
 
-	if err := createWorktree(repo, "feat/foo", "", mgr, st, true, false); err != nil {
+	cfg := &config.Config{WorktreeRoot: root}
+
+	if err := createWorktree(cfg, repo, "feat/foo", "", mgr, st, true, false); err != nil {
 		t.Fatalf("createWorktree(feat/foo) error = %v", err)
 	}
-	if err := createWorktree(repo, "feat-foo", "", mgr, st, true, false); err != nil {
+	if err := createWorktree(cfg, repo, "feat-foo", "", mgr, st, true, false); err != nil {
 		t.Fatalf("createWorktree(feat-foo) error = %v", err)
 	}
 
-	if got, want := st.Workspaces[0].WorktreePath, filepath.Join(root, "feat-foo"); got != want {
+	if got, want := st.Workspaces[0].WorktreePath, filepath.Join(root, "mono", "feat-foo"); got != want {
 		t.Fatalf("first WorktreePath = %q, want %q", got, want)
 	}
-	wantSecond := filepath.Join(root, "feat-foo-"+branchPathHash("feat-foo"))
+	wantSecond := filepath.Join(root, "mono", "feat-foo-"+branchPathHash("feat-foo"))
 	if got := st.Workspaces[1].WorktreePath; got != wantSecond {
 		t.Fatalf("second WorktreePath = %q, want %q", got, wantSecond)
 	}

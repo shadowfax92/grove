@@ -112,7 +112,7 @@ creates the workspace and cd's into it.
 			if repo.Type == "dir" {
 				return createDirWorkspace(repo, branch, mgr, st, noPrepare)
 			}
-			return createWorktree(repo, branch, from, mgr, st, noPrepare, manual)
+			return createWorktree(cfg, repo, branch, from, mgr, st, noPrepare, manual)
 		}
 		return createPlain(name, mgr, st)
 	},
@@ -153,7 +153,7 @@ func createPlain(name string, mgr *state.StateManager, st *state.State) error {
 	return nil
 }
 
-func createWorktree(repo *config.RepoConfig, branch, from string, mgr *state.StateManager, st *state.State, noPrepare, manual bool) error {
+func createWorktree(cfg *config.Config, repo *config.RepoConfig, branch, from string, mgr *state.StateManager, st *state.State, noPrepare, manual bool) error {
 	if branch == "" && manual {
 		prompted, err := promptNameFzf("branch > ", "Type a branch name or Enter for auto")
 		if err != nil {
@@ -170,7 +170,7 @@ func createWorktree(repo *config.RepoConfig, branch, from string, mgr *state.Sta
 		return fmt.Errorf("workspace %q already exists", repo.Name+"/"+branch)
 	}
 
-	worktreePath := collisionSafeWorktreePath(repo, branch, st)
+	worktreePath := collisionSafeWorktreePath(cfg, repo, branch, st)
 
 	if !noPrepare {
 		if err := runPrepareCommands(repo); err != nil {
@@ -230,7 +230,7 @@ func createWorktreeHere(cwd, branch, from string, cfg *config.Config, mgr *state
 		if repo.Type != "" && repo.Type != "worktree" {
 			return fmt.Errorf("repo %s is registered as type %s, not worktree", repo.Name, repo.Type)
 		}
-		return createWorktree(repo, branch, from, mgr, st, noPrepare, false)
+		return createWorktree(cfg, repo, branch, from, mgr, st, noPrepare, false)
 	}
 
 	if repoName := repoNameForManagedWorktreeRoot(st, repoRoot); repoName != "" {
@@ -244,7 +244,7 @@ func createWorktreeHere(cwd, branch, from string, cfg *config.Config, mgr *state
 		if repo.Type != "" && repo.Type != "worktree" {
 			return fmt.Errorf("repo %s is registered as type %s, not worktree", repo.Name, repo.Type)
 		}
-		return createWorktree(repo, branch, from, mgr, st, noPrepare, false)
+		return createWorktree(cfg, repo, branch, from, mgr, st, noPrepare, false)
 	}
 
 	defaultBranch := git.DefaultBranch(repoRoot)
@@ -271,7 +271,7 @@ func createWorktreeHere(cwd, branch, from string, cfg *config.Config, mgr *state
 		return fmt.Errorf("repo %s is registered as type %s, not worktree", repo.Name, repo.Type)
 	}
 
-	return createWorktree(repo, branch, from, mgr, st, noPrepare, false)
+	return createWorktree(refreshed, repo, branch, from, mgr, st, noPrepare, false)
 }
 
 func repoNameForManagedWorktreeRoot(st *state.State, repoRoot string) string {
@@ -329,19 +329,30 @@ func cleanAbsPath(path string) string {
 	return filepath.Clean(path)
 }
 
-func worktreePathFor(repo *config.RepoConfig, branch string) string {
-	if repo.WorktreeRoot != "" {
-		return filepath.Join(repo.WorktreeRoot, dashedBranchDir(branch))
+func worktreePathFor(cfg *config.Config, repo *config.RepoConfig, branch string) string {
+	if root := effectiveWorktreeRoot(cfg, repo); root != "" {
+		return filepath.Join(root, dashedBranchDir(branch))
 	}
 	return filepath.Join(repo.Path, ".grove", "worktrees", branch)
 }
 
-func collisionSafeWorktreePath(repo *config.RepoConfig, branch string, st *state.State) string {
-	path := worktreePathFor(repo, branch)
-	if repo.WorktreeRoot == "" || !worktreePathCollides(path, branch, st) {
+func collisionSafeWorktreePath(cfg *config.Config, repo *config.RepoConfig, branch string, st *state.State) string {
+	root := effectiveWorktreeRoot(cfg, repo)
+	path := worktreePathFor(cfg, repo, branch)
+	if root == "" || !worktreePathCollides(path, branch, st) {
 		return path
 	}
 	return path + "-" + branchPathHash(branch)
+}
+
+func effectiveWorktreeRoot(cfg *config.Config, repo *config.RepoConfig) string {
+	if cfg != nil {
+		return cfg.EffectiveWorktreeRoot(repo)
+	}
+	if repo != nil {
+		return repo.WorktreeRoot
+	}
+	return ""
 }
 
 func worktreePathCollides(path, branch string, st *state.State) bool {
