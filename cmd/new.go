@@ -143,7 +143,7 @@ func createWorktree(repo *config.RepoConfig, branch, from string, mgr *state.Sta
 		return fmt.Errorf("workspace %q already exists", repo.Name+"/"+branch)
 	}
 
-	worktreePath := filepath.Join(repo.Path, ".grove", "worktrees", branch)
+	worktreePath := worktreePathFor(repo, branch)
 
 	if !noPrepare {
 		if err := runPrepareCommands(repo); err != nil {
@@ -191,6 +191,20 @@ func createWorktree(repo *config.RepoConfig, branch, from string, mgr *state.Sta
 
 	fmt.Println(setupDir)
 	return nil
+}
+
+func worktreePathFor(repo *config.RepoConfig, branch string) string {
+	if repo.WorktreeRoot != "" {
+		return filepath.Join(repo.WorktreeRoot, dashedBranchDir(branch))
+	}
+	return filepath.Join(repo.Path, ".grove", "worktrees", branch)
+}
+
+func dashedBranchDir(branch string) string {
+	parts := strings.FieldsFunc(branch, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	return strings.Join(parts, "-")
 }
 
 func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State, noPrepare bool) error {

@@ -62,6 +62,41 @@ func TestCreateWorktreeUsesFromStartPoint(t *testing.T) {
 	if got := newTestGitOutput(t, worktreePath, "rev-parse", "HEAD"); got != baseHead {
 		t.Fatalf("worktree HEAD = %s, want %s", got, baseHead)
 	}
+	if got := st.Workspaces[0].WorktreePath; got != worktreePath {
+		t.Fatalf("workspace WorktreePath = %q, want %q", got, worktreePath)
+	}
+}
+
+func TestCreateWorktreeUsesConfiguredRootAndDashedBranch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := initNewTestRepo(t)
+	writeNewTestCommit(t, repoPath, "base.txt", "base")
+	root := t.TempDir()
+
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	st := &state.State{Version: 1}
+	repo := &config.RepoConfig{
+		Name:         "mono",
+		Path:         repoPath,
+		Type:         "worktree",
+		WorktreeRoot: root,
+	}
+
+	if err := createWorktree(repo, "feat/build-payments", "", mgr, st, true, false); err != nil {
+		t.Fatalf("createWorktree() error = %v", err)
+	}
+
+	worktreePath := filepath.Join(root, "feat-build-payments")
+	if got := newTestGitOutput(t, worktreePath, "branch", "--show-current"); got != "feat/build-payments" {
+		t.Fatalf("worktree branch = %q, want feat/build-payments", got)
+	}
+	if got := st.Workspaces[0].WorktreePath; got != worktreePath {
+		t.Fatalf("workspace WorktreePath = %q, want %q", got, worktreePath)
+	}
 }
 
 func TestCreateWorktreeStoresConfiguredWorkdirAsStartPath(t *testing.T) {
