@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -168,7 +170,7 @@ func createWorktree(repo *config.RepoConfig, branch, from string, mgr *state.Sta
 		return fmt.Errorf("workspace %q already exists", repo.Name+"/"+branch)
 	}
 
-	worktreePath := worktreePathFor(repo, branch)
+	worktreePath := collisionSafeWorktreePath(repo, branch, st)
 
 	if !noPrepare {
 		if err := runPrepareCommands(repo); err != nil {
@@ -219,6 +221,17 @@ func createWorktree(repo *config.RepoConfig, branch, from string, mgr *state.Sta
 }
 
 func createWorktreeHere(cwd, branch, from string, cfg *config.Config, mgr *state.StateManager, st *state.State, noPrepare bool) error {
+	if repoName, err := repoNameForPath(cfg, st, cwd); err == nil {
+		repo := cfg.FindRepo(repoName)
+		if repo == nil {
+			return fmt.Errorf("repo %s is tracked in state but missing from config", repoName)
+		}
+		if repo.Type != "" && repo.Type != "worktree" {
+			return fmt.Errorf("repo %s is registered as type %s, not worktree", repo.Name, repo.Type)
+		}
+		return createWorktree(repo, branch, from, mgr, st, noPrepare, false)
+	}
+
 	repoRoot := git.RepoRoot(cwd)
 	if repoRoot == "" {
 		return fmt.Errorf("not inside a git repository")
@@ -300,11 +313,41 @@ func worktreePathFor(repo *config.RepoConfig, branch string) string {
 	return filepath.Join(repo.Path, ".grove", "worktrees", branch)
 }
 
+func collisionSafeWorktreePath(repo *config.RepoConfig, branch string, st *state.State) string {
+	path := worktreePathFor(repo, branch)
+	if repo.WorktreeRoot == "" || !worktreePathCollides(path, branch, st) {
+		return path
+	}
+	return path + "-" + branchPathHash(branch)
+}
+
+func worktreePathCollides(path, branch string, st *state.State) bool {
+	if st != nil {
+		for _, ws := range st.Workspaces {
+			if ws.WorktreePath == "" {
+				continue
+			}
+			if cleanAbsPath(ws.WorktreePath) == cleanAbsPath(path) && ws.Branch != branch {
+				return true
+			}
+		}
+	}
+	if _, err := os.Stat(path); err == nil {
+		return true
+	}
+	return false
+}
+
 func dashedBranchDir(branch string) string {
 	parts := strings.FieldsFunc(branch, func(r rune) bool {
 		return r == '/' || r == '\\'
 	})
 	return strings.Join(parts, "-")
+}
+
+func branchPathHash(branch string) string {
+	sum := sha1.Sum([]byte(branch))
+	return hex.EncodeToString(sum[:])[:8]
 }
 
 func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State, noPrepare bool) error {

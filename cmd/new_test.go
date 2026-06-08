@@ -217,6 +217,88 @@ func TestCreateWorktreeHereReusesRegisteredRepo(t *testing.T) {
 	}
 }
 
+func TestCreateWorktreeHereFromManagedWorktreeUsesRegisteredRepo(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := initNewTestRepo(t)
+	writeNewTestCommit(t, repoPath, "base.txt", "base")
+	root := t.TempDir()
+
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	st := &state.State{Version: 1}
+	cfg := &config.Config{Repos: []config.RepoConfig{{
+		Name:         "custom",
+		Path:         repoPath,
+		Type:         "worktree",
+		WorktreeRoot: root,
+	}}}
+
+	if err := createWorktree(&cfg.Repos[0], "feat/source", "", mgr, st, true, false); err != nil {
+		t.Fatalf("createWorktree(source) error = %v", err)
+	}
+	cwd := filepath.Join(st.Workspaces[0].WorktreePath, "packages", "app")
+	if err := os.MkdirAll(cwd, 0755); err != nil {
+		t.Fatalf("creating cwd: %v", err)
+	}
+
+	if err := createWorktreeHere(cwd, "feat/child", "", cfg, mgr, st, true); err != nil {
+		t.Fatalf("createWorktreeHere() error = %v", err)
+	}
+
+	child := st.Workspaces[1]
+	if got := child.Repo; got != "custom" {
+		t.Fatalf("child Repo = %q, want custom", got)
+	}
+	if got, want := child.WorktreePath, filepath.Join(root, "feat-child"); got != want {
+		t.Fatalf("child WorktreePath = %q, want %q", got, want)
+	}
+	configPath, err := config.DefaultConfigPath()
+	if err != nil {
+		t.Fatalf("DefaultConfigPath() error = %v", err)
+	}
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Fatalf("config file stat = %v, want not exist", err)
+	}
+}
+
+func TestCreateWorktreeUsesHashSuffixForDashedBranchCollision(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := initNewTestRepo(t)
+	writeNewTestCommit(t, repoPath, "base.txt", "base")
+	root := t.TempDir()
+
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	st := &state.State{Version: 1}
+	repo := &config.RepoConfig{
+		Name:         "mono",
+		Path:         repoPath,
+		Type:         "worktree",
+		WorktreeRoot: root,
+	}
+
+	if err := createWorktree(repo, "feat/foo", "", mgr, st, true, false); err != nil {
+		t.Fatalf("createWorktree(feat/foo) error = %v", err)
+	}
+	if err := createWorktree(repo, "feat-foo", "", mgr, st, true, false); err != nil {
+		t.Fatalf("createWorktree(feat-foo) error = %v", err)
+	}
+
+	if got, want := st.Workspaces[0].WorktreePath, filepath.Join(root, "feat-foo"); got != want {
+		t.Fatalf("first WorktreePath = %q, want %q", got, want)
+	}
+	wantSecond := filepath.Join(root, "feat-foo-"+branchPathHash("feat-foo"))
+	if got := st.Workspaces[1].WorktreePath; got != wantSecond {
+		t.Fatalf("second WorktreePath = %q, want %q", got, wantSecond)
+	}
+}
+
 func TestCreateDirWorkspaceRunsPrepareCommands(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

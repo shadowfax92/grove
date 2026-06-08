@@ -189,11 +189,10 @@ func buildOrphans(st *state.State, cfg *config.Config) ([]OrphanWorktree, error)
 	trackedPaths := make(map[string]bool, len(st.Workspaces))
 	for _, ws := range st.Workspaces {
 		if ws.WorktreePath != "" {
-			trackedPaths[ws.WorktreePath] = true
+			trackedPaths[cleanPath(ws.WorktreePath)] = true
 		}
 	}
 
-	groveWorktreePrefix := string(filepath.Separator) + ".grove" + string(filepath.Separator) + "worktrees" + string(filepath.Separator)
 	var orphans []OrphanWorktree
 	for _, repo := range cfg.Repos {
 		if repo.Type != "" && repo.Type != "worktree" {
@@ -204,10 +203,10 @@ func buildOrphans(st *state.State, cfg *config.Config) ([]OrphanWorktree, error)
 			continue
 		}
 		for _, wt := range worktrees {
-			if wt.Bare || trackedPaths[wt.Path] {
+			if wt.Bare || trackedPaths[cleanPath(wt.Path)] {
 				continue
 			}
-			if !strings.Contains(wt.Path, groveWorktreePrefix) {
+			if !repoOwnsWorktreePath(repo, wt.Path) {
 				continue
 			}
 			branch := wt.Branch
@@ -229,4 +228,30 @@ func buildOrphans(st *state.State, cfg *config.Config) ([]OrphanWorktree, error)
 		return orphans[i].RepoName < orphans[j].RepoName
 	})
 	return orphans, nil
+}
+
+func repoOwnsWorktreePath(repo config.RepoConfig, path string) bool {
+	groveWorktreePrefix := string(filepath.Separator) + ".grove" + string(filepath.Separator) + "worktrees" + string(filepath.Separator)
+	if strings.Contains(path, groveWorktreePrefix) {
+		return true
+	}
+	if repo.WorktreeRoot == "" {
+		return false
+	}
+	return pathWithinClean(repo.WorktreeRoot, path)
+}
+
+func pathWithinClean(root, path string) bool {
+	rel, err := filepath.Rel(cleanPath(root), cleanPath(path))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+func cleanPath(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	return filepath.Clean(path)
 }

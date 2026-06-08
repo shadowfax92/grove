@@ -26,7 +26,7 @@ var cleanupCmd = &cobra.Command{
 	Use:         "cleanup",
 	Annotations: map[string]string{"group": "Workspaces:"},
 	Short:       "Remove orphaned worktrees not tracked by grove",
-	Long: `Find and remove worktrees on disk under .grove/worktrees that grove no longer tracks in state.
+	Long: `Find and remove worktrees on disk under Grove worktree roots that grove no longer tracks in state.
 
   grove cleanup         — pick via fzf (Tab to multi-select)
   grove cleanup --all   — select all orphaned worktrees
