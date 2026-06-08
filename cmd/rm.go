@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 
 	"grove/internal/git"
 	"grove/internal/state"
@@ -17,6 +18,7 @@ import (
 
 func init() {
 	rmCmd.Flags().BoolP("force", "f", false, "Skip confirmation")
+	rmCmd.Flags().IntP("jobs", "j", defaultRemoveJobs, "Max worktrees to remove in parallel (lower it if deletion strains the machine)")
 	rootCmd.AddCommand(rmCmd)
 }
 
@@ -32,6 +34,7 @@ var rmCmd = &cobra.Command{
 	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		force, _ := cmd.Flags().GetBool("force")
+		jobs, _ := cmd.Flags().GetInt("jobs")
 
 		mgr, err := state.NewManager()
 		if err != nil {
@@ -71,15 +74,7 @@ var rmCmd = &cobra.Command{
 			return err
 		}
 
-		var failed []state.Workspace
-		for _, t := range targets {
-			if err := removeWorktreeForTarget(t); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: failed to remove worktree %s: %v\n", t.Workspace.WorktreePath, err)
-				failed = append(failed, t.Workspace)
-				continue
-			}
-			fmt.Printf("Removed %q\n", t.Label())
-		}
+		failed := removeWorktrees(targets, jobs, removeWorktreeForTarget)
 
 		if len(failed) > 0 {
 			for _, ws := range failed {
@@ -115,6 +110,83 @@ func removeWorktreeForTarget(t workspaces.RemoveTarget) error {
 		return nil
 	}
 	return git.RemoveWorktree(ws.RepoPath, ws.WorktreePath)
+}
+
+const defaultRemoveJobs = 8
+
+// removeWorktrees deletes each target's worktree through a bounded pool of at
+// most `jobs` workers, printing live progress as each removal starts (→) and
+// finishes (✓/✗). Bulk removals of large worktrees take minutes and pound the OS
+// — every unlink is an fsevent — so both the visible progress and the cap on
+// concurrent deletions matter (turn `jobs` down when the machine strains).
+//
+// We do NOT group by repo: grove's RepoPath is an unreliable identity for the
+// underlying git repo (the same checkout can be configured under several names,
+// e.g. with/without a trailing slash), so string grouping silently fails to
+// serialize same-repo work. Instead we rely on `git worktree remove` of distinct
+// worktrees being safe to run concurrently even within one repo — each only
+// touches its own $GIT_DIR/worktrees/<id> admin dir — while the repo-wide
+// `worktree prune` fallback is serialized inside git.RemoveWorktree.
+//
+// Returns the workspaces whose removal failed so the caller can restore them.
+func removeWorktrees(targets []workspaces.RemoveTarget, jobs int, remove func(workspaces.RemoveTarget) error) []state.Workspace {
+	total := len(targets)
+	if total == 0 {
+		return nil
+	}
+	if jobs < 1 {
+		jobs = 1
+	}
+	if jobs > total {
+		jobs = total
+	}
+
+	fmt.Printf("Removing %d workspaces (up to %d in parallel)…\n", total, jobs)
+
+	queue := make(chan workspaces.RemoveTarget)
+	var (
+		wg     sync.WaitGroup
+		mu     sync.Mutex // guards done counter, failed slice, and ordered output
+		done   int
+		failed []state.Workspace
+	)
+
+	wg.Add(jobs)
+	for range jobs {
+		go func() {
+			defer wg.Done()
+			for t := range queue {
+				mu.Lock()
+				fmt.Printf("  → %s\n", t.Label())
+				mu.Unlock()
+
+				err := remove(t)
+
+				mu.Lock()
+				done++
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  ✗ %s: %v (%d/%d)\n", t.Label(), err, done, total)
+					failed = append(failed, t.Workspace)
+				} else {
+					fmt.Printf("  ✓ %s (%d/%d)\n", t.Label(), done, total)
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+
+	for _, t := range targets {
+		queue <- t
+	}
+	close(queue)
+	wg.Wait()
+
+	if n := len(failed); n > 0 {
+		fmt.Printf("Removed %d of %d workspaces; %d failed.\n", total-n, total, n)
+	} else {
+		fmt.Printf("Removed %d workspaces.\n", total)
+	}
+	return failed
 }
 
 func pickRemoveTargetsFzf(inv *workspaces.Inventory) ([]workspaces.RemoveTarget, error) {
