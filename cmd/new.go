@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +18,7 @@ import (
 )
 
 func init() {
+	newCmd.Flags().Bool("here", false, "Create a worktree for the current git repo")
 	newCmd.Flags().Bool("no-prepare", false, "Skip prepare commands before workspace creation")
 	newCmd.Flags().BoolP("manual", "m", false, "Prompt for the branch name instead of auto-generating")
 	newCmd.Flags().String("from", "", "Create a new branch from this start point")
@@ -37,8 +40,10 @@ creates the workspace and cd's into it.
   grove new <repo> <branch> — create (or check out) a specific branch + cd
   grove new <repo> <branch> --from <base>
                             — create <branch> from <base>
+  grove new --here <branch> — create a worktree for the current git repo + cd
   grove new <name>          — plain workspace (if name doesn't match a repo)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		here, _ := cmd.Flags().GetBool("here")
 		noPrepare, _ := cmd.Flags().GetBool("no-prepare")
 		manual, _ := cmd.Flags().GetBool("manual")
 		from, _ := cmd.Flags().GetString("from")
@@ -60,6 +65,21 @@ creates the workspace and cd's into it.
 		st, err := mgr.Load()
 		if err != nil {
 			return err
+		}
+
+		if here {
+			branch, err := newHereBranch(args)
+			if err != nil {
+				return err
+			}
+			if err := validateNewFromFlag(from, branch); err != nil {
+				return err
+			}
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			return createWorktreeHere(cwd, branch, from, cfg, mgr, st, noPrepare)
 		}
 
 		var name, branch string
@@ -105,6 +125,13 @@ func validateNewFromFlag(from, branch string) error {
 	return nil
 }
 
+func newHereBranch(args []string) (string, error) {
+	if len(args) != 1 {
+		return "", fmt.Errorf("--here requires exactly one <branch>")
+	}
+	return args[0], nil
+}
+
 func createPlain(name string, mgr *state.StateManager, st *state.State) error {
 	sessionName := fmt.Sprintf("g/%s", name)
 	if mgr.FindBySession(st, sessionName) != nil {
@@ -143,7 +170,7 @@ func createWorktree(repo *config.RepoConfig, branch, from string, mgr *state.Sta
 		return fmt.Errorf("workspace %q already exists", repo.Name+"/"+branch)
 	}
 
-	worktreePath := filepath.Join(repo.Path, ".grove", "worktrees", branch)
+	worktreePath := collisionSafeWorktreePath(repo, branch, st)
 
 	if !noPrepare {
 		if err := runPrepareCommands(repo); err != nil {
@@ -191,6 +218,159 @@ func createWorktree(repo *config.RepoConfig, branch, from string, mgr *state.Sta
 
 	fmt.Println(setupDir)
 	return nil
+}
+
+func createWorktreeHere(cwd, branch, from string, cfg *config.Config, mgr *state.StateManager, st *state.State, noPrepare bool) error {
+	repoRoot := git.RepoRoot(cwd)
+	if repoRoot == "" {
+		return fmt.Errorf("not inside a git repository")
+	}
+
+	if repo := findRepoByPath(cfg, repoRoot); repo != nil {
+		if repo.Type != "" && repo.Type != "worktree" {
+			return fmt.Errorf("repo %s is registered as type %s, not worktree", repo.Name, repo.Type)
+		}
+		return createWorktree(repo, branch, from, mgr, st, noPrepare, false)
+	}
+
+	if repoName := repoNameForManagedWorktreeRoot(st, repoRoot); repoName != "" {
+		if cfg == nil {
+			return fmt.Errorf("repo %s is tracked in state but config is unavailable", repoName)
+		}
+		repo := cfg.FindRepo(repoName)
+		if repo == nil {
+			return fmt.Errorf("repo %s is tracked in state but missing from config", repoName)
+		}
+		if repo.Type != "" && repo.Type != "worktree" {
+			return fmt.Errorf("repo %s is registered as type %s, not worktree", repo.Name, repo.Type)
+		}
+		return createWorktree(repo, branch, from, mgr, st, noPrepare, false)
+	}
+
+	defaultBranch := git.DefaultBranch(repoRoot)
+	if defaultBranch == "" {
+		return fmt.Errorf("could not infer default branch; run grove init --default-branch first")
+	}
+	newRepo := config.NewWorktreeRepo(repoRoot, filepath.Base(repoRoot), defaultBranch)
+	configPath, err := config.DefaultConfigPath()
+	if err != nil {
+		return err
+	}
+	if err := config.AddRepoToFile(configPath, newRepo); err != nil {
+		return err
+	}
+	refreshed, err := config.Load()
+	if err != nil {
+		return err
+	}
+	repo := findRepoByPath(refreshed, repoRoot)
+	if repo == nil {
+		return fmt.Errorf("repo %s was added to config but could not be loaded", repoRoot)
+	}
+	if repo.Type != "" && repo.Type != "worktree" {
+		return fmt.Errorf("repo %s is registered as type %s, not worktree", repo.Name, repo.Type)
+	}
+
+	return createWorktree(repo, branch, from, mgr, st, noPrepare, false)
+}
+
+func repoNameForManagedWorktreeRoot(st *state.State, repoRoot string) string {
+	if st == nil {
+		return ""
+	}
+	target := cleanAbsPath(repoRoot)
+	for _, ws := range st.Workspaces {
+		if ws.Repo == "" || ws.WorktreePath == "" {
+			continue
+		}
+		if cleanAbsPath(ws.WorktreePath) == target {
+			return ws.Repo
+		}
+	}
+	return ""
+}
+
+func findRepoByPath(cfg *config.Config, repoPath string) *config.RepoConfig {
+	if cfg == nil {
+		return nil
+	}
+	target := cleanAbsPath(repoPath)
+	for i := range cfg.Repos {
+		if cleanAbsPath(cfg.Repos[i].Path) == target {
+			return &cfg.Repos[i]
+		}
+	}
+	return nil
+}
+
+func cleanAbsPath(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	if realPath, err := filepath.EvalSymlinks(path); err == nil {
+		path = realPath
+		return filepath.Clean(path)
+	}
+
+	current := path
+	suffix := ""
+	for {
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		suffix = filepath.Join(filepath.Base(current), suffix)
+		if realParent, err := filepath.EvalSymlinks(parent); err == nil {
+			return filepath.Clean(filepath.Join(realParent, suffix))
+		}
+		current = parent
+	}
+
+	return filepath.Clean(path)
+}
+
+func worktreePathFor(repo *config.RepoConfig, branch string) string {
+	if repo.WorktreeRoot != "" {
+		return filepath.Join(repo.WorktreeRoot, dashedBranchDir(branch))
+	}
+	return filepath.Join(repo.Path, ".grove", "worktrees", branch)
+}
+
+func collisionSafeWorktreePath(repo *config.RepoConfig, branch string, st *state.State) string {
+	path := worktreePathFor(repo, branch)
+	if repo.WorktreeRoot == "" || !worktreePathCollides(path, branch, st) {
+		return path
+	}
+	return path + "-" + branchPathHash(branch)
+}
+
+func worktreePathCollides(path, branch string, st *state.State) bool {
+	if st != nil {
+		for _, ws := range st.Workspaces {
+			if ws.WorktreePath == "" {
+				continue
+			}
+			if cleanAbsPath(ws.WorktreePath) == cleanAbsPath(path) && ws.Branch != branch {
+				return true
+			}
+		}
+	}
+	if _, err := os.Stat(path); err == nil {
+		return true
+	}
+	return false
+}
+
+func dashedBranchDir(branch string) string {
+	parts := strings.FieldsFunc(branch, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	return strings.Join(parts, "-")
+}
+
+func branchPathHash(branch string) string {
+	sum := sha1.Sum([]byte(branch))
+	return hex.EncodeToString(sum[:])[:8]
 }
 
 func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State, noPrepare bool) error {
