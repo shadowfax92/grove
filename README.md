@@ -15,7 +15,7 @@ Grove is path-first: every command prints a workspace path, and the `gv` fish he
 - **Picker-first** — bare `grove` fuzzy-finds a workspace and prints its path; `gv` drops you in
 - **A worktree per branch** — `grove new` adds a git worktree, so branches are directories instead of stashes
 - **tmux-ready** — workspaces are named like tmux sessions (`g/<repo>/<branch>`), ready for your session picker
-- **Shared roots** — every worktree lives under one `~/worktrees/<repo>/<branch>` tree, overridable per repo
+- **Shared roots** — every worktree lives under one `~/worktrees` tree, overridable per repo
 - **Prepare & setup hooks** — pull main, install deps, run anything before and after a worktree is born
 - **Fish helper** — `gv`, `gv n`, `gv cd`, `gv dd` wrap the path-printing core into real `cd`s
 - **Plain & dir workspaces** — not everything needs a worktree; back one with any directory or just `$HOME`
@@ -65,7 +65,7 @@ gv                          # pick a workspace and cd into it
 gv n mono feat/build-auth   # new worktree, then cd in
 gv n --here fix/local-bug   # worktree the current repo, then cd in
 gv cd mono/feat/build-auth  # cd into an existing workspace
-gv dd                       # finish the current workspace and cd to the next
+gv dd                       # finish the current workspace and cd home
 gv ls                       # list workspaces
 ```
 
@@ -100,14 +100,14 @@ grove new --no-prepare mono agent  # skip prepare commands
 ### Remove
 
 ```sh
-grove done [workspace]             # finish a workspace, print the next path (d)
+grove done [workspace]             # finish a workspace, print $HOME (d)
 grove rm [workspace...]            # remove workspaces and their worktrees (remove)
 grove rm -j 2                      # cap parallel worktree deletion
 grove cleanup                      # remove orphaned worktrees under grove roots
 grove cleanup --all -f             # remove every orphan, no prompts
 ```
 
-### Config
+### Configure
 
 ```sh
 grove config                       # open config in $EDITOR (cfg)
