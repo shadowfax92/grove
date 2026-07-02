@@ -1,0 +1,19 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="grove">
+  <g transform="translate(0 2)">
+    <!-- left tree -->
+    <g fill="#E25A1C">
+      <path d="M30 40 L42 68 L34 68 L47 96 L13 96 L26 68 L18 68 Z"/>
+      <rect x="26" y="96" width="8" height="9" rx="2"/>
+    </g>
+    <!-- right tree -->
+    <g fill="#E25A1C">
+      <path d="M98 48 L109 70 L102 70 L113 96 L83 96 L94 70 L87 70 Z"/>
+      <rect x="94" y="96" width="8" height="9" rx="2"/>
+    </g>
+    <!-- center tree -->
+    <g fill="#FF6B2C">
+      <path d="M64 14 L78 44 L70 44 L86 70 L78 70 L92 96 L36 96 L50 70 L42 70 L58 44 L50 44 Z"/>
+      <rect x="58" y="96" width="12" height="9" rx="2"/>
+    </g>
+  </g>
+</svg>
