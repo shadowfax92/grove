@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,6 +13,214 @@ import (
 	"grove/internal/state"
 	"grove/internal/workspaces"
 )
+
+func TestRunRemovePathRemovesMatchingWorkspace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	worktreePath := "/tmp/grove/worktrees/mono/feat-json"
+	st := &state.State{Version: 1, Workspaces: []state.Workspace{{
+		Name:         "mono/feat-json",
+		Type:         "worktree",
+		Repo:         "mono",
+		RepoPath:     "/repo",
+		WorktreePath: worktreePath,
+		SessionName:  "g/mono/feat/json",
+	}}}
+	if err := mgr.Save(st); err != nil {
+		t.Fatalf("mgr.Save() error = %v", err)
+	}
+
+	calls := 0
+	err = runRemovePath(mgr, st, worktreePath, 1, func(target workspaces.RemoveTarget) error {
+		calls++
+		if got := target.Workspace.WorktreePath; got != worktreePath {
+			t.Fatalf("target WorktreePath = %q, want %q", got, worktreePath)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("runRemovePath() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("remove calls = %d, want 1", calls)
+	}
+	loaded, err := mgr.Load()
+	if err != nil {
+		t.Fatalf("mgr.Load() error = %v", err)
+	}
+	if len(loaded.Workspaces) != 0 {
+		t.Fatalf("workspace count after remove = %d, want 0", len(loaded.Workspaces))
+	}
+}
+
+func TestRunRemovePathReturnsNotFound(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	st := &state.State{Version: 1}
+	if err := runRemovePath(mgr, st, "/missing", 1, removeWorktreeForTarget); !errors.Is(err, ErrRemovePathNotFound) {
+		t.Fatalf("runRemovePath() error = %v, want ErrRemovePathNotFound", err)
+	}
+}
+
+func TestRunRemovePathRestoresStateOnRemovalFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	worktreePath := "/tmp/grove/worktrees/mono/feat-json"
+	st := &state.State{Version: 1, Workspaces: []state.Workspace{{
+		Name:        "mono/other",
+		Type:        "worktree",
+		Repo:        "mono",
+		RepoPath:    "/repo",
+		SessionName: "g/mono/other",
+		CreatedAt:   "2026-07-01T18:00:00Z",
+	}, {
+		Name:         "mono/feat-json",
+		Type:         "worktree",
+		Repo:         "mono",
+		RepoPath:     "/repo",
+		WorktreePath: worktreePath,
+		SessionName:  "g/mono/feat/json",
+		CreatedAt:    "2026-07-01T18:06:00Z",
+	}, {
+		Name:        "mono/later",
+		Type:        "worktree",
+		Repo:        "mono",
+		RepoPath:    "/repo",
+		SessionName: "g/mono/later",
+		CreatedAt:   "2026-07-01T18:10:00Z",
+	}}}
+	original := append([]state.Workspace(nil), st.Workspaces...)
+	if err := mgr.Save(st); err != nil {
+		t.Fatalf("mgr.Save() error = %v", err)
+	}
+
+	err = runRemovePath(mgr, st, worktreePath, 1, func(workspaces.RemoveTarget) error {
+		return fmt.Errorf("boom")
+	})
+	if !errors.Is(err, ErrRemoveFailed) {
+		t.Fatalf("runRemovePath() error = %v, want ErrRemoveFailed", err)
+	}
+	loaded, err := mgr.Load()
+	if err != nil {
+		t.Fatalf("mgr.Load() error = %v", err)
+	}
+	if !reflect.DeepEqual(loaded.Workspaces, original) {
+		t.Fatalf("restored workspaces = %#v, want %#v", loaded.Workspaces, original)
+	}
+}
+
+func TestRemoveSelectedTargetsRestoresOnlyFailedTargets(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	alpha := state.Workspace{Name: "alpha", SessionName: "g/alpha", WorktreePath: "/worktrees/alpha"}
+	beta := state.Workspace{Name: "beta", SessionName: "g/beta", WorktreePath: "/worktrees/beta"}
+	gamma := state.Workspace{Name: "gamma", SessionName: "g/gamma", WorktreePath: "/worktrees/gamma"}
+	st := &state.State{Version: 1, Workspaces: []state.Workspace{alpha, beta, gamma}}
+	if err := mgr.Save(st); err != nil {
+		t.Fatalf("mgr.Save() error = %v", err)
+	}
+
+	targets := []workspaces.RemoveTarget{
+		{Workspace: alpha, SessionName: alpha.SessionName},
+		{Workspace: beta, SessionName: beta.SessionName},
+	}
+	failed, err := removeSelectedTargets(mgr, st, targets, 1, func(target workspaces.RemoveTarget) error {
+		if target.SessionName == beta.SessionName {
+			return fmt.Errorf("boom")
+		}
+		return nil
+	}, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("removeSelectedTargets() error = %v", err)
+	}
+	if len(failed) != 1 || failed[0].SessionName != beta.SessionName {
+		t.Fatalf("failed = %#v, want beta only", failed)
+	}
+
+	loaded, err := mgr.Load()
+	if err != nil {
+		t.Fatalf("mgr.Load() error = %v", err)
+	}
+	want := []state.Workspace{beta, gamma}
+	if !reflect.DeepEqual(loaded.Workspaces, want) {
+		t.Fatalf("workspaces after mixed removal = %#v, want %#v", loaded.Workspaces, want)
+	}
+}
+
+func TestValidateRemovePathModeRequiresYesAndNoArgs(t *testing.T) {
+	if err := validateRemovePathMode("/worktree", false, nil); err == nil {
+		t.Fatal("validateRemovePathMode() error = nil, want missing --yes error")
+	}
+	if err := validateRemovePathMode("/worktree", true, []string{"mono/feat"}); err == nil {
+		t.Fatal("validateRemovePathMode() error = nil, want args conflict")
+	}
+	if err := validateRemovePathMode("/worktree", true, nil); err != nil {
+		t.Fatalf("validateRemovePathMode() error = %v", err)
+	}
+}
+
+func TestRemovePathRejectsForceWithoutYes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	worktreePath := "/tmp/grove/worktrees/mono/feat-json"
+	st := &state.State{Version: 1, Workspaces: []state.Workspace{{
+		Name:         "mono/feat-json",
+		Type:         "worktree",
+		Repo:         "mono",
+		RepoPath:     "/repo",
+		WorktreePath: worktreePath,
+		SessionName:  "g/mono/feat/json",
+	}}}
+	if err := mgr.Save(st); err != nil {
+		t.Fatalf("mgr.Save() error = %v", err)
+	}
+
+	resetRemoveFlags := func() {
+		_ = rmCmd.Flags().Set("path", "")
+		_ = rmCmd.Flags().Set("force", "false")
+		_ = rmCmd.Flags().Set("yes", "false")
+		_ = rmCmd.Flags().Set("jobs", "8")
+	}
+	resetRemoveFlags()
+	defer resetRemoveFlags()
+	if err := rmCmd.Flags().Set("path", worktreePath); err != nil {
+		t.Fatalf("set path flag: %v", err)
+	}
+	if err := rmCmd.Flags().Set("force", "true"); err != nil {
+		t.Fatalf("set force flag: %v", err)
+	}
+
+	if err := rmCmd.RunE(rmCmd, nil); err == nil {
+		t.Fatal("rmCmd.RunE() error = nil, want --yes validation error")
+	}
+	loaded, err := mgr.Load()
+	if err != nil {
+		t.Fatalf("mgr.Load() error = %v", err)
+	}
+	if len(loaded.Workspaces) != 1 {
+		t.Fatalf("workspace count after rejected remove = %d, want 1", len(loaded.Workspaces))
+	}
+}
 
 func TestRemoveManagedEntriesRemovesSelectedWorkspaces(t *testing.T) {
 	st := &state.State{

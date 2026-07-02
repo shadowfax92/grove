@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,6 +83,84 @@ func TestCreateWorktreeUsesFromStartPoint(t *testing.T) {
 	}
 	if got := st.Workspaces[0].WorktreePath; got != worktreePath {
 		t.Fatalf("workspace WorktreePath = %q, want %q", got, worktreePath)
+	}
+}
+
+func TestCreateWorktreeWithResultReturnsJSONMetadata(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := initNewTestRepo(t)
+	writeNewTestCommit(t, repoPath, "base.txt", "base")
+
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	st := &state.State{Version: 1}
+	repo := &config.RepoConfig{
+		Name: "mono",
+		Path: repoPath,
+		Type: "worktree",
+	}
+
+	result, err := createWorktreeWithResult(&config.Config{}, repo, "feat/json", "", mgr, st, true, false)
+	if err != nil {
+		t.Fatalf("createWorktreeWithResult() error = %v", err)
+	}
+
+	worktreePath := filepath.Join(repoPath, ".grove", "worktrees", "feat/json")
+	if got := result.Workspace.WorktreePath; got != worktreePath {
+		t.Fatalf("WorktreePath = %q, want %q", got, worktreePath)
+	}
+	if got := result.Workspace.Branch; got != "feat/json" {
+		t.Fatalf("Branch = %q, want feat/json", got)
+	}
+	if got := result.Workspace.Repo; got != "mono" {
+		t.Fatalf("Repo = %q, want mono", got)
+	}
+	if got := result.Workspace.RepoPath; got != repoPath {
+		t.Fatalf("RepoPath = %q, want %q", got, repoPath)
+	}
+	if result.Workspace.CreatedAt == "" {
+		t.Fatal("CreatedAt is empty")
+	}
+}
+
+func TestNewWorkspaceJSONContainsRequestedFields(t *testing.T) {
+	ws := state.Workspace{
+		Name:         "mono/feat-json",
+		Repo:         "mono",
+		RepoPath:     "/repo",
+		WorktreePath: "/worktrees/mono/feat-json",
+		Branch:       "feat/json",
+		SessionName:  "g/mono/feat/json",
+		CreatedAt:    "2026-07-01T18:06:00Z",
+		LastUsedAt:   "2026-07-01T18:07:00Z",
+	}
+
+	data, err := json.Marshal(newWorkspaceJSON(ws))
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	want := map[string]string{
+		"worktree_path": "/worktrees/mono/feat-json",
+		"branch":        "feat/json",
+		"repo":          "mono",
+		"repo_path":     "/repo",
+		"created_at":    "2026-07-01T18:06:00Z",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("field count = %d, want %d: %v", len(got), len(want), got)
+	}
+	for key, value := range want {
+		if got[key] != value {
+			t.Fatalf("%s = %q, want %q", key, got[key], value)
+		}
 	}
 }
 

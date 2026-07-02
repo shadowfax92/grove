@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 
 	"grove/internal/state"
 	"grove/internal/workspaces"
@@ -18,6 +20,7 @@ var (
 )
 
 func init() {
+	listCmd.Flags().Bool("json", false, "Print workspaces as JSON")
 	rootCmd.AddCommand(listCmd)
 }
 
@@ -27,6 +30,8 @@ var listCmd = &cobra.Command{
 	Annotations: map[string]string{"group": "Workspaces:"},
 	Short:       "List all workspaces",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		jsonOut, _ := cmd.Flags().GetBool("json")
+
 		mgr, err := state.NewManager()
 		if err != nil {
 			return err
@@ -35,6 +40,9 @@ var listCmd = &cobra.Command{
 		st, err := mgr.Load()
 		if err != nil {
 			return err
+		}
+		if jsonOut {
+			return json.NewEncoder(os.Stdout).Encode(listWorkspaceJSON(st.Workspaces))
 		}
 		inv, err := workspaces.Build(st, nil)
 		if err != nil {
@@ -94,4 +102,32 @@ var listCmd = &cobra.Command{
 		fmt.Println(t)
 		return nil
 	},
+}
+
+type listWorkspaceJSONOutput struct {
+	Name         string `json:"name"`
+	Repo         string `json:"repo"`
+	RepoPath     string `json:"repo_path"`
+	Branch       string `json:"branch"`
+	WorktreePath string `json:"worktree_path"`
+	SessionName  string `json:"session_name"`
+	CreatedAt    string `json:"created_at"`
+	LastUsedAt   string `json:"last_used_at"`
+}
+
+func listWorkspaceJSON(items []state.Workspace) []listWorkspaceJSONOutput {
+	out := make([]listWorkspaceJSONOutput, 0, len(items))
+	for _, ws := range items {
+		out = append(out, listWorkspaceJSONOutput{
+			Name:         ws.Name,
+			Repo:         ws.Repo,
+			RepoPath:     ws.RepoPath,
+			Branch:       ws.Branch,
+			WorktreePath: ws.WorktreePath,
+			SessionName:  ws.SessionName,
+			CreatedAt:    ws.CreatedAt,
+			LastUsedAt:   ws.LastUsedAt,
+		})
+	}
+	return out
 }

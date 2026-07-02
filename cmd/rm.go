@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sort"
@@ -18,9 +20,16 @@ import (
 
 func init() {
 	rmCmd.Flags().BoolP("force", "f", false, "Skip confirmation")
+	rmCmd.Flags().Bool("yes", false, "Skip confirmation")
+	rmCmd.Flags().String("path", "", "Remove the workspace with this worktree path")
 	rmCmd.Flags().IntP("jobs", "j", defaultRemoveJobs, "Max worktrees to remove in parallel (lower it if deletion strains the machine)")
 	rootCmd.AddCommand(rmCmd)
 }
+
+var (
+	ErrRemovePathNotFound = errors.New("worktree path not found")
+	ErrRemoveFailed       = errors.New("worktree removal failed")
+)
 
 var rmCmd = &cobra.Command{
 	Use:         "rm [workspace...]",
@@ -30,11 +39,16 @@ var rmCmd = &cobra.Command{
 	Long: `Remove grove workspaces and their worktrees.
 
   grove rm                — pick workspaces via fzf (Tab to multi-select)
-  grove rm <w1> <w2> ...  — remove specific workspaces`,
+  grove rm <w1> <w2> ...  — remove specific workspaces
+  grove rm --path <path> --yes
+                          — remove one workspace by worktree path without prompts`,
 	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		force, _ := cmd.Flags().GetBool("force")
+		yes, _ := cmd.Flags().GetBool("yes")
+		path, _ := cmd.Flags().GetString("path")
 		jobs, _ := cmd.Flags().GetInt("jobs")
+		confirmed := force || yes
 
 		mgr, err := state.NewManager()
 		if err != nil {
@@ -54,6 +68,13 @@ var rmCmd = &cobra.Command{
 			return err
 		}
 
+		if path != "" {
+			if err := validateRemovePathMode(path, yes, args); err != nil {
+				return err
+			}
+			return runRemovePath(mgr, st, path, jobs, removeWorktreeForTarget)
+		}
+
 		var targets []workspaces.RemoveTarget
 		if len(args) == 0 {
 			targets, err = pickRemoveTargetsFzf(inv)
@@ -64,26 +85,109 @@ var rmCmd = &cobra.Command{
 			return err
 		}
 
-		if !force && !confirmRemove(targets) {
+		if !confirmed && !confirmRemove(targets) {
 			fmt.Println("Cancelled.")
 			return nil
 		}
 
-		workspaces.RemoveManagedEntries(st, targets)
-		if err := mgr.Save(st); err != nil {
-			return err
-		}
-
-		failed := removeWorktrees(targets, jobs, removeWorktreeForTarget)
-
-		if len(failed) > 0 {
-			for _, ws := range failed {
-				mgr.AddWorkspace(st, ws)
-			}
-			return mgr.Save(st)
-		}
-		return nil
+		_, err = removeSelectedTargets(mgr, st, targets, jobs, removeWorktreeForTarget, os.Stdout, os.Stderr)
+		return err
 	},
+}
+
+func validateRemovePathMode(path string, confirmed bool, args []string) error {
+	if path == "" {
+		return nil
+	}
+	if len(args) > 0 {
+		return fmt.Errorf("--path cannot be combined with workspace arguments")
+	}
+	if !confirmed {
+		return fmt.Errorf("--path requires --yes")
+	}
+	return nil
+}
+
+func runRemovePath(mgr *state.StateManager, st *state.State, path string, jobs int, remove func(workspaces.RemoveTarget) error) error {
+	inv, err := workspaces.Build(st, nil)
+	if err != nil {
+		return err
+	}
+	target, ok := resolveRemoveTargetByWorktreePath(inv, path)
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrRemovePathNotFound, path)
+	}
+	failed, err := removeSelectedTargets(mgr, st, []workspaces.RemoveTarget{target}, jobs, remove, os.Stderr, os.Stderr)
+	if err != nil {
+		return err
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("%w: %s", ErrRemoveFailed, path)
+	}
+	return nil
+}
+
+func resolveRemoveTargetByWorktreePath(inv *workspaces.Inventory, path string) (workspaces.RemoveTarget, bool) {
+	targetPath := cleanAbsPath(path)
+	for _, entry := range inv.Managed {
+		ws := entry.Workspace
+		if ws.WorktreePath == "" {
+			continue
+		}
+		if cleanAbsPath(ws.WorktreePath) == targetPath {
+			return workspaces.RemoveTarget{
+				Workspace:   ws,
+				SessionName: ws.SessionName,
+			}, true
+		}
+	}
+	return workspaces.RemoveTarget{}, false
+}
+
+func removeSelectedTargets(
+	mgr *state.StateManager,
+	st *state.State,
+	targets []workspaces.RemoveTarget,
+	jobs int,
+	remove func(workspaces.RemoveTarget) error,
+	out io.Writer,
+	errOut io.Writer,
+) ([]state.Workspace, error) {
+	originalWorkspaces := append([]state.Workspace(nil), st.Workspaces...)
+	workspaces.RemoveManagedEntries(st, targets)
+	if err := mgr.Save(st); err != nil {
+		st.Workspaces = originalWorkspaces
+		return nil, err
+	}
+
+	failed := removeWorktreesWithOutput(targets, jobs, remove, out, errOut)
+
+	if len(failed) > 0 {
+		st.Workspaces = restoredWorkspacesAfterFailure(originalWorkspaces, targets, failed)
+		if err := mgr.Save(st); err != nil {
+			return failed, fmt.Errorf("%w: restoring state: %v", ErrRemoveFailed, err)
+		}
+	}
+	return failed, nil
+}
+
+func restoredWorkspacesAfterFailure(original []state.Workspace, targets []workspaces.RemoveTarget, failed []state.Workspace) []state.Workspace {
+	targeted := make(map[string]bool, len(targets))
+	for _, target := range targets {
+		targeted[target.SessionName] = true
+	}
+	failedSet := make(map[string]bool, len(failed))
+	for _, ws := range failed {
+		failedSet[ws.SessionName] = true
+	}
+
+	restored := make([]state.Workspace, 0, len(original))
+	for _, ws := range original {
+		if !targeted[ws.SessionName] || failedSet[ws.SessionName] {
+			restored = append(restored, ws)
+		}
+	}
+	return restored
 }
 
 func confirmRemove(targets []workspaces.RemoveTarget) bool {
@@ -130,6 +234,10 @@ const defaultRemoveJobs = 8
 //
 // Returns the workspaces whose removal failed so the caller can restore them.
 func removeWorktrees(targets []workspaces.RemoveTarget, jobs int, remove func(workspaces.RemoveTarget) error) []state.Workspace {
+	return removeWorktreesWithOutput(targets, jobs, remove, os.Stdout, os.Stderr)
+}
+
+func removeWorktreesWithOutput(targets []workspaces.RemoveTarget, jobs int, remove func(workspaces.RemoveTarget) error, out io.Writer, errOut io.Writer) []state.Workspace {
 	total := len(targets)
 	if total == 0 {
 		return nil
@@ -141,7 +249,7 @@ func removeWorktrees(targets []workspaces.RemoveTarget, jobs int, remove func(wo
 		jobs = total
 	}
 
-	fmt.Printf("Removing %d workspaces (up to %d in parallel)…\n", total, jobs)
+	fmt.Fprintf(out, "Removing %d workspaces (up to %d in parallel)…\n", total, jobs)
 
 	queue := make(chan workspaces.RemoveTarget)
 	var (
@@ -157,7 +265,7 @@ func removeWorktrees(targets []workspaces.RemoveTarget, jobs int, remove func(wo
 			defer wg.Done()
 			for t := range queue {
 				mu.Lock()
-				fmt.Printf("  → %s\n", t.Label())
+				fmt.Fprintf(out, "  → %s\n", t.Label())
 				mu.Unlock()
 
 				err := remove(t)
@@ -165,10 +273,10 @@ func removeWorktrees(targets []workspaces.RemoveTarget, jobs int, remove func(wo
 				mu.Lock()
 				done++
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "  ✗ %s: %v (%d/%d)\n", t.Label(), err, done, total)
+					fmt.Fprintf(errOut, "  ✗ %s: %v (%d/%d)\n", t.Label(), err, done, total)
 					failed = append(failed, t.Workspace)
 				} else {
-					fmt.Printf("  ✓ %s (%d/%d)\n", t.Label(), done, total)
+					fmt.Fprintf(out, "  ✓ %s (%d/%d)\n", t.Label(), done, total)
 				}
 				mu.Unlock()
 			}
@@ -182,9 +290,9 @@ func removeWorktrees(targets []workspaces.RemoveTarget, jobs int, remove func(wo
 	wg.Wait()
 
 	if n := len(failed); n > 0 {
-		fmt.Printf("Removed %d of %d workspaces; %d failed.\n", total-n, total, n)
+		fmt.Fprintf(out, "Removed %d of %d workspaces; %d failed.\n", total-n, total, n)
 	} else {
-		fmt.Printf("Removed %d workspaces.\n", total)
+		fmt.Fprintf(out, "Removed %d workspaces.\n", total)
 	}
 	return failed
 }
