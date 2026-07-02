@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -77,13 +78,29 @@ func TestRunRemovePathRestoresStateOnRemovalFailure(t *testing.T) {
 	}
 	worktreePath := "/tmp/grove/worktrees/mono/feat-json"
 	st := &state.State{Version: 1, Workspaces: []state.Workspace{{
+		Name:        "mono/other",
+		Type:        "worktree",
+		Repo:        "mono",
+		RepoPath:    "/repo",
+		SessionName: "g/mono/other",
+		CreatedAt:   "2026-07-01T18:00:00Z",
+	}, {
 		Name:         "mono/feat-json",
 		Type:         "worktree",
 		Repo:         "mono",
 		RepoPath:     "/repo",
 		WorktreePath: worktreePath,
 		SessionName:  "g/mono/feat/json",
+		CreatedAt:    "2026-07-01T18:06:00Z",
+	}, {
+		Name:        "mono/later",
+		Type:        "worktree",
+		Repo:        "mono",
+		RepoPath:    "/repo",
+		SessionName: "g/mono/later",
+		CreatedAt:   "2026-07-01T18:10:00Z",
 	}}}
+	original := append([]state.Workspace(nil), st.Workspaces...)
 	if err := mgr.Save(st); err != nil {
 		t.Fatalf("mgr.Save() error = %v", err)
 	}
@@ -98,11 +115,8 @@ func TestRunRemovePathRestoresStateOnRemovalFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mgr.Load() error = %v", err)
 	}
-	if len(loaded.Workspaces) != 1 {
-		t.Fatalf("workspace count after failed remove = %d, want 1", len(loaded.Workspaces))
-	}
-	if got := loaded.Workspaces[0].SessionName; got != "g/mono/feat/json" {
-		t.Fatalf("restored workspace = %q, want g/mono/feat/json", got)
+	if !reflect.DeepEqual(loaded.Workspaces, original) {
+		t.Fatalf("restored workspaces = %#v, want %#v", loaded.Workspaces, original)
 	}
 }
 

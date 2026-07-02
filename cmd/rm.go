@@ -153,19 +153,19 @@ func removeSelectedTargets(
 	out io.Writer,
 	errOut io.Writer,
 ) ([]state.Workspace, error) {
+	originalWorkspaces := append([]state.Workspace(nil), st.Workspaces...)
 	workspaces.RemoveManagedEntries(st, targets)
 	if err := mgr.Save(st); err != nil {
+		st.Workspaces = originalWorkspaces
 		return nil, err
 	}
 
 	failed := removeWorktreesWithOutput(targets, jobs, remove, out, errOut)
 
 	if len(failed) > 0 {
-		for _, ws := range failed {
-			mgr.AddWorkspace(st, ws)
-		}
+		st.Workspaces = append(st.Workspaces[:0], originalWorkspaces...)
 		if err := mgr.Save(st); err != nil {
-			return failed, err
+			return failed, fmt.Errorf("%w: restoring state: %v", ErrRemoveFailed, err)
 		}
 	}
 	return failed, nil
