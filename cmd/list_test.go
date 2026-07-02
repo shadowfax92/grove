@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
+
+	"grove/internal/state"
 )
 
 func TestBuildSessionTreeRowsNestedSessions(t *testing.T) {
@@ -61,5 +64,51 @@ func TestBuildSessionTreeRowsBranchTargetsMostRecentDescendant(t *testing.T) {
 	}
 	if got, want := rows[0].leafCount, 2; got != want {
 		t.Fatalf("branch leaf count changed: got %d want %d", got, want)
+	}
+}
+
+func TestListWorkspaceJSONContainsStateFields(t *testing.T) {
+	workspaces := []state.Workspace{{
+		Name:         "mono/feat-json",
+		Repo:         "mono",
+		RepoPath:     "/repo",
+		WorktreePath: "/worktrees/mono/feat-json",
+		Branch:       "feat/json",
+		SessionName:  "g/mono/feat/json",
+		CreatedAt:    "2026-07-01T18:06:00Z",
+		LastUsedAt:   "2026-07-01T18:07:00Z",
+		Path:         "/worktrees/mono/feat-json/packages/app",
+		Type:         "worktree",
+	}}
+
+	data, err := json.Marshal(listWorkspaceJSON(workspaces))
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var got []map[string]string
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("json length = %d, want 1", len(got))
+	}
+
+	want := map[string]string{
+		"name":          "mono/feat-json",
+		"repo":          "mono",
+		"repo_path":     "/repo",
+		"branch":        "feat/json",
+		"worktree_path": "/worktrees/mono/feat-json",
+		"session_name":  "g/mono/feat/json",
+		"created_at":    "2026-07-01T18:06:00Z",
+		"last_used_at":  "2026-07-01T18:07:00Z",
+	}
+	if len(got[0]) != len(want) {
+		t.Fatalf("field count = %d, want %d: %v", len(got[0]), len(want), got[0])
+	}
+	for key, value := range want {
+		if got[0][key] != value {
+			t.Fatalf("%s = %q, want %q", key, got[0][key], value)
+		}
 	}
 }
