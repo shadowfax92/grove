@@ -69,7 +69,7 @@ var rmCmd = &cobra.Command{
 		}
 
 		if path != "" {
-			if err := validateRemovePathMode(path, confirmed, args); err != nil {
+			if err := validateRemovePathMode(path, yes, args); err != nil {
 				return err
 			}
 			return runRemovePath(mgr, st, path, jobs, removeWorktreeForTarget)

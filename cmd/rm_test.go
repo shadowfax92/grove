@@ -118,6 +118,53 @@ func TestValidateRemovePathModeRequiresYesAndNoArgs(t *testing.T) {
 	}
 }
 
+func TestRemovePathRejectsForceWithoutYes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	worktreePath := "/tmp/grove/worktrees/mono/feat-json"
+	st := &state.State{Version: 1, Workspaces: []state.Workspace{{
+		Name:         "mono/feat-json",
+		Type:         "worktree",
+		Repo:         "mono",
+		RepoPath:     "/repo",
+		WorktreePath: worktreePath,
+		SessionName:  "g/mono/feat/json",
+	}}}
+	if err := mgr.Save(st); err != nil {
+		t.Fatalf("mgr.Save() error = %v", err)
+	}
+
+	resetRemoveFlags := func() {
+		_ = rmCmd.Flags().Set("path", "")
+		_ = rmCmd.Flags().Set("force", "false")
+		_ = rmCmd.Flags().Set("yes", "false")
+		_ = rmCmd.Flags().Set("jobs", "8")
+	}
+	resetRemoveFlags()
+	defer resetRemoveFlags()
+	if err := rmCmd.Flags().Set("path", worktreePath); err != nil {
+		t.Fatalf("set path flag: %v", err)
+	}
+	if err := rmCmd.Flags().Set("force", "true"); err != nil {
+		t.Fatalf("set force flag: %v", err)
+	}
+
+	if err := rmCmd.RunE(rmCmd, nil); err == nil {
+		t.Fatal("rmCmd.RunE() error = nil, want --yes validation error")
+	}
+	loaded, err := mgr.Load()
+	if err != nil {
+		t.Fatalf("mgr.Load() error = %v", err)
+	}
+	if len(loaded.Workspaces) != 1 {
+		t.Fatalf("workspace count after rejected remove = %d, want 1", len(loaded.Workspaces))
+	}
+}
+
 func TestRemoveManagedEntriesRemovesSelectedWorkspaces(t *testing.T) {
 	st := &state.State{
 		Workspaces: []state.Workspace{
