@@ -37,10 +37,13 @@ grove init
 grove new mono feat/build-auth          # prints ~/worktrees/mono/feat-build-auth
 grove new mono agent --from feat/base   # create agent from feat/base
 grove new --here chore/readme           # add cwd repo if needed, then create worktree
+grove new --here chore/readme --json    # print machine-readable workspace metadata
 
 # 3. Find and remove workspaces
 grove cd mono/feat/build-auth
 grove done mono/feat/build-auth
+grove list --json
+grove rm --path ~/worktrees/mono/feat-build-auth --yes
 grove cleanup
 ```
 
@@ -128,18 +131,43 @@ grove new mono feat/build-auth     # create or check out a specific branch
 grove new mono agent --from feat/base
 grove new --here fix/local-bug     # worktree the current git root
 grove new --no-prepare mono agent  # skip prepare commands
+grove new --json mono agent        # print worktree_path, branch, repo, repo_path, created_at
 
 grove which                        # print registered repo name for cwd
 grove which ~/code/mono/pkg        # print registered repo name for a path
 
 grove done [workspace]             # remove a workspace and print the next path
 grove rm [workspace...]            # remove workspaces and their worktrees
+grove rm --path <worktree> --yes   # remove one worktree-backed workspace without prompts
 grove rm -j 2                      # lower concurrent worktree deletion
+grove list --json                  # print state-backed workspaces as JSON
 grove cleanup                      # remove orphaned worktrees under Grove roots
 grove cleanup --all -f             # remove all orphaned worktrees without prompts
 ```
 
 `grove which [path]` exits non-zero for unregistered paths. It matches configured repo paths and Grove-managed worktrees.
+
+## Machine-readable automation
+
+`grove new --json` keeps creation behavior unchanged but writes this JSON object to stdout instead of the bare path:
+
+```json
+{
+  "worktree_path": "/Users/me/worktrees/mono/feat-json",
+  "branch": "feat/json",
+  "repo": "mono",
+  "repo_path": "/Users/me/code/mono",
+  "created_at": "2026-07-01T18:06:00Z"
+}
+```
+
+`grove list --json` writes a JSON array from Grove state. Each object contains `name`, `repo`, `repo_path`, `branch`, `worktree_path`, `session_name`, `created_at`, and `last_used_at`.
+
+`grove rm --path <worktree_path> --yes` is non-interactive: it never opens fzf and never prompts. It exits with:
+
+- `0`: removed, or state existed and the worktree was already gone.
+- `3`: no Grove state entry matched the path.
+- `4`: Grove found the state entry but failed to remove the worktree; the state entry is restored.
 
 ## Workspaces
 

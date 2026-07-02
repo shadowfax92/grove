@@ -120,7 +120,27 @@ func Execute() {
 		if errors.Is(err, ErrCancelled) {
 			os.Exit(0)
 		}
+		if code, ok := exitCodeForError(err); ok {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(code)
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+}
+
+const (
+	exitRemovePathNotFound = 3
+	exitRemoveFailed       = 4
+)
+
+func exitCodeForError(err error) (int, bool) {
+	switch {
+	case errors.Is(err, ErrRemovePathNotFound):
+		return exitRemovePathNotFound, true
+	case errors.Is(err, ErrRemoveFailed):
+		return exitRemoveFailed, true
+	default:
+		return 0, false
 	}
 }
