@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"reflect"
 	"sync/atomic"
@@ -117,6 +118,48 @@ func TestRunRemovePathRestoresStateOnRemovalFailure(t *testing.T) {
 	}
 	if !reflect.DeepEqual(loaded.Workspaces, original) {
 		t.Fatalf("restored workspaces = %#v, want %#v", loaded.Workspaces, original)
+	}
+}
+
+func TestRemoveSelectedTargetsRestoresOnlyFailedTargets(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	alpha := state.Workspace{Name: "alpha", SessionName: "g/alpha", WorktreePath: "/worktrees/alpha"}
+	beta := state.Workspace{Name: "beta", SessionName: "g/beta", WorktreePath: "/worktrees/beta"}
+	gamma := state.Workspace{Name: "gamma", SessionName: "g/gamma", WorktreePath: "/worktrees/gamma"}
+	st := &state.State{Version: 1, Workspaces: []state.Workspace{alpha, beta, gamma}}
+	if err := mgr.Save(st); err != nil {
+		t.Fatalf("mgr.Save() error = %v", err)
+	}
+
+	targets := []workspaces.RemoveTarget{
+		{Workspace: alpha, SessionName: alpha.SessionName},
+		{Workspace: beta, SessionName: beta.SessionName},
+	}
+	failed, err := removeSelectedTargets(mgr, st, targets, 1, func(target workspaces.RemoveTarget) error {
+		if target.SessionName == beta.SessionName {
+			return fmt.Errorf("boom")
+		}
+		return nil
+	}, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("removeSelectedTargets() error = %v", err)
+	}
+	if len(failed) != 1 || failed[0].SessionName != beta.SessionName {
+		t.Fatalf("failed = %#v, want beta only", failed)
+	}
+
+	loaded, err := mgr.Load()
+	if err != nil {
+		t.Fatalf("mgr.Load() error = %v", err)
+	}
+	want := []state.Workspace{beta, gamma}
+	if !reflect.DeepEqual(loaded.Workspaces, want) {
+		t.Fatalf("workspaces after mixed removal = %#v, want %#v", loaded.Workspaces, want)
 	}
 }
 

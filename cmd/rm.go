@@ -163,12 +163,31 @@ func removeSelectedTargets(
 	failed := removeWorktreesWithOutput(targets, jobs, remove, out, errOut)
 
 	if len(failed) > 0 {
-		st.Workspaces = append(st.Workspaces[:0], originalWorkspaces...)
+		st.Workspaces = restoredWorkspacesAfterFailure(originalWorkspaces, targets, failed)
 		if err := mgr.Save(st); err != nil {
 			return failed, fmt.Errorf("%w: restoring state: %v", ErrRemoveFailed, err)
 		}
 	}
 	return failed, nil
+}
+
+func restoredWorkspacesAfterFailure(original []state.Workspace, targets []workspaces.RemoveTarget, failed []state.Workspace) []state.Workspace {
+	targeted := make(map[string]bool, len(targets))
+	for _, target := range targets {
+		targeted[target.SessionName] = true
+	}
+	failedSet := make(map[string]bool, len(failed))
+	for _, ws := range failed {
+		failedSet[ws.SessionName] = true
+	}
+
+	restored := make([]state.Workspace, 0, len(original))
+	for _, ws := range original {
+		if !targeted[ws.SessionName] || failedSet[ws.SessionName] {
+			restored = append(restored, ws)
+		}
+	}
+	return restored
 }
 
 func confirmRemove(targets []workspaces.RemoveTarget) bool {
