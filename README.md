@@ -20,6 +20,7 @@ Grove is path-first: every command prints a workspace path, and the `gv` fish he
 - **Fish helper** — `gv`, `gv n`, `gv cd`, `gv dd` wrap the path-printing core into real `cd`s
 - **Plain & dir workspaces** — not everything needs a worktree; back one with any directory or just `$HOME`
 - **Self-cleaning** — `grove done` retires one workspace, `grove reap` safely retires stale merged workspaces, `grove cleanup` sweeps orphaned worktrees
+- **Portable repo fleet** — export a curated `sync.yaml`, clone it onto a fresh machine, and safely fast-forward default branches in parallel
 
 ---
 
@@ -46,6 +47,9 @@ grove list --json                  # print state-backed workspace JSON
 grove reap --dry-run                # preview stale merged workspaces safe to retire
 grove rm --path ~/worktrees/mono/feat-build-auth --yes
 grove done mono/feat/build-auth   # finish it and remove the worktree
+grove sync export                # select local clones for the portable manifest
+grove sync --dry-run             # preview missing repositories to clone
+grove pull                       # select repositories whose defaults should advance
 ```
 
 Use `gv` instead of `grove` whenever you want the shell to `cd` into the path it prints.
@@ -121,9 +125,74 @@ grove cleanup --all -f             # remove every orphan, no prompts
 ```sh
 grove config                       # open config in $EDITOR (cfg)
 grove config --path                # print the config path
+grove sync export                  # append selected local repositories to sync.yaml
+grove sync                         # clone repositories missing from disk
+grove sync edit                    # open sync.yaml in $EDITOR
+grove sync status                  # show present, missing, and dirty repositories
+grove pull                         # pick repositories to safely pull
+grove pull --all                   # safely pull the full manifest fleet
 ```
 
 `grove which` exits non-zero for unregistered paths, so it doubles as a guard in scripts.
+
+## Sync repositories
+
+Grove's repository inventory lives at `~/.config/grove/sync.yaml`. It is separate from `config.yaml`: sync never registers workspace repos, and the manifest contains everything another machine needs to reproduce the selected checkout paths.
+
+```yaml
+root: ~/code
+groups:
+  clis:
+    - git@github.com:shadowfax92/grove.git
+    - url: git@github.com:acme/release-tool.git
+      name: release
+      branch: trunk
+  browseros-project:
+    - url: git@github.com:browseros-ai/BrowserOS.git
+      name: mono
+  ".":
+    - https://github.com/acme/directly-under-code.git
+```
+
+Each group becomes a directory below `root`; group `.` means directly below the root. A scalar entry uses the repository URL basename without `.git` as its name and the remote default branch. The mapping form can override `name` (including a nested path) and `branch`. Group keys can also contain slashes. The resulting target is always `<root>/<group>/<name>`.
+
+### Curate and copy the manifest
+
+```sh
+grove sync export
+scp ~/.config/grove/sync.yaml new-machine:~/.config/grove/sync.yaml
+ssh new-machine grove sync
+```
+
+`grove sync export` scans the manifest root, skips hidden directories, `node_modules`, worktrees/submodules whose `.git` is a file, and prunes descent when it finds a standalone clone. It resolves each `origin` in parallel, warns about repos without one, then opens fzf: Tab selects, Ctrl-A selects all, and Escape cancels cleanly.
+
+The first export writes only what you select. Later exports show only target paths not already present and append selections into their matching first-level group without rewriting comments or hand edits. Delete a manifest line by hand when you no longer want it; there are no ignore lists or tombstones. Use `grove sync edit` to open the file.
+
+### Converge a machine
+
+```sh
+grove sync                         # clone missing entries, 4 at a time
+grove sync --dry-run               # print the clone plan
+grove sync -j 2                    # lower parallelism
+grove sync --only 'clis/*'         # filter by group/name
+grove sync -f ~/fleet/sync.yaml    # use another manifest
+grove sync status                  # local-only presence and dirty tree
+```
+
+Sync is deliberately dumb and non-destructive. A missing target is cloned, with `-b` only for an explicit manifest branch. An existing Git checkout is left untouched. Any other existing path is reported as a failure. Sync never moves or deletes paths, rewrites URLs, finds same-origin clones elsewhere, or adds entries to `config.yaml`. It continues independent clones and exits non-zero after summarizing any failures.
+
+### Fast-forward the fleet
+
+```sh
+grove pull                         # fzf multi-select over present manifest repos
+grove pull --all                   # include the whole manifest in the report
+grove pull --all --dry-run
+grove pull --only 'browseros-project/*' -j 4
+```
+
+The picker shows `group/name`, the current branch, and `!` for a dirty tree. On a clean checkout of the default branch, Grove runs `git pull --ff-only`. On another branch it runs the non-forced `git fetch origin <default>:<default>`, advancing the local default without switching branches or touching the working tree. An explicit manifest `branch` is the default; otherwise Grove resolves `origin/HEAD` through its normal default-branch helper.
+
+Dirty trees, detached HEADs, merge/rebase state, divergence, occupied non-repo paths, and default branches checked out by another worktree are reported per repo and never forced. Missing repos are skipped with a `grove sync` hint under `--all`. The grouped summary reports updated, already-current, skipped, and failed repositories; any failure makes the command exit non-zero.
 
 ## Config
 
