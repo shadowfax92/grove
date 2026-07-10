@@ -5,9 +5,38 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+func TestParseTTLAcceptsDayShorthand(t *testing.T) {
+	got, err := ParseTTL("1d")
+	if err != nil {
+		t.Fatalf("ParseTTL() error = %v", err)
+	}
+	if got != 24*time.Hour {
+		t.Fatalf("ParseTTL() = %v, want %v", got, 24*time.Hour)
+	}
+}
+
+func TestParseTTLRejectsInvalidValue(t *testing.T) {
+	if _, err := ParseTTL("nope"); err == nil {
+		t.Fatal("ParseTTL() error = nil, want parse error")
+	}
+}
+
+func TestDurationUnmarshalsFromYAML(t *testing.T) {
+	var s struct {
+		TTL Duration `yaml:"ttl"`
+	}
+	if err := yaml.Unmarshal([]byte("ttl: 90m\n"), &s); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if s.TTL.Duration() != 90*time.Minute {
+		t.Fatalf("TTL = %v, want 90m", s.TTL.Duration())
+	}
+}
 
 func TestNewWorktreeRepoUsesInitDefaults(t *testing.T) {
 	repo := NewWorktreeRepo("/tmp/project", "project", "main")
@@ -106,12 +135,40 @@ func TestLoadCreatesDefaultGlobalWorktreeRoot(t *testing.T) {
 	if got, want := cfg.WorktreeRoot, filepath.Join(home, "worktrees"); got != want {
 		t.Fatalf("WorktreeRoot = %q, want %q", got, want)
 	}
+	if got := cfg.Reap.TTL.Duration(); got != DefaultReapTTL {
+		t.Fatalf("Reap TTL = %v, want %v", got, DefaultReapTTL)
+	}
 	data, err := os.ReadFile(filepath.Join(home, ".config", "grove", "config.yaml"))
 	if err != nil {
 		t.Fatalf("reading default config: %v", err)
 	}
-	if out := string(data); !strings.Contains(out, "worktree_root: ~/worktrees") {
-		t.Fatalf("default config missing global worktree_root:\n%s", out)
+	out := string(data)
+	for _, want := range []string{"worktree_root: ~/worktrees", "reap:", "ttl: 6h"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("default config missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestLoadDefaultsReapTTLWhenMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repoPath := t.TempDir()
+	configPath := filepath.Join(home, ".config", "grove", "config.yaml")
+	writeConfigFile(t, configPath, strings.Join([]string{
+		"worktree_root: ~/worktrees",
+		"repos:",
+		"  - path: " + repoPath,
+		"    name: project",
+		"",
+	}, "\n"))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Reap.TTL.Duration(); got != DefaultReapTTL {
+		t.Fatalf("Reap TTL = %v, want %v", got, DefaultReapTTL)
 	}
 }
 

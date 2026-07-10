@@ -4,14 +4,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
 	WorktreeRoot string       `yaml:"worktree_root,omitempty"`
+	Reap         ReapConfig   `yaml:"reap,omitempty"`
 	Repos        []RepoConfig `yaml:"repos"`
+}
+
+type ReapConfig struct {
+	TTL Duration `yaml:"ttl,omitempty"`
 }
 
 type RepoConfig struct {
@@ -27,6 +34,52 @@ type RepoConfig struct {
 
 const DefaultPrepareCleanCommand = `git diff --quiet && git diff --cached --quiet || (echo "uncommitted changes in base repo" && exit 1)`
 const DefaultWorktreeRoot = "~/worktrees"
+const DefaultReapTTL = 6 * time.Hour
+
+// Duration unmarshals human TTL values like "6h", "90m", or "1d".
+type Duration time.Duration
+
+func (d Duration) Duration() time.Duration { return time.Duration(d) }
+
+func (d Duration) MarshalYAML() (any, error) {
+	return formatDuration(time.Duration(d)), nil
+}
+
+func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
+	dur, err := ParseTTL(value.Value)
+	if err != nil {
+		return err
+	}
+	*d = Duration(dur)
+	return nil
+}
+
+// ParseTTL parses CLI/config duration strings, including a "d" day suffix.
+func ParseTTL(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	if strings.HasSuffix(raw, "d") {
+		days, err := strconv.Atoi(strings.TrimSuffix(raw, "d"))
+		if err != nil || days <= 0 {
+			return 0, fmt.Errorf("invalid duration %q (examples: 1h, 90m, 1d)", raw)
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("invalid duration %q (examples: 1h, 90m, 1d)", raw)
+	}
+	return d, nil
+}
+
+func formatDuration(d time.Duration) string {
+	if d%(24*time.Hour) == 0 {
+		return fmt.Sprintf("%dd", int(d/(24*time.Hour)))
+	}
+	return d.String()
+}
 
 func DefaultConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
@@ -143,6 +196,9 @@ func (c *Config) resolve() error {
 	}
 
 	c.WorktreeRoot = expandTilde(c.WorktreeRoot, home)
+	if c.Reap.TTL <= 0 {
+		c.Reap.TTL = Duration(DefaultReapTTL)
+	}
 	for i := range c.Repos {
 		c.Repos[i].Path = expandTilde(c.Repos[i].Path, home)
 		c.Repos[i].WorktreeRoot = expandTilde(c.Repos[i].WorktreeRoot, home)
@@ -217,7 +273,10 @@ func createDefault(path string) (*Config, error) {
 
 	raw := Config{
 		WorktreeRoot: DefaultWorktreeRoot,
-		Repos:        []RepoConfig{},
+		Reap: ReapConfig{
+			TTL: Duration(DefaultReapTTL),
+		},
+		Repos: []RepoConfig{},
 	}
 
 	data, err := yaml.Marshal(raw)

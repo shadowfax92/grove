@@ -19,7 +19,7 @@ Grove is path-first: every command prints a workspace path, and the `gv` fish he
 - **Prepare & setup hooks** — pull main, install deps, run anything before and after a worktree is born
 - **Fish helper** — `gv`, `gv n`, `gv cd`, `gv dd` wrap the path-printing core into real `cd`s
 - **Plain & dir workspaces** — not everything needs a worktree; back one with any directory or just `$HOME`
-- **Self-cleaning** — `grove done` retires a workspace, `grove cleanup` sweeps orphaned worktrees
+- **Self-cleaning** — `grove done` retires one workspace, `grove reap` safely retires stale merged workspaces, `grove cleanup` sweeps orphaned worktrees
 
 ---
 
@@ -43,6 +43,7 @@ grove new mono feat/build-auth    # create a worktree, print its path
 grove new --here chore/readme --json  # create and print metadata JSON
 grove cd mono/feat/build-auth     # find an existing workspace, print its path
 grove list --json                  # print state-backed workspace JSON
+grove reap --dry-run                # preview stale merged workspaces safe to retire
 grove rm --path ~/worktrees/mono/feat-build-auth --yes
 grove done mono/feat/build-auth   # finish it and remove the worktree
 ```
@@ -109,6 +110,8 @@ grove done [workspace]             # finish a workspace, print $HOME (d)
 grove rm [workspace...]            # remove workspaces and their worktrees (remove)
 grove rm --path <worktree> --yes   # remove one worktree-backed workspace without prompts
 grove rm -j 2                      # cap parallel worktree deletion
+grove reap --dry-run                # report stale managed workspaces selected/skipped
+grove reap --ttl 12h                # override the configured idle threshold
 grove cleanup                      # remove orphaned worktrees under grove roots
 grove cleanup --all -f             # remove every orphan, no prompts
 ```
@@ -128,6 +131,9 @@ Location: `~/.config/grove/config.yaml`. A fresh config starts with a global wor
 
 ```yaml
 worktree_root: ~/worktrees
+
+reap:
+  ttl: 6h
 
 repos:
   - path: ~/code/mono
@@ -163,6 +169,18 @@ repos:
 | `prepare` | Commands run in the base repo before a workspace is created |
 | `setup` | Commands run in the new workspace after the worktree exists |
 
+### Reap
+
+`grove reap` removes only Grove-managed worktree workspaces that are stale and independently proven safe:
+
+- idle longer than `reap.ttl` (default `6h`, override with `grove reap --ttl 1h`)
+- no live tmux session for the stored Grove session name
+- current branch still matches Grove state
+- clean git status, including no untracked files
+- worktree HEAD is already reachable from `origin/<default_branch>` or the local default branch
+
+Anything recent, dirty, unmerged, active, non-worktree, missing, malformed, or otherwise ambiguous is preserved and reported. Use `grove reap --dry-run` for a full selected/skipped report before deletion. Reaping uses the same bounded removal and state-restore path as `grove rm`, so state is restored for any worktree that fails to remove.
+
 ### Worktree roots
 
 Where a worktree lands depends on which `worktree_root` is set:
@@ -197,6 +215,8 @@ Where a worktree lands depends on which `worktree_root` is set:
 - `3`: no Grove state entry matched the path.
 - `4`: Grove found the state entry but failed to remove the worktree; the state entry is restored.
 
+`grove reap --dry-run` is also non-interactive and reports both selected and skipped managed workspaces with reasons. A non-dry run removes only the selected safe workspaces; partial failures leave the failed workspaces in state and return exit code `4`.
+
 ## Workspaces
 
 Grove tracks three kinds of workspace:
@@ -209,7 +229,7 @@ Grove tracks three kinds of workspace:
 <img src="assets/grove.png" width="700" alt="grove workspaces in a tmux session picker">
 </div>
 
-`grove cleanup` finds git worktrees that exist on disk under grove-owned roots but are no longer in grove's state, and offers to remove them — it understands the global root, per-repo overrides, and the legacy `.grove/worktrees` layout.
+`grove cleanup` finds git worktrees that exist on disk under grove-owned roots but are no longer in grove's state, and offers to remove them — it understands the global root, per-repo overrides, and the legacy `.grove/worktrees` layout. It is intentionally separate from `grove reap`, which only considers managed state entries and refuses to remove anything it cannot prove is stale, clean, inactive, and merged.
 
 ---
 
