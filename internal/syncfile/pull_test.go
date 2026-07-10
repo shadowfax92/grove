@@ -64,14 +64,15 @@ func TestPullArgsNeverForceDefaultRefspec(t *testing.T) {
 		want     []string
 	}{
 		{PullDecision{Repo: repo, State: RepoState{DefaultBranch: "main"}, Action: PullCheckedOutDefault}, []string{"pull", "--ff-only"}},
-		{PullDecision{Repo: repo, State: RepoState{DefaultBranch: "main"}, Action: PullAdvanceDefault}, []string{"fetch", "origin", "main:main"}},
+		{PullDecision{Repo: repo, State: RepoState{DefaultBranch: "main"}, Action: PullAdvanceDefault}, []string{"fetch", "origin", "refs/heads/main:refs/heads/main"}},
+		{PullDecision{Repo: repo, State: RepoState{DefaultBranch: "+main"}, Action: PullAdvanceDefault}, []string{"fetch", "origin", "refs/heads/+main:refs/heads/+main"}},
 	}
 	for _, tt := range tests {
 		got := PullArgs(tt.decision)
 		if !reflect.DeepEqual(got, tt.want) {
 			t.Fatalf("PullArgs() = %v, want %v", got, tt.want)
 		}
-		if strings.Contains(strings.Join(got, " "), "+main") {
+		if len(got) == 3 && strings.HasPrefix(got[2], "+") {
 			t.Fatalf("forced refspec in %v", got)
 		}
 	}
@@ -114,8 +115,19 @@ func TestRunPullContinuesAfterFailuresAndDryRunSkipsExecution(t *testing.T) {
 
 	called = 0
 	dry := RunPull(targets[1:], 2, true, func(PullDecision) PullResult { called++; return PullResult{} })
-	if called != 0 || dry[0].Status != PullSkipped || !strings.Contains(dry[0].Reason, "would git pull --ff-only") || !strings.Contains(dry[1].Reason, "would git fetch origin main:main") {
+	if called != 0 || dry[0].Status != PullSkipped || !strings.Contains(dry[0].Reason, "would git pull --ff-only") || !strings.Contains(dry[1].Reason, "would git fetch origin refs/heads/main:refs/heads/main") {
 		t.Fatalf("dry results = %#v, called = %d", dry, called)
+	}
+}
+
+func TestResolveDefaultBranchesRejectsInvalidBranch(t *testing.T) {
+	targets := []PullTarget{{
+		Repo:  Repo{Entry: Entry{Name: "bad", Branch: "bad:name"}},
+		State: RepoState{Exists: true, Git: true},
+	}}
+	ResolveDefaultBranches(targets, nil)
+	if targets[0].State.Err == nil || !strings.Contains(targets[0].State.Err.Error(), "invalid default branch") {
+		t.Fatalf("resolved state = %#v", targets[0].State)
 	}
 }
 

@@ -116,6 +116,8 @@ func TestParseManifestRejectsUnsafeAndDuplicateTargets(t *testing.T) {
 		{"parent group", "root: /code\ngroups:\n  ../elsewhere:\n    - https://example.com/a.git\n", "invalid group"},
 		{"absolute name", "root: /code\ngroups:\n  clis:\n    - url: https://example.com/a.git\n      name: /tmp/a\n", "invalid name"},
 		{"duplicate target", "root: /code\ngroups:\n  clis:\n    - https://example.com/a.git\n    - https://elsewhere.test/a.git\n", "duplicate target"},
+		{"same path through dot group", "root: /code\ngroups:\n  .:\n    - url: https://example.com/a.git\n      name: clis/a\n  clis:\n    - https://elsewhere.test/a.git\n", "duplicate target"},
+		{"overlapping targets", "root: /code\ngroups:\n  clis:\n    - https://example.com/a.git\n    - url: https://example.com/b.git\n      name: a/nested\n", "overlapping targets"},
 		{"missing url", "root: /code\ngroups:\n  clis:\n    - name: nope\n", "url is required"},
 	}
 	for _, tt := range tests {
@@ -142,6 +144,9 @@ custom_key: keep-me
 	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(path, 0600); err != nil {
+		t.Fatal(err)
+	}
 	additions := map[string][]Entry{
 		"clis":  {{URL: "https://example.com/new.git", Name: "new"}},
 		"hacks": {{URL: "https://example.com/fork.git", Name: "fork-copy"}},
@@ -164,6 +169,13 @@ custom_key: keep-me
 	}
 	if got := len(m.Repos()); got != 3 {
 		t.Fatalf("repo count = %d, want 3", got)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Fatalf("manifest permissions = %o, want 600", got)
 	}
 }
 

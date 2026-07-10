@@ -161,6 +161,9 @@ func ResolveDefaultBranches(targets []PullTarget, resolve DefaultBranchResolver)
 		} else {
 			targets[i].State.DefaultBranch = resolve(targets[i].Repo.Path)
 		}
+		if branch := targets[i].State.DefaultBranch; branch != "" && !validBranchName(branch) {
+			targets[i].State.Err = fmt.Errorf("invalid default branch %q", branch)
+		}
 	}
 }
 
@@ -259,7 +262,8 @@ func PullArgs(decision PullDecision) []string {
 		return []string{"pull", "--ff-only"}
 	}
 	branch := decision.State.DefaultBranch
-	return []string{"fetch", "origin", branch + ":" + branch}
+	ref := "refs/heads/" + branch
+	return []string{"fetch", "origin", ref + ":" + ref}
 }
 
 func GitPull(decision PullDecision) PullResult {
@@ -395,4 +399,9 @@ func lastNonEmptyLine(output string) string {
 		}
 	}
 	return "git command failed"
+}
+
+func validBranchName(branch string) bool {
+	cmd := exec.Command("git", "check-ref-format", "--branch", branch)
+	return cmd.Run() == nil
 }

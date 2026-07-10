@@ -4,6 +4,7 @@ package syncfile
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -195,7 +196,11 @@ func Append(file, root string, additions map[string][]Entry) error {
 	if _, err := Parse(data); err != nil {
 		return fmt.Errorf("validating updated sync manifest: %w", err)
 	}
-	if err := os.WriteFile(file, data, 0644); err != nil {
+	info, err := os.Stat(file)
+	if err != nil {
+		return fmt.Errorf("stat sync manifest: %w", err)
+	}
+	if err := writeAtomic(file, data, info.Mode().Perm()); err != nil {
 		return fmt.Errorf("writing sync manifest: %w", err)
 	}
 	return nil
@@ -250,6 +255,7 @@ func normalizeAndValidate(manifest *Manifest) error {
 	}
 
 	seen := make(map[string]bool)
+	var targets []string
 	for group, entries := range manifest.Groups {
 		if !validRelative(group, true) {
 			return fmt.Errorf("invalid group %q: must be a relative path", group)
@@ -268,15 +274,30 @@ func normalizeAndValidate(manifest *Manifest) error {
 			if !validRelative(entry.Name, false) {
 				return fmt.Errorf("invalid name %q in group %s: must be a relative path", entry.Name, group)
 			}
-			key := Repo{Group: group, Entry: *entry}.Key()
-			if seen[key] {
-				return fmt.Errorf("duplicate target %s", key)
+			target := targetRelativePath(group, entry.Name)
+			if seen[target] {
+				return fmt.Errorf("duplicate target %s", target)
 			}
-			seen[key] = true
+			seen[target] = true
+			targets = append(targets, target)
 		}
 		manifest.Groups[group] = entries
 	}
+	for i, ancestor := range targets {
+		for j, descendant := range targets {
+			if i != j && strings.HasPrefix(descendant, ancestor+"/") {
+				return fmt.Errorf("overlapping targets %s and %s", ancestor, descendant)
+			}
+		}
+	}
 	return nil
+}
+
+func targetRelativePath(group, name string) string {
+	if group == "." {
+		return path.Clean(name)
+	}
+	return path.Join(group, name)
 }
 
 func validRelative(value string, allowDot bool) bool {
@@ -312,8 +333,42 @@ func writeNew(file string, manifest *Manifest) error {
 	if err := os.MkdirAll(filepath.Dir(file), 0755); err != nil {
 		return fmt.Errorf("creating sync manifest directory: %w", err)
 	}
-	if err := os.WriteFile(file, data, 0644); err != nil {
+	if err := writeAtomic(file, data, 0644); err != nil {
 		return fmt.Errorf("writing sync manifest: %w", err)
+	}
+	return nil
+}
+
+func writeAtomic(file string, data []byte, mode os.FileMode) (returnErr error) {
+	temp, err := os.CreateTemp(filepath.Dir(file), "."+filepath.Base(file)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer func() {
+		if returnErr != nil {
+			_ = temp.Close()
+		}
+		_ = os.Remove(tempPath)
+	}()
+	if err := temp.Chmod(mode.Perm()); err != nil {
+		return err
+	}
+	n, err := temp.Write(data)
+	if err != nil {
+		return err
+	}
+	if n != len(data) {
+		return io.ErrShortWrite
+	}
+	if err := temp.Sync(); err != nil {
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, file); err != nil {
+		return err
 	}
 	return nil
 }
