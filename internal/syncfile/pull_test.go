@@ -166,6 +166,32 @@ func TestGitPullAdvancesDefaultWithoutSwitchingFeatureBranch(t *testing.T) {
 	}
 }
 
+func TestGitPullRefreshesSafetyStateBeforeExecuting(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	runTestGit(t, filepath.Dir(repoPath), "init", repoPath)
+	runTestGit(t, repoPath, "config", "user.email", "test@example.com")
+	runTestGit(t, repoPath, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(repoPath, "file.txt"), []byte("clean"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, repoPath, "add", "file.txt")
+	runTestGit(t, repoPath, "commit", "-m", "base")
+	runTestGit(t, repoPath, "branch", "-M", "main")
+
+	staleDecision := PullDecision{
+		Repo:   Repo{Group: "clis", Entry: Entry{Name: "repo", Branch: "main"}, Path: repoPath},
+		State:  RepoState{Exists: true, Git: true, CurrentBranch: "main", DefaultBranch: "main"},
+		Action: PullCheckedOutDefault,
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "file.txt"), []byte("dirty"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	result := GitPull(staleDecision)
+	if result.Status != PullFailed || result.Reason != "uncommitted changes" {
+		t.Fatalf("GitPull() = %#v, want dirty failure", result)
+	}
+}
+
 func runTestGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)

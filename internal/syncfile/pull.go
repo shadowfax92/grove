@@ -263,7 +263,21 @@ func PullArgs(decision PullDecision) []string {
 }
 
 func GitPull(decision PullDecision) PullResult {
+	freshTarget := []PullTarget{{Repo: decision.Repo, State: InspectLocal(decision.Repo)}}
+	ResolveDefaultBranches(freshTarget, nil)
+	decision = ClassifyPull(decision.Repo, freshTarget[0].State)
 	result := PullResult{Repo: decision.Repo}
+	if decision.Action == PullSkip {
+		result.Status = PullSkipped
+		result.Reason = decision.Reason
+		return result
+	}
+	if decision.Action == PullFail {
+		result.Status = PullFailed
+		result.Reason = decision.Reason
+		return result
+	}
+
 	before := shortBranchSHA(decision.Repo.Path, decision.State.DefaultBranch)
 	cmd := exec.Command("git", PullArgs(decision)...)
 	cmd.Dir = decision.Repo.Path

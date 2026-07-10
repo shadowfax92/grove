@@ -28,8 +28,8 @@ groups:
 	repos := m.Repos()
 	want := []Repo{
 		{Group: ".", Entry: Entry{URL: "git@github.com:acme/root-repo.git", Name: "root-repo"}, Path: "/code/root-repo"},
-		{Group: "clis", Entry: Entry{URL: "https://github.com/acme/tool.git", Name: "nested/tool-copy"}, Path: "/code/clis/nested/tool-copy"},
 		{Group: "teams/platform", Entry: Entry{URL: "https://github.com/acme/api.git", Name: "api", Branch: "trunk"}, Path: "/code/teams/platform/api"},
+		{Group: "clis", Entry: Entry{URL: "https://github.com/acme/tool.git", Name: "nested/tool-copy"}, Path: "/code/clis/nested/tool-copy"},
 	}
 	if !reflect.DeepEqual(repos, want) {
 		t.Fatalf("Repos() = %#v, want %#v", repos, want)
@@ -41,7 +41,8 @@ groups:
 
 func TestManifestRenderRoundTrip(t *testing.T) {
 	want := &Manifest{
-		Root: "~/code",
+		Root:       "~/code",
+		GroupOrder: []string{"clis"},
 		Groups: map[string][]Entry{
 			"clis": {
 				{URL: "git@github.com:acme/grove.git", Name: "grove"},
@@ -62,6 +63,47 @@ func TestManifestRenderRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("round trip = %#v, want %#v", got, want)
+	}
+}
+
+func TestParsePreservesAuthoredGroupAndEntryOrder(t *testing.T) {
+	m, err := Parse([]byte(`root: /code
+groups:
+  z-last:
+    - url: https://example.com/b.git
+      name: b
+    - url: https://example.com/a.git
+      name: a
+  a-first:
+    - https://example.com/c.git
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, repo := range m.Repos() {
+		got = append(got, repo.Key())
+	}
+	want := []string{"z-last/b", "z-last/a", "a-first/c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("repo order = %v, want %v", got, want)
+	}
+}
+
+func TestRenderQuotesLeadingYAMLIndicators(t *testing.T) {
+	m := &Manifest{Root: "~/code", Groups: map[string][]Entry{
+		"%team": {{URL: "https://example.com/repo.git", Name: "\"repo"}},
+	}}
+	raw, err := Render(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("rendered manifest is invalid: %v\n%s", err, raw)
+	}
+	if repos := got.Repos(); len(repos) != 1 || repos[0].Group != "%team" || repos[0].Name != "\"repo" {
+		t.Fatalf("round trip repos = %#v", got.Repos())
 	}
 }
 

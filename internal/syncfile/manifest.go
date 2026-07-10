@@ -16,8 +16,9 @@ import (
 const DefaultRoot = "~/code"
 
 type Manifest struct {
-	Root   string             `yaml:"root"`
-	Groups map[string][]Entry `yaml:"groups"`
+	Root       string             `yaml:"root"`
+	Groups     map[string][]Entry `yaml:"groups"`
+	GroupOrder []string           `yaml:"-"`
 }
 
 type Entry struct {
@@ -76,9 +77,23 @@ func ExpandRoot(root string) (string, error) {
 }
 
 func Parse(data []byte) (*Manifest, error) {
-	var manifest Manifest
-	if err := yaml.Unmarshal(data, &manifest); err != nil {
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
 		return nil, fmt.Errorf("parsing sync manifest: %w", err)
+	}
+	mapping, err := rootMapping(&document)
+	if err != nil {
+		return nil, err
+	}
+	var manifest Manifest
+	if err := document.Decode(&manifest); err != nil {
+		return nil, fmt.Errorf("parsing sync manifest: %w", err)
+	}
+	_, groupsNode := mappingPair(mapping, "groups")
+	if groupsNode != nil && groupsNode.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(groupsNode.Content); i += 2 {
+			manifest.GroupOrder = append(manifest.GroupOrder, groupsNode.Content[i].Value)
+		}
 	}
 	if err := normalizeAndValidate(&manifest); err != nil {
 		return nil, err
@@ -125,7 +140,7 @@ func Render(manifest *Manifest) ([]byte, error) {
 		return []byte(b.String()), nil
 	}
 	b.WriteString("groups:\n")
-	groups := sortedGroupNames(copyManifest.Groups)
+	groups := manifestGroupNames(copyManifest)
 	for _, group := range groups {
 		b.WriteString("  " + yamlScalar(group) + ":\n")
 		for _, entry := range copyManifest.Groups[group] {
@@ -177,6 +192,9 @@ func Append(file, root string, additions map[string][]Entry) error {
 			return err
 		}
 	}
+	if _, err := Parse(data); err != nil {
+		return fmt.Errorf("validating updated sync manifest: %w", err)
+	}
 	if err := os.WriteFile(file, data, 0644); err != nil {
 		return fmt.Errorf("writing sync manifest: %w", err)
 	}
@@ -184,12 +202,10 @@ func Append(file, root string, additions map[string][]Entry) error {
 }
 
 func (m *Manifest) Repos() []Repo {
-	groups := sortedGroupNames(m.Groups)
+	groups := manifestGroupNames(m)
 	var repos []Repo
 	for _, group := range groups {
-		entries := append([]Entry(nil), m.Groups[group]...)
-		sort.SliceStable(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
-		for _, entry := range entries {
+		for _, entry := range m.Groups[group] {
 			parts := []string{m.Root}
 			if group != "." {
 				parts = append(parts, filepath.FromSlash(group))
@@ -430,16 +446,36 @@ func plainYAMLScalar(value string) bool {
 	if value == "" || strings.TrimSpace(value) != value || strings.ContainsAny(value, "\n\r\t") || strings.Contains(value, ": ") || strings.Contains(value, " #") {
 		return false
 	}
+	if strings.ContainsRune("-?:,[]{}#&*!|>'\"%@`", rune(value[0])) || value == "..." {
+		return false
+	}
 	switch strings.ToLower(value) {
 	case "null", "~", "true", "false", "yes", "no", "on", "off":
 		return false
 	}
-	for _, prefix := range []string{"#", "- ", "? ", "{", "}", "[", "]", ",", "&", "*", "!", "|", ">", "@", "`"} {
-		if strings.HasPrefix(value, prefix) {
-			return false
+	return true
+}
+
+func manifestGroupNames(manifest *Manifest) []string {
+	if manifest == nil {
+		return nil
+	}
+	seen := make(map[string]bool, len(manifest.Groups))
+	names := make([]string, 0, len(manifest.Groups))
+	for _, group := range manifest.GroupOrder {
+		if _, ok := manifest.Groups[group]; ok && !seen[group] {
+			names = append(names, group)
+			seen[group] = true
 		}
 	}
-	return true
+	var remaining []string
+	for group := range manifest.Groups {
+		if !seen[group] {
+			remaining = append(remaining, group)
+		}
+	}
+	sort.Strings(remaining)
+	return append(names, remaining...)
 }
 
 func sortedGroupNames(groups map[string][]Entry) []string {
@@ -455,7 +491,11 @@ func cloneManifest(manifest *Manifest) *Manifest {
 	if manifest == nil {
 		return &Manifest{}
 	}
-	return &Manifest{Root: manifest.Root, Groups: cloneGroups(manifest.Groups)}
+	return &Manifest{
+		Root:       manifest.Root,
+		Groups:     cloneGroups(manifest.Groups),
+		GroupOrder: append([]string(nil), manifest.GroupOrder...),
+	}
 }
 
 func cloneGroups(groups map[string][]Entry) map[string][]Entry {

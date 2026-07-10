@@ -30,8 +30,8 @@ func TestPlanApplyClassifiesTargetsAndFilters(t *testing.T) {
 	}
 	want := []ApplyItem{
 		{Repo: Repo{Group: "clis", Entry: Entry{URL: "https://example.com/clone.git", Name: "clone", Branch: "dev"}, Path: "/code/clis/clone"}, Action: ApplyClone},
-		{Repo: Repo{Group: "clis", Entry: Entry{URL: "https://example.com/occupied.git", Name: "occupied"}, Path: "/code/clis/occupied"}, Action: ApplyFail, Reason: "path exists but is not a git repository"},
 		{Repo: Repo{Group: "clis", Entry: Entry{URL: "https://example.com/present.git", Name: "present"}, Path: "/code/clis/present"}, Action: ApplyAlready},
+		{Repo: Repo{Group: "clis", Entry: Entry{URL: "https://example.com/occupied.git", Name: "occupied"}, Path: "/code/clis/occupied"}, Action: ApplyFail, Reason: "path exists but is not a git repository"},
 	}
 	if !reflect.DeepEqual(plan, want) {
 		t.Fatalf("PlanApply() = %#v, want %#v", plan, want)
