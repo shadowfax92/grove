@@ -17,7 +17,7 @@ Use `go test ./...` for verification. The module name is `grove` (not a URL-styl
 
 ## Architecture
 
-**CLI layer** (`cmd/`): Cobra commands — `start`, `new`, `cd`, `rm`, `list`, `switch`, `done`, `config`, `notify`, `shadow`. Each file registers its command via `init()` → `rootCmd.AddCommand()`.
+**CLI layer** (`cmd/`): Cobra commands — workspace commands plus `sync` (`export`, `edit`, `status`) and `pull`. Each command lives in its own file and registers via `init()` → `rootCmd.AddCommand()` (sync children register on `syncCmd`).
 
 **Internal packages** (`internal/`):
 - `config/` — YAML config at `~/.config/grove/config.yaml`. `Load()` validates repo paths; `LoadFast()` skips validation for fast-path command reads.
@@ -25,8 +25,9 @@ Use `go test ./...` for verification. The module name is `grove` (not a URL-styl
 - `tmux/` — Thin wrappers around `tmux` CLI commands (no library).
 - `git/` — Git worktree operations. `AddWorktree` tries `-b` first, falls back to existing branch. Worktrees live under `<repo>/.grove/worktrees/<name>/`.
 - `names/` — Random animal name generator (~200 names). Checks against existing names for uniqueness.
+- `syncfile/` — Independent `~/.config/grove/sync.yaml` inventory, comment-preserving export append, pruned repo scanning, clone planning/execution, and local pull inspection/state transitions. It does not read or update config repos.
 
-**Data flow**: Config defines repos → `grove new` / `grove done` / `grove rm` update state → `grove start` reconciles tmux sessions from state → `grove cd` / `grove switch` / `grove list` read state for interaction.
+**Data flow**: Config defines workspace repos → `grove new` / `grove done` / `grove rm` update state → workspace navigation reads state. Separately, sync.yaml defines clone target paths → `grove sync` fills only missing paths → `grove pull` safely advances default refs → `grove sync status` inspects local presence/dirty state without network.
 
 **Session naming**: `g/<repo>/<branch>` for worktree workspaces, `g/<name>` for plain workspaces. (Changed from `grove/` prefix to `g/` for brevity.)
 
@@ -35,3 +36,6 @@ Use `go test ./...` for verification. The module name is `grove` (not a URL-styl
 - State manager must be locked (`mgr.Lock()`) before mutating state, unlocked after save.
 - `tmux.IsInsideTmux()` checks `$TMUX` env var to decide between `switch-client` (inside tmux) vs `attach-session` (outside).
 - Workspace creation: git worktree add → run setup commands → add workspace to state → either print the path (default) or create/switch tmux with `--tmux`.
+- Sync identity is `group/name` (the target path), never the origin URL. Duplicate origins at different paths are valid.
+- Sync operations are non-destructive: no moves/deletes, `git pull --ff-only` on checked-out defaults, and a non-forced `<default>:<default>` fetch from feature branches. Per-repo failures must not stop the rest of a parallel run.
+- Export treats fzf selection as curation and appends YAML without re-marshalling existing hand edits. `.git` files, hidden directories, and `node_modules` are pruned from scans.
