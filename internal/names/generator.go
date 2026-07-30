@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"time"
+	_ "time/tzdata"
 )
 
 var animals = []string{
@@ -95,10 +96,11 @@ func generateBranchAt(existing []string, now time.Time) string {
 }
 
 func pacific() *time.Location {
-	if loc, err := time.LoadLocation("America/Los_Angeles"); err == nil {
-		return loc
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		panic(fmt.Sprintf("loading Pacific timezone: %v", err))
 	}
-	return time.Local
+	return loc
 }
 
 // pick returns an unused formatted choice, adding numeric suffixes after exhaustion.
