@@ -98,6 +98,96 @@ func TestSelectReapTargetsRequiresAgeAndSafety(t *testing.T) {
 	}
 }
 
+func TestForceReapBypassesPolicyChecks(t *testing.T) {
+	now := mustParseTime(t, "2026-07-10T12:00:00Z")
+	tests := []struct {
+		name          string
+		branch        string
+		currentBranch string
+		lastUsed      string
+		active        bool
+		clean         bool
+		merged        bool
+		wantSkip      string
+	}{
+		{"recent", "feat/recent", "feat/recent", "2026-07-10T11:00:00Z", false, true, true, "below ttl"},
+		{"active", "feat/active", "feat/active", "2026-07-10T04:00:00Z", true, true, true, "active tmux session"},
+		{"unverified branch", "feat/unverified", "", "2026-07-10T04:00:00Z", false, true, true, "could not verify current branch"},
+		{"branch mismatch", "feat/expected", "feat/actual", "2026-07-10T04:00:00Z", false, true, true, "branch mismatch"},
+		{"dirty", "feat/dirty", "feat/dirty", "2026-07-10T04:00:00Z", false, false, true, "dirty worktree"},
+		{"default branch", "main", "main", "2026-07-10T04:00:00Z", false, true, true, "default branch workspace"},
+		{"unmerged", "feat/unmerged", "feat/unmerged", "2026-07-10T04:00:00Z", false, true, false, "unmerged branch"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := t.TempDir()
+			ws := reapTestWorkspace(tt.branch, path, tt.lastUsed)
+			restore := stubReapChecks(
+				map[string]string{path: tt.currentBranch},
+				map[string]bool{path: tt.clean},
+				map[string]bool{path: tt.merged},
+				map[string]bool{ws.SessionName: tt.active},
+			)
+			defer restore()
+
+			opts := reapOptions{TTL: 6 * time.Hour, Config: reapTestConfig(), Now: now}
+			safe := evaluateReapWorkspace(ws, opts)
+			if !strings.Contains(safe.SkipReason, tt.wantSkip) {
+				t.Fatalf("safe skip = %q, want containing %q", safe.SkipReason, tt.wantSkip)
+			}
+
+			opts.Force = true
+			forced := evaluateReapWorkspace(ws, opts)
+			if forced.SkipReason != "" || forced.Reason != "forced; safety checks bypassed" {
+				t.Fatalf("forced decision = %#v, want selected", forced)
+			}
+		})
+	}
+}
+
+func TestForceReapKeepsStructuralGuards(t *testing.T) {
+	worktreePath := t.TempDir()
+	repoPath := t.TempDir()
+	filePath := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(filePath, []byte("not a directory"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	valid := reapTestWorkspace("feat/valid", worktreePath, "")
+	tests := []struct {
+		name     string
+		ws       state.Workspace
+		wantSkip string
+	}{
+		{"non-worktree", state.Workspace{Name: "notes", Type: "dir"}, "not a worktree workspace"},
+		{"missing repo path", func() state.Workspace { ws := valid; ws.RepoPath = ""; return ws }(), "missing worktree metadata"},
+		{"missing worktree path", func() state.Workspace { ws := valid; ws.WorktreePath = ""; return ws }(), "missing worktree metadata"},
+		{"missing session name", func() state.Workspace { ws := valid; ws.SessionName = ""; return ws }(), "missing worktree metadata"},
+		{"base repo", func() state.Workspace {
+			ws := valid
+			ws.RepoPath = repoPath
+			ws.WorktreePath = repoPath + string(os.PathSeparator) + "."
+			return ws
+		}(), "missing worktree metadata"},
+		{"missing directory", func() state.Workspace {
+			ws := valid
+			ws.WorktreePath = filepath.Join(t.TempDir(), "missing")
+			return ws
+		}(), "worktree path is missing"},
+		{"non-directory", func() state.Workspace { ws := valid; ws.WorktreePath = filePath; return ws }(), "worktree path is not a directory"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evaluateReapWorkspace(tt.ws, reapOptions{Force: true})
+			if got.SkipReason != tt.wantSkip {
+				t.Fatalf("skip = %q, want %q", got.SkipReason, tt.wantSkip)
+			}
+		})
+	}
+}
+
 func TestPrintDryRunReapReportIncludesSelectedAndSkippedReasons(t *testing.T) {
 	report := reapReport{
 		Matched: []reapDecision{{
@@ -128,7 +218,7 @@ func TestPrintDryRunReapReportIncludesSelectedAndSkippedReasons(t *testing.T) {
 	}
 }
 
-func TestRunReapRestoresStateWhenRemovalFails(t *testing.T) {
+func TestRunForceReapRestoresStateWhenRemovalFails(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	now := mustParseTime(t, "2026-07-10T12:00:00Z")
 	root := t.TempDir()
@@ -136,16 +226,14 @@ func TestRunReapRestoresStateWhenRemovalFails(t *testing.T) {
 	if err := os.MkdirAll(worktreePath, 0755); err != nil {
 		t.Fatalf("creating worktree: %v", err)
 	}
-	restore := stubReapChecks(
-		map[string]string{worktreePath: "feat/safe"},
-		map[string]bool{worktreePath: true},
-		map[string]bool{worktreePath: true},
-		nil,
-	)
-	defer restore()
 	origRemove := reapRemoveWorktree
+	origKill := reapKillTmuxSession
 	reapRemoveWorktree = func(workspaces.RemoveTarget) error { return fmt.Errorf("boom") }
-	defer func() { reapRemoveWorktree = origRemove }()
+	reapKillTmuxSession = func(string) error { return nil }
+	defer func() {
+		reapRemoveWorktree = origRemove
+		reapKillTmuxSession = origKill
+	}()
 
 	mgr, err := state.NewManager()
 	if err != nil {
@@ -159,7 +247,7 @@ func TestRunReapRestoresStateWhenRemovalFails(t *testing.T) {
 		t.Fatalf("mgr.Save() error = %v", err)
 	}
 
-	_, err = runReap(reapOptions{TTL: 6 * time.Hour, Config: reapTestConfig(), Now: now}, io.Discard, io.Discard)
+	_, err = runReap(reapOptions{Force: true, TTL: 6 * time.Hour, Config: reapTestConfig(), Now: now}, io.Discard, io.Discard)
 	if !errors.Is(err, ErrRemoveFailed) {
 		t.Fatalf("runReap() error = %v, want ErrRemoveFailed", err)
 	}
@@ -169,6 +257,82 @@ func TestRunReapRestoresStateWhenRemovalFails(t *testing.T) {
 	}
 	if !reflect.DeepEqual(loaded.Workspaces, original) {
 		t.Fatalf("restored workspaces = %#v, want %#v", loaded.Workspaces, original)
+	}
+}
+
+func TestRunForceReapDryRunPreviewsWithoutMutation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	worktreePath := t.TempDir()
+	ws := reapTestWorkspace("feat/dirty", worktreePath, "invalid")
+	st := &state.State{Version: 1, Workspaces: []state.Workspace{ws}}
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Save(st); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := runReap(reapOptions{DryRun: true, Force: true}, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("runReap() error = %v", err)
+	}
+	if len(report.Matched) != 1 {
+		t.Fatalf("matched = %#v, want forced workspace", report.Matched)
+	}
+	loaded, err := mgr.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.Workspaces, st.Workspaces) {
+		t.Fatalf("dry-run mutated state: %#v", loaded.Workspaces)
+	}
+
+	var out bytes.Buffer
+	printReapReport(&out, report, reapOptions{DryRun: true, Force: true})
+	if !strings.Contains(out.String(), "Would force reap 1 workspaces:") {
+		t.Fatalf("forced dry-run report = %q", out.String())
+	}
+}
+
+func TestRunForceReapCleansLiveSessionByExactName(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	binDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "tmux.log")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TMUX_TEST_LOG\"\n"
+	if err := os.WriteFile(filepath.Join(binDir, "tmux"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TMUX_TEST_LOG", logPath)
+
+	worktreePath := t.TempDir()
+	ws := reapTestWorkspace("feat/live", worktreePath, "")
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Save(&state.State{Version: 1, Workspaces: []state.Workspace{ws}}); err != nil {
+		t.Fatal(err)
+	}
+	origRemove := reapRemoveWorktree
+	reapRemoveWorktree = func(workspaces.RemoveTarget) error { return nil }
+	defer func() { reapRemoveWorktree = origRemove }()
+
+	if _, err := runReap(reapOptions{Force: true, Jobs: 1}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("runReap() error = %v", err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimSpace(string(data)), "\n")
+	want := []string{
+		"has-session -t =g/mono/feat/live",
+		"kill-session -t =g/mono/feat/live",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("tmux calls = %q, want %q", got, want)
 	}
 }
 
@@ -262,7 +426,29 @@ func TestGitMergedIntoDefaultRequiresOriginWhenPresent(t *testing.T) {
 }
 
 func TestReapHelpDocumentsDryRunAndSafety(t *testing.T) {
-	for _, want := range []string{"--dry-run", "--ttl", "dirty", "unmerged", "active"} {
+	flag := reapCmd.Flags().Lookup("force")
+	if flag == nil || flag.Shorthand != "f" {
+		t.Fatalf("force flag = %#v, want -f shorthand", flag)
+	}
+	defer func() {
+		_ = flag.Value.Set("false")
+		flag.Changed = false
+	}()
+	for _, arg := range []string{"--force", "-f"} {
+		_ = flag.Value.Set("false")
+		flag.Changed = false
+		if err := reapCmd.ParseFlags([]string{arg}); err != nil {
+			t.Fatalf("parsing %s: %v", arg, err)
+		}
+		force, _ := reapCmd.Flags().GetBool("force")
+		if !force {
+			t.Fatalf("%s did not enable force", arg)
+		}
+	}
+	if jobs := reapCmd.Flags().Lookup("jobs"); jobs == nil || jobs.Shorthand != "j" {
+		t.Fatalf("jobs flag = %#v, want -j shorthand", jobs)
+	}
+	for _, want := range []string{"--dry-run", "--force", "--ttl", "--jobs", "dirty", "unmerged", "active", "discard"} {
 		if !strings.Contains(reapCmd.Long+reapCmd.Flags().FlagUsages(), want) {
 			t.Fatalf("reap help missing %q", want)
 		}

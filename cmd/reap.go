@@ -19,6 +19,7 @@ import (
 
 func init() {
 	reapCmd.Flags().Bool("dry-run", false, "Show stale workspaces without removing them")
+	reapCmd.Flags().BoolP("force", "f", false, "Remove managed worktrees without age or Git safety checks")
 	reapCmd.Flags().String("ttl", "", "Idle threshold override (e.g. 1h, 90m, 1d); defaults to config")
 	reapCmd.Flags().IntP("jobs", "j", defaultRemoveJobs, "Max worktrees to remove in parallel")
 	rootCmd.AddCommand(reapCmd)
@@ -35,8 +36,14 @@ on the expected branch, and already merged into the repo's default branch.
 Anything dirty, unmerged, active, recent, non-worktree, or ambiguous is skipped
 and reported.
 
+Use --force only to remove all structurally valid managed worktrees, including
+recent, active, dirty, default-branch, and unmerged worktrees. Forced reap can
+discard uncommitted and unmerged work.
+
   grove reap              - remove eligible stale workspaces
   grove reap --dry-run    - show selected and skipped workspaces with reasons
+  grove reap --force -j 10
+                          - force removal with up to 10 parallel jobs
   grove reap --ttl 1h     - override the configured idle threshold
   grove reap -j 2         - cap parallel worktree deletion`,
 	Args: cobra.NoArgs,
@@ -53,6 +60,7 @@ and reported.
 
 type reapOptions struct {
 	DryRun bool
+	Force  bool
 	TTL    time.Duration
 	Jobs   int
 	Config *config.Config
@@ -80,11 +88,13 @@ var (
 	reapWorktreeClean     = gitWorktreeClean
 	reapMergedIntoDefault = gitMergedIntoDefault
 	reapTmuxSessionActive = tmuxSessionActive
+	reapKillTmuxSession   = killTmuxSessionIfLive
 	reapRemoveWorktree    = removeWorktreeForTarget
 )
 
 func reapOptionsFromFlags(cmd *cobra.Command) (reapOptions, error) {
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	force, _ := cmd.Flags().GetBool("force")
 	ttlRaw, _ := cmd.Flags().GetString("ttl")
 	jobs, _ := cmd.Flags().GetInt("jobs")
 
@@ -103,6 +113,7 @@ func reapOptionsFromFlags(cmd *cobra.Command) (reapOptions, error) {
 
 	return reapOptions{
 		DryRun: dryRun,
+		Force:  force,
 		TTL:    ttl,
 		Jobs:   jobs,
 		Config: cfg,
@@ -141,7 +152,16 @@ func runReap(opts reapOptions, out io.Writer, errOut io.Writer) (reapReport, err
 	for _, decision := range report.Matched {
 		targets = append(targets, decision.Target)
 	}
-	failed, err := removeSelectedTargets(mgr, st, targets, opts.Jobs, reapRemoveWorktree, out, errOut)
+	remove := reapRemoveWorktree
+	if opts.Force {
+		remove = func(target workspaces.RemoveTarget) error {
+			if err := reapKillTmuxSession(target.SessionName); err != nil {
+				return fmt.Errorf("cleaning tmux session %q: %w", target.SessionName, err)
+			}
+			return reapRemoveWorktree(target)
+		}
+	}
+	failed, err := removeSelectedTargets(mgr, st, targets, opts.Jobs, remove, out, errOut)
 	report.Failed = failed
 	if err != nil {
 		return report, err
@@ -184,8 +204,17 @@ func evaluateReapWorkspace(ws state.Workspace, opts reapOptions) reapDecision {
 		decision.SkipReason = "not a worktree workspace"
 		return decision
 	}
-	if ws.WorktreePath == "" || ws.RepoPath == "" || ws.WorktreePath == ws.RepoPath {
+	if ws.WorktreePath == "" || ws.RepoPath == "" || ws.SessionName == "" ||
+		cleanAbsPath(ws.WorktreePath) == cleanAbsPath(ws.RepoPath) {
 		decision.SkipReason = "missing worktree metadata"
+		return decision
+	}
+
+	if opts.Force {
+		if decision.SkipReason = reapWorktreePathSkipReason(ws.WorktreePath); decision.SkipReason != "" {
+			return decision
+		}
+		decision.Reason = "forced; safety checks bypassed"
 		return decision
 	}
 
@@ -215,17 +244,7 @@ func evaluateReapWorkspace(ws state.Workspace, opts reapOptions) reapDecision {
 		return decision
 	}
 
-	info, err := os.Stat(ws.WorktreePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			decision.SkipReason = "worktree path is missing"
-		} else {
-			decision.SkipReason = "could not stat worktree: " + err.Error()
-		}
-		return decision
-	}
-	if !info.IsDir() {
-		decision.SkipReason = "worktree path is not a directory"
+	if decision.SkipReason = reapWorktreePathSkipReason(ws.WorktreePath); decision.SkipReason != "" {
 		return decision
 	}
 
@@ -272,6 +291,20 @@ func evaluateReapWorkspace(ws state.Workspace, opts reapOptions) reapDecision {
 
 	decision.Reason = fmt.Sprintf("idle %s, clean, merged into %s", shortDuration(decision.IdleFor), defaultBranch)
 	return decision
+}
+
+func reapWorktreePathSkipReason(worktreePath string) string {
+	info, err := os.Stat(worktreePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "worktree path is missing"
+		}
+		return "could not stat worktree: " + err.Error()
+	}
+	if !info.IsDir() {
+		return "worktree path is not a directory"
+	}
+	return ""
 }
 
 func workspaceLastUsed(ws state.Workspace) (time.Time, error) {
@@ -372,6 +405,22 @@ func tmuxSessionActive(sessionName string) (bool, error) {
 	return false, fmt.Errorf("%s (%w)", strings.TrimSpace(string(out)), err)
 }
 
+func killTmuxSessionIfLive(sessionName string) error {
+	if strings.TrimSpace(sessionName) == "" {
+		return nil
+	}
+	active, err := tmuxSessionExistsExact(sessionName)
+	if err != nil || !active {
+		return err
+	}
+	cmd := exec.Command("tmux", "kill-session", "-t", "="+sessionName)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s (%w)", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
 func printReapReport(w io.Writer, report reapReport, opts reapOptions) {
 	if opts.DryRun {
 		printDryRunReapReport(w, report, opts)
@@ -393,9 +442,18 @@ func printReapReport(w io.Writer, report reapReport, opts reapOptions) {
 
 func printDryRunReapReport(w io.Writer, report reapReport, opts reapOptions) {
 	if len(report.Matched) == 0 {
+		if opts.Force {
+			fmt.Fprintln(w, "No workspaces matched force reap.")
+			printSkippedReapReport(w, report.Skipped)
+			return
+		}
 		fmt.Fprintf(w, "No workspaces matched ttl %s.\n", shortDuration(opts.TTL))
 	} else {
-		fmt.Fprintf(w, "Would reap %d workspaces (ttl %s):\n", len(report.Matched), shortDuration(opts.TTL))
+		if opts.Force {
+			fmt.Fprintf(w, "Would force reap %d workspaces:\n", len(report.Matched))
+		} else {
+			fmt.Fprintf(w, "Would reap %d workspaces (ttl %s):\n", len(report.Matched), shortDuration(opts.TTL))
+		}
 		for _, decision := range report.Matched {
 			fmt.Fprintf(w, "  %-30s %s\n", decision.Target.Label(), decision.Reason)
 		}

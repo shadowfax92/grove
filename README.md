@@ -47,7 +47,8 @@ grove new --here --json             # auto-name e.g. feat/07-30-cozy-otter and p
 grove cd mono/feat/build-auth     # find an existing workspace, print its path
 grove recycle feat/next-task      # reuse this warm worktree for the next branch
 grove list --json                  # print state-backed workspace JSON
-grove reap --dry-run                # preview stale merged workspaces safe to retire
+grove reap --dry-run             # preview stale merged workspaces safe to retire
+grove reap --force -j 10         # discard all managed worktrees, 10 at a time
 grove rm --path ~/worktrees/mono/feat-build-auth --yes
 grove done mono/feat/build-auth   # finish it and remove the worktree
 grove sync export                # select local clones for the portable manifest
@@ -272,7 +273,9 @@ repos:
 - clean git status, including no untracked files
 - worktree HEAD is already reachable from `origin/<default_branch>` or the local default branch
 
-Anything recent, dirty, unmerged, active, non-worktree, missing, malformed, or otherwise ambiguous is preserved and reported. Use `grove reap --dry-run` for a full selected/skipped report before deletion. Reaping uses the same bounded removal and state-restore path as `grove rm`, so state is restored for any worktree that fails to remove.
+Anything recent, dirty, unmerged, active, non-worktree, missing, malformed, or otherwise ambiguous is preserved and reported. Use `grove reap --dry-run` for a full selected/skipped report before deletion.
+
+`grove reap --force` (or `-f`) bypasses the age, activity, branch, cleanliness, default-branch, and merge checks for structurally valid managed worktrees. This discards uncommitted changes and unmerged work. Combine it with `--dry-run` to preview the forced target set, or with `--jobs` / `-j` to set deletion parallelism; `-j` alone never relaxes the safety checks. Reaping uses the same bounded removal and state-restore path as `grove rm`, so state is restored for any worktree that fails to remove. Forced reap also removes an exact live tmux session stored for a selected workspace.
 
 ### Worktree roots
 
@@ -308,7 +311,7 @@ Where a worktree lands depends on which `worktree_root` is set:
 - `3`: no Grove state entry matched the path.
 - `4`: Grove found the state entry but failed to remove the worktree; the state entry is restored.
 
-`grove reap --dry-run` is also non-interactive and reports both selected and skipped managed workspaces with reasons. A non-dry run removes only the selected safe workspaces; partial failures leave the failed workspaces in state and return exit code `4`.
+`grove reap --dry-run` is also non-interactive and reports both selected and skipped managed workspaces with reasons. Add `--force` to preview or remove the forced target set. Without `--force`, a non-dry run removes only selected safe workspaces. Partial failures leave failed workspaces in state and return exit code `4`.
 
 ## Workspaces
 
@@ -322,7 +325,7 @@ Grove tracks three kinds of workspace:
 <img src="assets/grove.png" width="700" alt="grove workspaces in a tmux session picker">
 </div>
 
-`grove cleanup` finds git worktrees that exist on disk under grove-owned roots but are no longer in grove's state, and offers to remove them — it understands the global root, per-repo overrides, and the legacy `.grove/worktrees` layout. It is intentionally separate from `grove reap`, which only considers managed state entries and refuses to remove anything it cannot prove is stale, clean, inactive, and merged.
+`grove cleanup` finds git worktrees that exist on disk under grove-owned roots but are no longer in grove's state, and offers to remove them — it understands the global root, per-repo overrides, and the legacy `.grove/worktrees` layout. It is intentionally separate from `grove reap`, which only considers managed state entries and stays safe by default unless `--force` is explicit.
 
 ---
 
