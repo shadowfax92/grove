@@ -81,6 +81,7 @@ var (
 	recycleWorktreeClean     = gitWorktreeClean
 	recycleMergedIntoDefault = gitMergedIntoDefault
 	recycleFetchOrigin       = gitFetchOrigin
+	recycleResolveRef        = gitResolveCommit
 	recycleSwitchBranch      = gitSwitchNewBranch
 	recycleRestoreBranch     = gitRestoreRecycledBranch
 	recycleSaveState         = func(mgr *state.StateManager, st *state.State) error { return mgr.Save(st) }
@@ -180,25 +181,38 @@ func recycleWorkspace(
 	if active {
 		return nil, fmt.Errorf("tmux session %q already exists", newSessionName)
 	}
-	if err := recycleSwitchBranch(ws.WorktreePath, branch, "origin/"+defaultBranch); err != nil {
+	startPoint := "origin/" + defaultBranch
+	startOID, err := recycleResolveRef(ws.WorktreePath, startPoint)
+	if err != nil {
 		return nil, err
+	}
+	if err := recycleSwitchBranch(ws.WorktreePath, branch, startPoint); err != nil {
+		rollbackErr := recoverFailedRecycleSwitch(ws.WorktreePath, currentBranch, branch, startOID)
+		return nil, recycleErrorWithRollbacks(err, rollbackErr)
+	}
+
+	oldSessionName := ws.SessionName
+	renamed, err := recycleRenameSession(oldSessionName, newSessionName)
+	if err != nil {
+		rollbackErr := recycleRestoreBranch(ws.WorktreePath, currentBranch, branch, startOID)
+		return nil, recycleErrorWithRollbacks(fmt.Errorf("renaming tmux session: %w", err), rollbackErr)
 	}
 
 	previous := *ws
-	oldSessionName := ws.SessionName
 	ws.Name = fmt.Sprintf("%s/%s", ws.Repo, branch)
 	ws.Branch = branch
 	ws.SessionName = newSessionName
 	ws.LastUsedAt = recycleNow().UTC().Format(time.RFC3339)
 	if err := recycleSaveState(mgr, st); err != nil {
 		*ws = previous
-		if rollbackErr := recycleRestoreBranch(ws.WorktreePath, currentBranch, branch); rollbackErr != nil {
-			return nil, fmt.Errorf("saving state: %w; restoring original branch also failed: %v", err, rollbackErr)
+		var rollbackErrs []error
+		if renamed {
+			if _, renameErr := recycleRenameSession(newSessionName, oldSessionName); renameErr != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Errorf("restoring tmux session: %w", renameErr))
+			}
 		}
-		return nil, fmt.Errorf("saving state: %w", err)
-	}
-	if err := recycleRenameSession(oldSessionName, newSessionName); err != nil {
-		return nil, fmt.Errorf("renaming tmux session: %w", err)
+		rollbackErrs = append(rollbackErrs, recycleRestoreBranch(ws.WorktreePath, currentBranch, branch, startOID))
+		return nil, recycleErrorWithRollbacks(fmt.Errorf("saving state: %w", err), rollbackErrs...)
 	}
 
 	return &newWorkspaceResult{
@@ -217,6 +231,16 @@ func gitFetchOrigin(repoPath string) error {
 	return nil
 }
 
+func gitResolveCommit(dir, ref string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--verify", ref+"^{commit}")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("resolving %s: %s (%w)", ref, strings.TrimSpace(string(out)), err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 func gitSwitchNewBranch(worktreePath, branch, startPoint string) error {
 	cmd := exec.Command("git", "switch", "--no-track", "-c", branch, startPoint)
 	cmd.Dir = worktreePath
@@ -227,7 +251,18 @@ func gitSwitchNewBranch(worktreePath, branch, startPoint string) error {
 	return nil
 }
 
-func gitRestoreRecycledBranch(worktreePath, oldBranch, newBranch string) error {
+func recoverFailedRecycleSwitch(worktreePath, oldBranch, newBranch, startOID string) error {
+	switch current := recycleCurrentBranch(worktreePath); current {
+	case oldBranch:
+		return nil
+	case newBranch:
+		return recycleRestoreBranch(worktreePath, oldBranch, newBranch, startOID)
+	default:
+		return fmt.Errorf("worktree is on unexpected branch %q after failed switch", current)
+	}
+}
+
+func gitRestoreRecycledBranch(worktreePath, oldBranch, newBranch, expectedOID string) error {
 	switchCmd := exec.Command("git", "switch", oldBranch)
 	switchCmd.Dir = worktreePath
 	out, err := switchCmd.CombinedOutput()
@@ -235,40 +270,60 @@ func gitRestoreRecycledBranch(worktreePath, oldBranch, newBranch string) error {
 		return fmt.Errorf("switching back to %q: %s (%w)", oldBranch, strings.TrimSpace(string(out)), err)
 	}
 
-	deleteCmd := exec.Command("git", "branch", "-D", "--", newBranch)
+	deleteCmd := exec.Command("git", "update-ref", "-d", "refs/heads/"+newBranch, expectedOID)
 	deleteCmd.Dir = worktreePath
 	out, err = deleteCmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("deleting rolled-back branch %q: %s (%w)", newBranch, strings.TrimSpace(string(out)), err)
+		return fmt.Errorf("deleting unchanged rolled-back branch %q: %s (%w)", newBranch, strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }
 
-func renameTmuxSessionIfLive(oldName, newName string) error {
+func renameTmuxSessionIfLive(oldName, newName string) (bool, error) {
 	if oldName == "" || oldName == newName {
-		return nil
+		return false, nil
 	}
 	active, err := tmuxSessionExistsExact(oldName)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !active {
-		return nil
+		destinationActive, err := tmuxSessionExistsExact(newName)
+		if err != nil {
+			return false, err
+		}
+		if destinationActive {
+			return false, fmt.Errorf("tmux session %q already exists", newName)
+		}
+		return false, nil
 	}
 	cmd := exec.Command("tmux", "rename-session", "-t", "="+oldName, newName)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			return fmt.Errorf("%s (%w)", strings.TrimSpace(string(out)), err)
+			return false, fmt.Errorf("%s (%w)", strings.TrimSpace(string(out)), err)
 		}
-		return err
+		return false, err
 	}
-	return nil
+	return true, nil
 }
 
 func tmuxSessionExistsExact(sessionName string) (bool, error) {
 	return tmuxSessionActive("=" + sessionName)
+}
+
+func recycleErrorWithRollbacks(primary error, rollbackErrs ...error) error {
+	var messages []string
+	for _, err := range rollbackErrs {
+		if err != nil {
+			messages = append(messages, err.Error())
+		}
+	}
+	if len(messages) == 0 {
+		return primary
+	}
+	return fmt.Errorf("%w; rollback incomplete: %s", primary, strings.Join(messages, "; "))
 }
 
 func printRecycleResult(w io.Writer, result *newWorkspaceResult, jsonOut bool) error {
