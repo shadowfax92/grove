@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,85 @@ import (
 	"grove/internal/config"
 	"grove/internal/state"
 )
+
+func TestNewCommandExposesTmuxFlagAndShortForm(t *testing.T) {
+	flag := newCmd.Flags().Lookup("tmux")
+	if flag == nil {
+		t.Fatal("new command missing --tmux flag")
+	}
+	if got, want := flag.Shorthand, "t"; got != want {
+		t.Fatalf("--tmux shorthand = %q, want %q", got, want)
+	}
+}
+
+func TestFinishNewResultCreatesAndSwitchesTmuxSession(t *testing.T) {
+	t.Setenv("TMUX", "/tmp/tmux")
+	original := newTmuxCommand
+	t.Cleanup(func() { newTmuxCommand = original })
+
+	var calls [][]string
+	newTmuxCommand = func(args ...string) ([]byte, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return nil, nil
+	}
+	result := &newWorkspaceResult{
+		Path: "/worktrees/mono/feat-auth/packages/app",
+		Workspace: state.Workspace{
+			SessionName: "gv/mono/feat/auth",
+		},
+	}
+
+	if err := finishNewResult(result, false, true); err != nil {
+		t.Fatalf("finishNewResult() error = %v", err)
+	}
+	if got, want := strings.Join(calls[0], " "), "new-session -d -s gv/mono/feat/auth -c /worktrees/mono/feat-auth/packages/app"; got != want {
+		t.Fatalf("new-session args = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(calls[1], " "), "switch-client -t =gv/mono/feat/auth"; got != want {
+		t.Fatalf("switch-client args = %q, want %q", got, want)
+	}
+}
+
+func TestFinishNewResultReportsTmuxFailureAndKeepsWorkspace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := initNewTestRepo(t)
+	writeNewTestCommit(t, repoPath, "base.txt", "base")
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	st := &state.State{Version: 1}
+	repo := &config.RepoConfig{Name: "mono", Path: repoPath, Type: "worktree"}
+	result, err := createWorktreeWithResult(&config.Config{}, repo, "feat/tmux", "", mgr, st, true, false)
+	if err != nil {
+		t.Fatalf("createWorktreeWithResult() error = %v", err)
+	}
+
+	original := newTmuxCommand
+	t.Cleanup(func() { newTmuxCommand = original })
+	newTmuxCommand = func(args ...string) ([]byte, error) {
+		return []byte("server unavailable"), errors.New("exit status 1")
+	}
+
+	err = finishNewResult(result, false, true)
+	if err == nil || !strings.Contains(err.Error(), "workspace created at") || !strings.Contains(err.Error(), "server unavailable") {
+		t.Fatalf("finishNewResult() error = %v, want explicit workspace and tmux failure", err)
+	}
+	if got, want := result.Workspace.SessionName, "gv/mono/feat/tmux"; got != want {
+		t.Fatalf("SessionName = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(result.Path); err != nil {
+		t.Fatalf("created worktree missing after tmux failure: %v", err)
+	}
+	loaded, err := mgr.Load()
+	if err != nil {
+		t.Fatalf("StateManager.Load() error = %v", err)
+	}
+	if got, want := len(loaded.Workspaces), 1; got != want {
+		t.Fatalf("saved workspace count = %d, want %d", got, want)
+	}
+}
 
 func TestNewCommandExposesFromFlag(t *testing.T) {
 	flag := newCmd.Flags().Lookup("from")
