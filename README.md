@@ -43,7 +43,7 @@ make install
 grove init                        # register the current repo in config
 grove new mono feat/build-auth    # create a worktree, print its path
 grove new -t mono feat/build-auth # create a worktree and open it in tmux
-grove new --here --json             # auto-name a branch and print metadata JSON
+grove new --here --json             # auto-name e.g. feat/07-30-cozy-otter and print JSON
 grove cd mono/feat/build-auth     # find an existing workspace, print its path
 grove recycle feat/next-task      # reuse this warm worktree for the next branch
 grove list --json                  # print state-backed workspace JSON
@@ -75,7 +75,7 @@ Grove lays worktrees out under a shared root so a repo's branches sit together:
 gv                          # pick a workspace and cd into it
 gv n mono feat/build-auth   # new worktree, then cd in
 gv n -t mono feat/build-auth # new worktree, then switch to its tmux session
-gv n --here                 # auto-name a worktree for the current repo, then cd in
+gv n --here                 # auto-name e.g. feat/07-30-cozy-otter, then cd in
 gv cd mono/feat/build-auth  # cd into an existing workspace
 gv dd                       # finish the current workspace and cd home
 gv ls                       # list workspaces
@@ -102,12 +102,12 @@ grove which ~/code/mono/pkg        # ...or for a given path
 grove init                         # add the current git repo to config
 grove init --name mono --default-branch dev
 grove new                          # pick a repo, or type a plain workspace name
-grove new mono                     # auto-name a branch in mono
+grove new mono                     # auto-name feat/<MM-DD>-<adjective>-<animal> in mono
 grove new -m                       # prompt for the branch name
 grove new mono feat/build-auth     # create or check out a specific branch
 grove new --tmux mono feat/build-auth # create and open a gv/ tmux session
 grove new mono agent --from feat/base   # branch agent off feat/base
-grove new --here                   # auto-name a feat/<animal> branch for the current repo
+grove new --here                   # auto-name e.g. feat/07-30-cozy-otter for the current repo
 grove new --here -m                # prompt for the current repo's branch name
 grove new --here fix/local-bug     # use an explicit branch for the current repo
 grove new --no-prepare mono agent  # skip prepare commands
@@ -119,7 +119,7 @@ Inside tmux, `--tmux` switches the current client to the new session. Outside tm
 ### Recycle
 
 ```sh
-grove recycle                      # recycle the current worktree onto an auto-named feat/<animal> branch
+grove recycle                      # recycle onto an auto-named feat/<MM-DD>-<adjective>-<animal>
 grove recycle feat/next-task       # use an explicit new branch
 grove recycle mono/feat/old        # recycle a named workspace with an auto-generated branch
 grove recycle mono/feat/old feat/next-task

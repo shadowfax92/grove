@@ -3,6 +3,7 @@ package names
 import (
 	"fmt"
 	"math/rand"
+	"time"
 )
 
 var animals = []string{
@@ -49,36 +50,74 @@ var animals = []string{
 	"zebra",
 }
 
-// Generate returns a random animal name (e.g. "otter") not present in existing.
-func Generate(existing []string) string {
-	return pick(existing, func(animal string) string { return animal })
+var warmAdjectives = []string{
+	"affectionate", "bright", "calm", "cheerful", "cheery", "cozy", "cuddly", "dear",
+	"dreamy", "easygoing", "friendly", "gentle", "glowing", "golden", "gracious", "happy",
+	"hearty", "honeyed", "hopeful", "jolly", "kind", "kindly", "lovely", "mellow",
+	"merry", "neighborly", "peaceful", "plucky", "rosy", "serene", "snug", "soft",
+	"sunny", "sweet", "tender", "thoughtful", "tranquil", "twinkly", "warm", "welcoming",
+	"winsome",
 }
 
-// GenerateBranch returns an auto branch name like "feat/otter".
+var cuteAnimals = []string{
+	"alpaca", "axolotl", "bear", "beaver", "bunny", "butterfly", "capybara", "cat",
+	"chickadee", "chipmunk", "duck", "duckling", "fawn", "ferret", "finch", "firefly",
+	"fox", "frog", "gecko", "goat", "goose", "hamster", "hare", "hedgehog",
+	"hummingbird", "kitten", "kiwi", "koala", "ladybug", "lamb", "lemur", "llama",
+	"manatee", "marmot", "meerkat", "mouse", "narwhal", "newt", "otter", "owl",
+	"panda", "pangolin", "penguin", "piglet", "pika", "platypus", "pony", "puffin",
+	"puppy", "quail", "quokka", "rabbit", "raccoon", "redpanda", "robin", "seal",
+	"shrew", "sloth", "snail", "sparrow", "squirrel", "stoat", "swan", "tapir",
+	"turtle", "wallaby", "wombat", "wren",
+}
+
+// Generate returns a random animal name (e.g. "otter") not present in existing.
+func Generate(existing []string) string {
+	return pick(existing, animals, func(animal string) string { return animal })
+}
+
+// GenerateBranch returns an auto branch name like "feat/07-30-cozy-otter".
 func GenerateBranch(existing []string) string {
-	return pick(existing, func(animal string) string {
-		return "feat/" + animal
+	return generateBranchAt(existing, time.Now())
+}
+
+func generateBranchAt(existing []string, now time.Time) string {
+	stamp := now.In(pacific()).Format("01-02")
+	candidates := make([]string, 0, len(warmAdjectives)*len(cuteAnimals))
+	for _, adjective := range warmAdjectives {
+		for _, animal := range cuteAnimals {
+			candidates = append(candidates, adjective+"-"+animal)
+		}
+	}
+	return pick(existing, candidates, func(candidate string) string {
+		return "feat/" + stamp + "-" + candidate
 	})
 }
 
-// pick returns the first name (built by format from an animal) not already in
-// existing, falling back to numeric suffixes once every animal is taken.
-func pick(existing []string, format func(animal string) string) string {
+func pacific() *time.Location {
+	if loc, err := time.LoadLocation("America/Los_Angeles"); err == nil {
+		return loc
+	}
+	return time.Local
+}
+
+// pick returns an unused formatted choice, adding numeric suffixes after exhaustion.
+func pick(existing, choices []string, format func(string) string) string {
 	used := make(map[string]bool, len(existing))
 	for _, name := range existing {
 		used[name] = true
 	}
 
-	perm := rand.Perm(len(animals))
+	perm := rand.Perm(len(choices))
 	for _, i := range perm {
-		if candidate := format(animals[i]); !used[candidate] {
+		if candidate := format(choices[i]); !used[candidate] {
 			return candidate
 		}
 	}
 
 	for n := 2; ; n++ {
-		for _, a := range animals {
-			if candidate := format(fmt.Sprintf("%s%d", a, n)); !used[candidate] {
+		for _, choice := range choices {
+			if candidate := format(fmt.Sprintf("%s%d", choice, n)); !used[candidate] {
 				return candidate
 			}
 		}

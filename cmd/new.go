@@ -37,13 +37,13 @@ var newCmd = &cobra.Command{
 a detached tmux session and switch the current tmux client to it.
 
   grove new                 — pick a repo (or type a plain workspace name), then print its path
-  grove new <repo>          — auto-create a feat/<animal> branch in repo, then print its path
+  grove new <repo>          — auto-create feat/<MM-DD>-<adjective>-<animal>, then print its path
   grove new -m              — pick a repo, then prompt for the branch name
   grove new <repo> -m       — prompt for the branch name instead of auto-generating
   grove new <repo> <branch> — create (or check out) a specific branch, then print its path
   grove new <repo> <branch> --from <base>
                             — create <branch> from <base>
-  grove new --here          — auto-create a feat/<animal> branch, then print its path
+  grove new --here          — auto-create feat/<MM-DD>-<adjective>-<animal>, then print its path
   grove new --here -m       — prompt for the current repo's branch name
   grove new --here <branch> — create a worktree for the current repo, then print its path
   grove new -t <repo> <branch>
