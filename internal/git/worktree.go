@@ -17,10 +17,11 @@ import (
 var pruneMu sync.Mutex
 
 type WorktreeInfo struct {
-	Path   string
-	Branch string
-	Head   string
-	Bare   bool
+	Path     string
+	Branch   string
+	Head     string
+	Bare     bool
+	Prunable bool
 }
 
 func AddWorktree(repoPath, destPath, branch string) error {
@@ -210,6 +211,8 @@ func ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
 			current.Branch = strings.TrimPrefix(ref, "refs/heads/")
 		case line == "bare":
 			current.Bare = true
+		case strings.HasPrefix(line, "prunable"):
+			current.Prunable = true
 		}
 	}
 	if current.Path != "" {

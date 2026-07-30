@@ -156,6 +156,8 @@ func TestForceReapKeepsStructuralGuards(t *testing.T) {
 	}
 
 	valid := reapTestWorkspace("feat/valid", worktreePath, "")
+	forged := valid
+	forged.RepoPath = initRepoForReap(t)
 	tests := []struct {
 		name          string
 		ws            state.Workspace
@@ -179,6 +181,9 @@ func TestForceReapKeepsStructuralGuards(t *testing.T) {
 		}(), nil, "worktree path is missing"},
 		{"non-directory", func() state.Workspace { ws := valid; ws.WorktreePath = filePath; return ws }(), nil, "worktree path is not a directory"},
 		{"ordinary directory", valid, func(string) ([]git.WorktreeInfo, error) { return nil, nil }, "path is not a registered worktree"},
+		{"forged registration", forged, func(string) ([]git.WorktreeInfo, error) {
+			return []git.WorktreeInfo{{Path: worktreePath}}, nil
+		}, "could not verify worktree identity"},
 		{"unusable repo", func() state.Workspace { ws := valid; ws.RepoPath = t.TempDir(); return ws }(), nil, "could not verify registered worktree"},
 	}
 
@@ -195,6 +200,51 @@ func TestForceReapKeepsStructuralGuards(t *testing.T) {
 				t.Fatalf("skip = %q, want containing %q", got.SkipReason, tt.wantSkip)
 			}
 		})
+	}
+}
+
+func TestForceReapRejectsBaseRepoResolvedFromMetadataPath(t *testing.T) {
+	repoPath := initRepoForReap(t)
+	subdir := filepath.Join(repoPath, "nested")
+	if err := os.Mkdir(subdir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	symlinkPath := filepath.Join(t.TempDir(), "repo-link")
+	if err := os.Symlink(subdir, symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, metadataPath := range []string{subdir, symlinkPath} {
+		ws := reapTestWorkspace("main", repoPath, "")
+		ws.RepoPath = metadataPath
+		got := evaluateReapWorkspace(ws, reapOptions{Force: true})
+		if got.SkipReason != "worktree path is base repository" {
+			t.Fatalf("RepoPath %q skip = %q, want base repository", metadataPath, got.SkipReason)
+		}
+	}
+}
+
+func TestForceReapRejectsPrunableWorktreeReplacement(t *testing.T) {
+	repoPath := initRepoForReap(t)
+	parent := t.TempDir()
+	worktreePath := filepath.Join(parent, "stale")
+	runGitForReap(t, repoPath, "worktree", "add", "-b", "feat/stale", worktreePath)
+	if err := os.Rename(worktreePath, filepath.Join(parent, "moved")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(worktreePath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeFileForReap(t, filepath.Join(worktreePath, "unrelated.txt"), "keep\n")
+
+	ws := reapTestWorkspace("feat/stale", worktreePath, "")
+	ws.RepoPath = repoPath
+	got := evaluateReapWorkspace(ws, reapOptions{Force: true})
+	if got.SkipReason != "path is not a registered worktree" {
+		t.Fatalf("skip = %q, want prunable worktree rejected", got.SkipReason)
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, "unrelated.txt")); err != nil {
+		t.Fatalf("replacement data was touched: %v", err)
 	}
 }
 
@@ -500,6 +550,7 @@ func stubReapChecks(branches map[string]string, clean map[string]bool, merged ma
 	origClean := reapWorktreeClean
 	origMerged := reapMergedIntoDefault
 	origList := reapListWorktrees
+	origValidate := reapValidateWorktree
 	origActive := reapTmuxSessionActive
 
 	reapCurrentBranch = func(path string) string { return branches[path] }
@@ -512,6 +563,7 @@ func stubReapChecks(branches map[string]string, clean map[string]bool, merged ma
 		}
 		return registered, nil
 	}
+	reapValidateWorktree = func(string, string) error { return nil }
 	reapTmuxSessionActive = func(sessionName string) (bool, error) { return active[sessionName], nil }
 
 	return func() {
@@ -519,12 +571,14 @@ func stubReapChecks(branches map[string]string, clean map[string]bool, merged ma
 		reapWorktreeClean = origClean
 		reapMergedIntoDefault = origMerged
 		reapListWorktrees = origList
+		reapValidateWorktree = origValidate
 		reapTmuxSessionActive = origActive
 	}
 }
 
 func stubReapWorktrees(paths ...string) func() {
 	orig := reapListWorktrees
+	origValidate := reapValidateWorktree
 	reapListWorktrees = func(string) ([]git.WorktreeInfo, error) {
 		registered := make([]git.WorktreeInfo, 0, len(paths))
 		for _, path := range paths {
@@ -532,7 +586,23 @@ func stubReapWorktrees(paths ...string) func() {
 		}
 		return registered, nil
 	}
-	return func() { reapListWorktrees = orig }
+	reapValidateWorktree = func(string, string) error { return nil }
+	return func() {
+		reapListWorktrees = orig
+		reapValidateWorktree = origValidate
+	}
+}
+
+func initRepoForReap(t *testing.T) string {
+	t.Helper()
+	repoPath := t.TempDir()
+	runGitForReap(t, repoPath, "init", "-b", "main")
+	runGitForReap(t, repoPath, "config", "user.email", "test@example.com")
+	runGitForReap(t, repoPath, "config", "user.name", "Test User")
+	writeFileForReap(t, filepath.Join(repoPath, "README.md"), "base\n")
+	runGitForReap(t, repoPath, "add", "README.md")
+	runGitForReap(t, repoPath, "commit", "-m", "base")
+	return repoPath
 }
 
 func mustParseTime(t *testing.T, raw string) time.Time {

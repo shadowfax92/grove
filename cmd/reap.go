@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -88,6 +89,7 @@ var (
 	reapWorktreeClean     = gitWorktreeClean
 	reapMergedIntoDefault = gitMergedIntoDefault
 	reapListWorktrees     = git.ListWorktrees
+	reapValidateWorktree  = validateReapWorktreeIdentity
 	reapTmuxSessionActive = tmuxSessionActive
 	reapKillTmuxSession   = killTmuxSessionIfLive
 	reapRemoveWorktree    = removeWorktreeForTarget
@@ -153,14 +155,16 @@ func runReap(opts reapOptions, out io.Writer, errOut io.Writer) (reapReport, err
 	for _, decision := range report.Matched {
 		targets = append(targets, decision.Target)
 	}
-	remove := reapRemoveWorktree
-	if opts.Force {
-		remove = func(target workspaces.RemoveTarget) error {
+	remove := func(target workspaces.RemoveTarget) error {
+		if reason := reapWorktreeRegistrationSkipReason(target.Workspace); reason != "" {
+			return errors.New(reason)
+		}
+		if opts.Force {
 			if err := reapKillTmuxSession(target.SessionName); err != nil {
 				return fmt.Errorf("cleaning tmux session %q: %w", target.SessionName, err)
 			}
-			return reapRemoveWorktree(target)
 		}
+		return reapRemoveWorktree(target)
 	}
 	failed, err := removeSelectedTargets(mgr, st, targets, opts.Jobs, remove, out, errOut)
 	report.Failed = failed
@@ -206,7 +210,7 @@ func evaluateReapWorkspace(ws state.Workspace, opts reapOptions) reapDecision {
 		return decision
 	}
 	if ws.WorktreePath == "" || ws.RepoPath == "" || ws.SessionName == "" ||
-		cleanAbsPath(ws.WorktreePath) == cleanAbsPath(ws.RepoPath) {
+		canonicalReapPath(ws.WorktreePath) == canonicalReapPath(ws.RepoPath) {
 		decision.SkipReason = "missing worktree metadata"
 		return decision
 	}
@@ -319,13 +323,71 @@ func reapWorktreeRegistrationSkipReason(ws state.Workspace) string {
 	if err != nil {
 		return "could not verify registered worktree: " + err.Error()
 	}
-	targetPath := cleanAbsPath(ws.WorktreePath)
+	targetPath := canonicalReapPath(ws.WorktreePath)
 	for _, wt := range registered {
-		if !wt.Bare && cleanAbsPath(wt.Path) == targetPath {
-			return ""
+		if wt.Bare || wt.Prunable || canonicalReapPath(wt.Path) != targetPath {
+			continue
 		}
+		if err := reapValidateWorktree(ws.RepoPath, ws.WorktreePath); err != nil {
+			return err.Error()
+		}
+		return ""
 	}
 	return "path is not a registered worktree"
+}
+
+func validateReapWorktreeIdentity(repoPath, worktreePath string) error {
+	repoRoot, err := reapGitPath(repoPath, "--show-toplevel")
+	if err != nil {
+		return fmt.Errorf("could not verify repository root: %w", err)
+	}
+	targetPath := canonicalReapPath(worktreePath)
+	if targetPath == repoRoot {
+		return errors.New("worktree path is base repository")
+	}
+
+	worktreeRoot, err := reapGitPath(worktreePath, "--show-toplevel")
+	if err != nil {
+		return fmt.Errorf("could not verify worktree identity: %w", err)
+	}
+	if worktreeRoot != targetPath {
+		return errors.New("worktree path does not resolve to its own Git worktree")
+	}
+
+	repoCommon, err := reapGitPath(repoPath, "--git-common-dir")
+	if err != nil {
+		return fmt.Errorf("could not verify repository metadata: %w", err)
+	}
+	worktreeCommon, err := reapGitPath(worktreePath, "--git-common-dir")
+	if err != nil {
+		return fmt.Errorf("could not verify worktree metadata: %w", err)
+	}
+	if repoCommon != worktreeCommon {
+		return errors.New("worktree metadata does not belong to repository")
+	}
+	return nil
+}
+
+func reapGitPath(dir, arg string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", arg)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s (%w)", strings.TrimSpace(string(out)), err)
+	}
+	path := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(dir, path)
+	}
+	return canonicalReapPath(path), nil
+}
+
+func canonicalReapPath(path string) string {
+	path = cleanAbsPath(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return cleanAbsPath(resolved)
+	}
+	return path
 }
 
 func workspaceLastUsed(ws state.Workspace) (time.Time, error) {
