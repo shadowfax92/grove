@@ -3,7 +3,6 @@ package names
 import (
 	"fmt"
 	"math/rand"
-	"time"
 )
 
 var animals = []string{
@@ -55,25 +54,11 @@ func Generate(existing []string) string {
 	return pick(existing, func(animal string) string { return animal })
 }
 
-// GenerateBranch returns an auto branch name like "fix/0527-1430-otter":
-// fix/<mmdd>-<hhmm>-<animal>. The timestamp is Pacific wall-clock and leads the
-// name so branches sort chronologically in name-ordered lists (tmux switcher,
-// grove list); the animal trails as a memorable handle. Minute precision means
-// existing only has to guard the rare same-minute collision.
+// GenerateBranch returns an auto branch name like "feat/otter".
 func GenerateBranch(existing []string) string {
-	stamp := time.Now().In(pacific()).Format("0102-1504")
 	return pick(existing, func(animal string) string {
-		return fmt.Sprintf("fix/%s-%s", stamp, animal)
+		return "feat/" + animal
 	})
-}
-
-// pacific returns America/Los_Angeles (PST/PDT, DST-aware), falling back to the
-// machine's local zone if the embedded zone database can't be loaded.
-func pacific() *time.Location {
-	if loc, err := time.LoadLocation("America/Los_Angeles"); err == nil {
-		return loc
-	}
-	return time.Local
 }
 
 // pick returns the first name (built by format from an animal) not already in

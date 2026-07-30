@@ -36,12 +36,14 @@ var newCmd = &cobra.Command{
 creates the workspace and cd's into it.
 
   grove new                 — pick a repo (or type a plain workspace name), then create + cd
-  grove new <repo>          — auto-create a fix/<mmdd>-<hhmm>-<animal> branch in repo + cd
+  grove new <repo>          — auto-create a feat/<animal> branch in repo + cd
   grove new -m              — pick a repo, then prompt for the branch name
   grove new <repo> -m       — prompt for the branch name instead of auto-generating
   grove new <repo> <branch> — create (or check out) a specific branch + cd
   grove new <repo> <branch> --from <base>
                             — create <branch> from <base>
+  grove new --here          — auto-create a feat/<animal> branch for the current repo + cd
+  grove new --here -m       — prompt for the current repo's branch name
   grove new --here <branch> — create a worktree for the current git repo + cd
   grove new <name>          — plain workspace (if name doesn't match a repo)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -71,7 +73,9 @@ creates the workspace and cd's into it.
 		}
 
 		if here {
-			branch, err := newHereBranch(args)
+			branch, err := newHereBranch(args, manual, func() (string, error) {
+				return promptNameFzf("branch > ", "Type a branch name or Enter for auto")
+			})
 			if err != nil {
 				return err
 			}
@@ -172,11 +176,17 @@ func validateNewFromFlag(from, branch string) error {
 	return nil
 }
 
-func newHereBranch(args []string) (string, error) {
-	if len(args) != 1 {
-		return "", fmt.Errorf("--here requires exactly one <branch>")
+func newHereBranch(args []string, manual bool, prompt func() (string, error)) (string, error) {
+	if len(args) > 1 {
+		return "", fmt.Errorf("--here accepts at most one <branch>")
 	}
-	return args[0], nil
+	if len(args) == 1 {
+		return args[0], nil
+	}
+	if manual {
+		return prompt()
+	}
+	return "", nil
 }
 
 func createPlain(name string, mgr *state.StateManager, st *state.State) error {
