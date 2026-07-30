@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,10 +24,21 @@ func TestNewCommandExposesTmuxFlagAndShortForm(t *testing.T) {
 	}
 }
 
-func TestFinishNewResultCreatesAndSwitchesTmuxSession(t *testing.T) {
+func TestFinishNewResultCreatesAndSwitchesTmuxSessionWithJSON(t *testing.T) {
 	t.Setenv("TMUX", "/tmp/tmux")
 	original := newTmuxCommand
 	t.Cleanup(func() { newTmuxCommand = original })
+	originalStdout := os.Stdout
+	readOut, writeOut, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	os.Stdout = writeOut
+	t.Cleanup(func() {
+		os.Stdout = originalStdout
+		readOut.Close()
+		writeOut.Close()
+	})
 
 	var calls [][]string
 	newTmuxCommand = func(args ...string) ([]byte, error) {
@@ -37,17 +49,69 @@ func TestFinishNewResultCreatesAndSwitchesTmuxSession(t *testing.T) {
 		Path: "/worktrees/mono/feat-auth/packages/app",
 		Workspace: state.Workspace{
 			SessionName: "gv/mono/feat/auth",
+			Branch:      "feat/auth",
 		},
 	}
 
-	if err := finishNewResult(result, false, true); err != nil {
+	if err := finishNewResult(result, true, true); err != nil {
 		t.Fatalf("finishNewResult() error = %v", err)
+	}
+	if err := writeOut.Close(); err != nil {
+		t.Fatalf("closing stdout pipe: %v", err)
+	}
+	out, err := io.ReadAll(readOut)
+	if err != nil || !strings.Contains(string(out), `"branch":"feat/auth"`) {
+		t.Fatalf("JSON output = %q, %v; want branch metadata", out, err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("tmux call count = %d, want 2", len(calls))
 	}
 	if got, want := strings.Join(calls[0], " "), "new-session -d -s gv/mono/feat/auth -c /worktrees/mono/feat-auth/packages/app"; got != want {
 		t.Fatalf("new-session args = %q, want %q", got, want)
 	}
 	if got, want := strings.Join(calls[1], " "), "switch-client -t =gv/mono/feat/auth"; got != want {
 		t.Fatalf("switch-client args = %q, want %q", got, want)
+	}
+}
+
+func TestOpenNewTmuxSessionStaysDetachedOutsideTmux(t *testing.T) {
+	t.Setenv("TMUX", "")
+	original := newTmuxCommand
+	t.Cleanup(func() { newTmuxCommand = original })
+
+	var calls int
+	newTmuxCommand = func(args ...string) ([]byte, error) {
+		calls++
+		return nil, nil
+	}
+	result := &newWorkspaceResult{Path: "/worktree", Workspace: state.Workspace{SessionName: "gv/mono/feat/auth"}}
+
+	if err := openNewTmuxSession(result); err != nil {
+		t.Fatalf("openNewTmuxSession() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("tmux call count = %d, want only new-session", calls)
+	}
+}
+
+func TestOpenNewTmuxSessionReportsSwitchFailure(t *testing.T) {
+	t.Setenv("TMUX", "/tmp/tmux")
+	original := newTmuxCommand
+	t.Cleanup(func() { newTmuxCommand = original })
+
+	var calls int
+	newTmuxCommand = func(args ...string) ([]byte, error) {
+		calls++
+		if calls == 2 {
+			return []byte("no current client"), errors.New("exit status 1")
+		}
+		return nil, nil
+	}
+	result := &newWorkspaceResult{Path: "/worktree", Workspace: state.Workspace{SessionName: "gv/mono/feat/auth"}}
+
+	err := openNewTmuxSession(result)
+	if err == nil || !strings.Contains(err.Error(), "session \"gv/mono/feat/auth\" created") || !strings.Contains(err.Error(), "no current client") {
+		t.Fatalf("openNewTmuxSession() error = %v, want explicit switch failure", err)
 	}
 }
 

@@ -295,9 +295,9 @@ Where a worktree lands depends on which `worktree_root` is set:
 
 Grove tracks three kinds of workspace:
 
-- **Worktree** — a git worktree per branch, the default. The directory uses the dashed branch (`feat/build-auth` → `feat-build-auth`); the session name keeps the slashes (`g/mono/feat/build-auth`).
+- **Worktree** — a git worktree per branch, the default. The directory uses the dashed branch (`feat/build-auth` → `feat-build-auth`); the session name keeps the slashes (`gv/mono/feat/build-auth`).
 - **Dir** — reuses a configured directory instead of creating a worktree, for notes or non-git folders.
-- **Plain** — a standalone workspace rooted at `$HOME`, named `g/<name>`.
+- **Plain** — a standalone workspace rooted at `$HOME`, named `gv/<name>`.
 
 <div align="center">
 <img src="assets/grove.png" width="700" alt="grove workspaces in a tmux session picker">

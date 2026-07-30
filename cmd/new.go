@@ -177,7 +177,13 @@ func finishNewResult(result *newWorkspaceResult, jsonOut, tmuxMode bool) error {
 	if !tmuxMode {
 		return printNewResult(result, jsonOut)
 	}
-	return openNewTmuxSession(result)
+	if err := openNewTmuxSession(result); err != nil {
+		return err
+	}
+	if jsonOut {
+		return printNewResult(result, true)
+	}
+	return nil
 }
 
 func openNewTmuxSession(result *newWorkspaceResult) error {
