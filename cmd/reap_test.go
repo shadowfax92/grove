@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"grove/internal/config"
+	"grove/internal/git"
 	"grove/internal/state"
 	"grove/internal/workspaces"
 )
@@ -156,33 +157,42 @@ func TestForceReapKeepsStructuralGuards(t *testing.T) {
 
 	valid := reapTestWorkspace("feat/valid", worktreePath, "")
 	tests := []struct {
-		name     string
-		ws       state.Workspace
-		wantSkip string
+		name          string
+		ws            state.Workspace
+		listWorktrees func(string) ([]git.WorktreeInfo, error)
+		wantSkip      string
 	}{
-		{"non-worktree", state.Workspace{Name: "notes", Type: "dir"}, "not a worktree workspace"},
-		{"missing repo path", func() state.Workspace { ws := valid; ws.RepoPath = ""; return ws }(), "missing worktree metadata"},
-		{"missing worktree path", func() state.Workspace { ws := valid; ws.WorktreePath = ""; return ws }(), "missing worktree metadata"},
-		{"missing session name", func() state.Workspace { ws := valid; ws.SessionName = ""; return ws }(), "missing worktree metadata"},
+		{"non-worktree", state.Workspace{Name: "notes", Type: "dir"}, nil, "not a worktree workspace"},
+		{"missing repo path", func() state.Workspace { ws := valid; ws.RepoPath = ""; return ws }(), nil, "missing worktree metadata"},
+		{"missing worktree path", func() state.Workspace { ws := valid; ws.WorktreePath = ""; return ws }(), nil, "missing worktree metadata"},
+		{"missing session name", func() state.Workspace { ws := valid; ws.SessionName = ""; return ws }(), nil, "missing worktree metadata"},
 		{"base repo", func() state.Workspace {
 			ws := valid
 			ws.RepoPath = repoPath
 			ws.WorktreePath = repoPath + string(os.PathSeparator) + "."
 			return ws
-		}(), "missing worktree metadata"},
+		}(), nil, "missing worktree metadata"},
 		{"missing directory", func() state.Workspace {
 			ws := valid
 			ws.WorktreePath = filepath.Join(t.TempDir(), "missing")
 			return ws
-		}(), "worktree path is missing"},
-		{"non-directory", func() state.Workspace { ws := valid; ws.WorktreePath = filePath; return ws }(), "worktree path is not a directory"},
+		}(), nil, "worktree path is missing"},
+		{"non-directory", func() state.Workspace { ws := valid; ws.WorktreePath = filePath; return ws }(), nil, "worktree path is not a directory"},
+		{"ordinary directory", valid, func(string) ([]git.WorktreeInfo, error) { return nil, nil }, "path is not a registered worktree"},
+		{"unusable repo", func() state.Workspace { ws := valid; ws.RepoPath = t.TempDir(); return ws }(), nil, "could not verify registered worktree"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			origList := reapListWorktrees
+			if tt.listWorktrees != nil {
+				reapListWorktrees = tt.listWorktrees
+			}
+			defer func() { reapListWorktrees = origList }()
+
 			got := evaluateReapWorkspace(tt.ws, reapOptions{Force: true})
-			if got.SkipReason != tt.wantSkip {
-				t.Fatalf("skip = %q, want %q", got.SkipReason, tt.wantSkip)
+			if !strings.Contains(got.SkipReason, tt.wantSkip) {
+				t.Fatalf("skip = %q, want containing %q", got.SkipReason, tt.wantSkip)
 			}
 		})
 	}
@@ -228,11 +238,13 @@ func TestRunForceReapRestoresStateWhenRemovalFails(t *testing.T) {
 	}
 	origRemove := reapRemoveWorktree
 	origKill := reapKillTmuxSession
+	restoreList := stubReapWorktrees(worktreePath)
 	reapRemoveWorktree = func(workspaces.RemoveTarget) error { return fmt.Errorf("boom") }
 	reapKillTmuxSession = func(string) error { return nil }
 	defer func() {
 		reapRemoveWorktree = origRemove
 		reapKillTmuxSession = origKill
+		restoreList()
 	}()
 
 	mgr, err := state.NewManager()
@@ -272,6 +284,8 @@ func TestRunForceReapDryRunPreviewsWithoutMutation(t *testing.T) {
 	if err := mgr.Save(st); err != nil {
 		t.Fatal(err)
 	}
+	restoreList := stubReapWorktrees(worktreePath)
+	defer restoreList()
 
 	report, err := runReap(reapOptions{DryRun: true, Force: true}, io.Discard, io.Discard)
 	if err != nil {
@@ -316,8 +330,12 @@ func TestRunForceReapCleansLiveSessionByExactName(t *testing.T) {
 		t.Fatal(err)
 	}
 	origRemove := reapRemoveWorktree
+	restoreList := stubReapWorktrees(worktreePath)
 	reapRemoveWorktree = func(workspaces.RemoveTarget) error { return nil }
-	defer func() { reapRemoveWorktree = origRemove }()
+	defer func() {
+		reapRemoveWorktree = origRemove
+		restoreList()
+	}()
 
 	if _, err := runReap(reapOptions{Force: true, Jobs: 1}, io.Discard, io.Discard); err != nil {
 		t.Fatalf("runReap() error = %v", err)
@@ -481,19 +499,40 @@ func stubReapChecks(branches map[string]string, clean map[string]bool, merged ma
 	origBranch := reapCurrentBranch
 	origClean := reapWorktreeClean
 	origMerged := reapMergedIntoDefault
+	origList := reapListWorktrees
 	origActive := reapTmuxSessionActive
 
 	reapCurrentBranch = func(path string) string { return branches[path] }
 	reapWorktreeClean = func(path string) (bool, error) { return clean[path], nil }
 	reapMergedIntoDefault = func(_, worktreePath, _ string) (bool, error) { return merged[worktreePath], nil }
+	reapListWorktrees = func(string) ([]git.WorktreeInfo, error) {
+		registered := make([]git.WorktreeInfo, 0, len(branches))
+		for path := range branches {
+			registered = append(registered, git.WorktreeInfo{Path: path})
+		}
+		return registered, nil
+	}
 	reapTmuxSessionActive = func(sessionName string) (bool, error) { return active[sessionName], nil }
 
 	return func() {
 		reapCurrentBranch = origBranch
 		reapWorktreeClean = origClean
 		reapMergedIntoDefault = origMerged
+		reapListWorktrees = origList
 		reapTmuxSessionActive = origActive
 	}
+}
+
+func stubReapWorktrees(paths ...string) func() {
+	orig := reapListWorktrees
+	reapListWorktrees = func(string) ([]git.WorktreeInfo, error) {
+		registered := make([]git.WorktreeInfo, 0, len(paths))
+		for _, path := range paths {
+			registered = append(registered, git.WorktreeInfo{Path: path})
+		}
+		return registered, nil
+	}
+	return func() { reapListWorktrees = orig }
 }
 
 func mustParseTime(t *testing.T, raw string) time.Time {

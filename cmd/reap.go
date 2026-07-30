@@ -87,6 +87,7 @@ var (
 	reapCurrentBranch     = git.CurrentBranch
 	reapWorktreeClean     = gitWorktreeClean
 	reapMergedIntoDefault = gitMergedIntoDefault
+	reapListWorktrees     = git.ListWorktrees
 	reapTmuxSessionActive = tmuxSessionActive
 	reapKillTmuxSession   = killTmuxSessionIfLive
 	reapRemoveWorktree    = removeWorktreeForTarget
@@ -214,6 +215,9 @@ func evaluateReapWorkspace(ws state.Workspace, opts reapOptions) reapDecision {
 		if decision.SkipReason = reapWorktreePathSkipReason(ws.WorktreePath); decision.SkipReason != "" {
 			return decision
 		}
+		if decision.SkipReason = reapWorktreeRegistrationSkipReason(ws); decision.SkipReason != "" {
+			return decision
+		}
 		decision.Reason = "forced; safety checks bypassed"
 		return decision
 	}
@@ -245,6 +249,9 @@ func evaluateReapWorkspace(ws state.Workspace, opts reapOptions) reapDecision {
 	}
 
 	if decision.SkipReason = reapWorktreePathSkipReason(ws.WorktreePath); decision.SkipReason != "" {
+		return decision
+	}
+	if decision.SkipReason = reapWorktreeRegistrationSkipReason(ws); decision.SkipReason != "" {
 		return decision
 	}
 
@@ -305,6 +312,20 @@ func reapWorktreePathSkipReason(worktreePath string) string {
 		return "worktree path is not a directory"
 	}
 	return ""
+}
+
+func reapWorktreeRegistrationSkipReason(ws state.Workspace) string {
+	registered, err := reapListWorktrees(ws.RepoPath)
+	if err != nil {
+		return "could not verify registered worktree: " + err.Error()
+	}
+	targetPath := cleanAbsPath(ws.WorktreePath)
+	for _, wt := range registered {
+		if !wt.Bare && cleanAbsPath(wt.Path) == targetPath {
+			return ""
+		}
+	}
+	return "path is not a registered worktree"
 }
 
 func workspaceLastUsed(ws state.Workspace) (time.Time, error) {
