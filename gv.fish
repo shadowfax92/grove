@@ -18,6 +18,10 @@ function gv
 
     switch $subcmd
         case n nd new
+            if contains -- --tmux $rest; or contains -- -t $rest
+                grove new $rest
+                return $status
+            end
             set -l output (grove new $rest)
             or return $status
             set -l path (string trim -- $output[-1])

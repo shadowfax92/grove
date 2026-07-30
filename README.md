@@ -10,12 +10,12 @@
 
 </div>
 
-Grove is path-first: every command prints a workspace path, and the `gv` fish helper turns that path into a `cd`. Workspaces are git worktrees named like tmux sessions (`g/<repo>/<branch>`), so every branch becomes a place you can stand.
+Grove is path-first by default: commands print a workspace path, and the `gv` fish helper turns that path into a `cd`. Pass `--tmux` or `-t` to `grove new` to open the new workspace in a `gv/<repo>/<branch>` tmux session instead.
 
 - **Picker-first** — bare `grove` fuzzy-finds a workspace and prints its path; `gv` drops you in
 - **A worktree per branch** — `grove new` adds a git worktree, so branches are directories instead of stashes
 - **Warm worktree recycling** — `grove recycle` rotates a finished slot onto a fresh branch without reinstalling its environment
-- **tmux-ready** — workspaces are named like tmux sessions (`g/<repo>/<branch>`), ready for your session picker
+- **tmux-ready** — `grove new -t` creates and switches to a `gv/<repo>/<branch>` session
 - **Shared roots** — every worktree lives under one `~/worktrees` tree, overridable per repo
 - **Prepare & setup hooks** — pull main, install deps, run anything before and after a worktree is born
 - **Fish helper** — `gv`, `gv n`, `gv cd`, `gv dd` wrap the path-printing core into real `cd`s
@@ -42,6 +42,7 @@ make install
 ```sh
 grove init                        # register the current repo in config
 grove new mono feat/build-auth    # create a worktree, print its path
+grove new -t mono feat/build-auth # create a worktree and open it in tmux
 grove new --here --json             # auto-name a branch and print metadata JSON
 grove cd mono/feat/build-auth     # find an existing workspace, print its path
 grove recycle feat/next-task      # reuse this warm worktree for the next branch
@@ -64,7 +65,7 @@ Grove lays worktrees out under a shared root so a repo's branches sit together:
 <worktree_root>/<repo>/<branch-dashed>/
 ```
 
-`grove new mono feat/build-auth` creates `~/worktrees/mono/feat-build-auth/` — the branch's `/` becomes `-`, while the session name keeps it: `g/mono/feat/build-auth`.
+`grove new mono feat/build-auth` creates `~/worktrees/mono/feat-build-auth/` — the branch's `/` becomes `-`, while the session name keeps it: `gv/mono/feat/build-auth`.
 
 ## The `gv` helper
 
@@ -73,6 +74,7 @@ Grove lays worktrees out under a shared root so a repo's branches sit together:
 ```fish
 gv                          # pick a workspace and cd into it
 gv n mono feat/build-auth   # new worktree, then cd in
+gv n -t mono feat/build-auth # new worktree, then switch to its tmux session
 gv n --here                 # auto-name a worktree for the current repo, then cd in
 gv cd mono/feat/build-auth  # cd into an existing workspace
 gv dd                       # finish the current workspace and cd home
@@ -103,6 +105,7 @@ grove new                          # pick a repo, or type a plain workspace name
 grove new mono                     # auto-name a branch in mono
 grove new -m                       # prompt for the branch name
 grove new mono feat/build-auth     # create or check out a specific branch
+grove new --tmux mono feat/build-auth # create and open a gv/ tmux session
 grove new mono agent --from feat/base   # branch agent off feat/base
 grove new --here                   # auto-name a feat/<animal> branch for the current repo
 grove new --here -m                # prompt for the current repo's branch name
@@ -110,6 +113,8 @@ grove new --here fix/local-bug     # use an explicit branch for the current repo
 grove new --no-prepare mono agent  # skip prepare commands
 grove new --json mono agent        # print worktree_path, branch, repo, repo_path, created_at
 ```
+
+Inside tmux, `--tmux` switches the current client to the new session. Outside tmux, it leaves the new session detached.
 
 ### Recycle
 
@@ -309,9 +314,9 @@ Where a worktree lands depends on which `worktree_root` is set:
 
 Grove tracks three kinds of workspace:
 
-- **Worktree** — a git worktree per branch, the default. The directory uses the dashed branch (`feat/build-auth` → `feat-build-auth`); the session name keeps the slashes (`g/mono/feat/build-auth`).
+- **Worktree** — a git worktree per branch, the default. The directory uses the dashed branch (`feat/build-auth` → `feat-build-auth`); the session name keeps the slashes (`gv/mono/feat/build-auth`).
 - **Dir** — reuses a configured directory instead of creating a worktree, for notes or non-git folders.
-- **Plain** — a standalone workspace rooted at `$HOME`, named `g/<name>`.
+- **Plain** — a standalone workspace rooted at `$HOME`, named `gv/<name>`.
 
 <div align="center">
 <img src="assets/grove.png" width="700" alt="grove workspaces in a tmux session picker">

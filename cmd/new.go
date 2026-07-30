@@ -24,6 +24,7 @@ func init() {
 	newCmd.Flags().BoolP("manual", "m", false, "Prompt for the branch name instead of auto-generating")
 	newCmd.Flags().String("from", "", "Create a new branch from this start point")
 	newCmd.Flags().Bool("json", false, "Print workspace metadata as JSON")
+	newCmd.Flags().BoolP("tmux", "t", false, "Create and switch to a tmux session for the workspace")
 	rootCmd.AddCommand(newCmd)
 }
 
@@ -31,20 +32,22 @@ var newCmd = &cobra.Command{
 	Use:         "new [name] [branch]",
 	Aliases:     []string{"n"},
 	Annotations: map[string]string{"group": "Workspaces:"},
-	Short:       "Create a new workspace and print its path",
-	Long: `Create a new workspace and print its path. With the gv wrapper, grove new
-creates the workspace and cd's into it.
+	Short:       "Create a new workspace",
+	Long: `Create a new workspace and print its path by default. With --tmux, create
+a detached tmux session and switch the current tmux client to it.
 
-  grove new                 — pick a repo (or type a plain workspace name), then create + cd
-  grove new <repo>          — auto-create a feat/<animal> branch in repo + cd
+  grove new                 — pick a repo (or type a plain workspace name), then print its path
+  grove new <repo>          — auto-create a feat/<animal> branch in repo, then print its path
   grove new -m              — pick a repo, then prompt for the branch name
   grove new <repo> -m       — prompt for the branch name instead of auto-generating
-  grove new <repo> <branch> — create (or check out) a specific branch + cd
+  grove new <repo> <branch> — create (or check out) a specific branch, then print its path
   grove new <repo> <branch> --from <base>
                             — create <branch> from <base>
-  grove new --here          — auto-create a feat/<animal> branch for the current repo + cd
+  grove new --here          — auto-create a feat/<animal> branch, then print its path
   grove new --here -m       — prompt for the current repo's branch name
-  grove new --here <branch> — create a worktree for the current git repo + cd
+  grove new --here <branch> — create a worktree for the current repo, then print its path
+  grove new -t <repo> <branch>
+                            — create the workspace and open it in tmux
   grove new <name>          — plain workspace (if name doesn't match a repo)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		here, _ := cmd.Flags().GetBool("here")
@@ -52,6 +55,7 @@ creates the workspace and cd's into it.
 		manual, _ := cmd.Flags().GetBool("manual")
 		from, _ := cmd.Flags().GetString("from")
 		jsonOut, _ := cmd.Flags().GetBool("json")
+		tmuxMode, _ := cmd.Flags().GetBool("tmux")
 
 		cfg, err := config.Load()
 		if err != nil {
@@ -90,7 +94,7 @@ creates the workspace and cd's into it.
 			if err != nil {
 				return err
 			}
-			return printNewResult(result, jsonOut)
+			return finishNewResult(result, jsonOut, tmuxMode)
 		}
 
 		var name, branch string
@@ -128,13 +132,13 @@ creates the workspace and cd's into it.
 			if err != nil {
 				return err
 			}
-			return printNewResult(result, jsonOut)
+			return finishNewResult(result, jsonOut, tmuxMode)
 		}
 		result, err := createPlainWithResult(name, mgr, st)
 		if err != nil {
 			return err
 		}
-		return printNewResult(result, jsonOut)
+		return finishNewResult(result, jsonOut, tmuxMode)
 	},
 }
 
@@ -169,6 +173,49 @@ func printNewResult(result *newWorkspaceResult, jsonOut bool) error {
 	return nil
 }
 
+var newTmuxCommand = func(args ...string) ([]byte, error) {
+	return exec.Command("tmux", args...).CombinedOutput()
+}
+
+func finishNewResult(result *newWorkspaceResult, jsonOut, tmuxMode bool) error {
+	if !tmuxMode {
+		return printNewResult(result, jsonOut)
+	}
+	if err := openNewTmuxSession(result); err != nil {
+		return err
+	}
+	if jsonOut {
+		return printNewResult(result, true)
+	}
+	return nil
+}
+
+func openNewTmuxSession(result *newWorkspaceResult) error {
+	sessionName := result.Workspace.SessionName
+	if err := runNewTmuxCommand("new-session", "-d", "-s", sessionName, "-c", result.Path); err != nil {
+		return fmt.Errorf("workspace created at %s, but creating tmux session %q failed: %w", result.Path, sessionName, err)
+	}
+	if os.Getenv("TMUX") == "" {
+		return nil
+	}
+	if err := runNewTmuxCommand("switch-client", "-t", "="+sessionName); err != nil {
+		return fmt.Errorf("tmux session %q created, but switching client failed: %w", sessionName, err)
+	}
+	return nil
+}
+
+func runNewTmuxCommand(args ...string) error {
+	out, err := newTmuxCommand(args...)
+	if err == nil {
+		return nil
+	}
+	detail := strings.TrimSpace(string(out))
+	if detail == "" {
+		return fmt.Errorf("tmux %s: %w", strings.Join(args, " "), err)
+	}
+	return fmt.Errorf("tmux %s: %s: %w", strings.Join(args, " "), detail, err)
+}
+
 func validateNewFromFlag(from, branch string) error {
 	if from != "" && branch == "" {
 		return fmt.Errorf("--from requires <repo> <branch>")
@@ -195,8 +242,8 @@ func createPlain(name string, mgr *state.StateManager, st *state.State) error {
 }
 
 func createPlainWithResult(name string, mgr *state.StateManager, st *state.State) (*newWorkspaceResult, error) {
-	sessionName := fmt.Sprintf("g/%s", name)
-	if mgr.FindBySession(st, sessionName) != nil {
+	sessionName := fmt.Sprintf("gv/%s", name)
+	if mgr.FindWorkspace(st, name) != nil {
 		return nil, fmt.Errorf("workspace %q already exists", name)
 	}
 
@@ -231,8 +278,9 @@ func createWorktreeWithResult(cfg *config.Config, repo *config.RepoConfig, branc
 		branch = names.GenerateBranch(existingWorktreeNames(st, repo.Name))
 	}
 
-	sessionName := fmt.Sprintf("g/%s/%s", repo.Name, branch)
-	if mgr.FindBySession(st, sessionName) != nil {
+	workspaceName := fmt.Sprintf("%s/%s", repo.Name, branch)
+	sessionName := "gv/" + workspaceName
+	if mgr.FindWorkspace(st, workspaceName) != nil {
 		return nil, fmt.Errorf("workspace %q already exists", repo.Name+"/"+branch)
 	}
 
@@ -266,7 +314,7 @@ func createWorktreeWithResult(cfg *config.Config, repo *config.RepoConfig, branc
 	}
 
 	ws := state.Workspace{
-		Name:         fmt.Sprintf("%s/%s", repo.Name, branch),
+		Name:         workspaceName,
 		Type:         "worktree",
 		Repo:         repo.Name,
 		RepoPath:     repo.Path,
@@ -473,8 +521,9 @@ func createDirWorkspaceWithResult(repo *config.RepoConfig, name string, mgr *sta
 		}
 	}
 
-	sessionName := fmt.Sprintf("g/%s/%s", repo.Name, name)
-	if mgr.FindBySession(st, sessionName) != nil {
+	workspaceName := fmt.Sprintf("%s/%s", repo.Name, name)
+	sessionName := "gv/" + workspaceName
+	if mgr.FindWorkspace(st, workspaceName) != nil {
 		return nil, fmt.Errorf("workspace %q already exists", repo.Name+"/"+name)
 	}
 
@@ -490,7 +539,7 @@ func createDirWorkspaceWithResult(repo *config.RepoConfig, name string, mgr *sta
 	}
 
 	mgr.AddWorkspace(st, state.Workspace{
-		Name:        fmt.Sprintf("%s/%s", repo.Name, name),
+		Name:        workspaceName,
 		Type:        "dir",
 		Repo:        repo.Name,
 		RepoPath:    repo.Path,
@@ -538,14 +587,15 @@ func createPlainRepoWithResult(repo *config.RepoConfig, name string, mgr *state.
 		}
 	}
 
-	sessionName := fmt.Sprintf("g/%s/%s", repo.Name, name)
-	if mgr.FindBySession(st, sessionName) != nil {
+	workspaceName := fmt.Sprintf("%s/%s", repo.Name, name)
+	sessionName := "gv/" + workspaceName
+	if mgr.FindWorkspace(st, workspaceName) != nil {
 		return nil, fmt.Errorf("workspace %q already exists", repo.Name+"/"+name)
 	}
 
 	home, _ := os.UserHomeDir()
 	mgr.AddWorkspace(st, state.Workspace{
-		Name:        fmt.Sprintf("%s/%s", repo.Name, name),
+		Name:        workspaceName,
 		Type:        "plain",
 		Repo:        repo.Name,
 		Path:        home,
