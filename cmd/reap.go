@@ -163,6 +163,9 @@ func runReap(opts reapOptions, out io.Writer, errOut io.Writer) (reapReport, err
 			if err := reapKillTmuxSession(target.SessionName); err != nil {
 				return fmt.Errorf("cleaning tmux session %q: %w", target.SessionName, err)
 			}
+			if reason := reapWorktreeRegistrationSkipReason(target.Workspace); reason != "" {
+				return errors.New(reason)
+			}
 		}
 		return reapRemoveWorktree(target)
 	}
@@ -361,6 +364,13 @@ func validateReapWorktreeIdentity(repoPath, worktreePath string) error {
 	worktreeCommon, err := reapGitPath(worktreePath, "--git-common-dir")
 	if err != nil {
 		return fmt.Errorf("could not verify worktree metadata: %w", err)
+	}
+	worktreeGitDir, err := reapGitPath(worktreePath, "--git-dir")
+	if err != nil {
+		return fmt.Errorf("could not verify worktree Git directory: %w", err)
+	}
+	if worktreeGitDir == worktreeCommon {
+		return errors.New("worktree path is base repository")
 	}
 	if repoCommon != worktreeCommon {
 		return errors.New("worktree metadata does not belong to repository")

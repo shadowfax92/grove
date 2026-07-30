@@ -213,8 +213,10 @@ func TestForceReapRejectsBaseRepoResolvedFromMetadataPath(t *testing.T) {
 	if err := os.Symlink(subdir, symlinkPath); err != nil {
 		t.Fatal(err)
 	}
+	linkedPath := filepath.Join(t.TempDir(), "linked")
+	runGitForReap(t, repoPath, "worktree", "add", "-b", "feat/metadata", linkedPath)
 
-	for _, metadataPath := range []string{subdir, symlinkPath} {
+	for _, metadataPath := range []string{subdir, symlinkPath, linkedPath} {
 		ws := reapTestWorkspace("main", repoPath, "")
 		ws.RepoPath = metadataPath
 		got := evaluateReapWorkspace(ws, reapOptions{Force: true})
@@ -245,6 +247,67 @@ func TestForceReapRejectsPrunableWorktreeReplacement(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(worktreePath, "unrelated.txt")); err != nil {
 		t.Fatalf("replacement data was touched: %v", err)
+	}
+}
+
+func TestRunForceReapRevalidatesAfterSessionCleanup(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repoPath := initRepoForReap(t)
+	parent := t.TempDir()
+	worktreePath := filepath.Join(parent, "worktree")
+	movedPath := filepath.Join(parent, "moved")
+	runGitForReap(t, repoPath, "worktree", "add", "-b", "feat/live", worktreePath)
+
+	ws := reapTestWorkspace("feat/live", worktreePath, "")
+	ws.RepoPath = repoPath
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Save(&state.State{Version: 1, Workspaces: []state.Workspace{ws}}); err != nil {
+		t.Fatal(err)
+	}
+
+	origKill := reapKillTmuxSession
+	origRemove := reapRemoveWorktree
+	removeCalled := false
+	reapKillTmuxSession = func(sessionName string) error {
+		if sessionName != ws.SessionName {
+			t.Fatalf("session cleanup = %q, want %q", sessionName, ws.SessionName)
+		}
+		if err := os.Rename(worktreePath, movedPath); err != nil {
+			return err
+		}
+		if err := os.Mkdir(worktreePath, 0755); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(worktreePath, "unrelated.txt"), []byte("keep\n"), 0644)
+	}
+	reapRemoveWorktree = func(workspaces.RemoveTarget) error {
+		removeCalled = true
+		return nil
+	}
+	defer func() {
+		reapKillTmuxSession = origKill
+		reapRemoveWorktree = origRemove
+	}()
+
+	_, err = runReap(reapOptions{Force: true, Jobs: 1}, io.Discard, io.Discard)
+	if !errors.Is(err, ErrRemoveFailed) {
+		t.Fatalf("runReap() error = %v, want ErrRemoveFailed", err)
+	}
+	if removeCalled {
+		t.Fatal("worktree removal ran after session cleanup replaced the target path")
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, "unrelated.txt")); err != nil {
+		t.Fatalf("replacement data was touched: %v", err)
+	}
+	loaded, err := mgr.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.Workspaces, []state.Workspace{ws}) {
+		t.Fatalf("state after revalidation failure = %#v, want workspace restored", loaded.Workspaces)
 	}
 }
 
