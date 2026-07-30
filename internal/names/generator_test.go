@@ -8,10 +8,9 @@ import (
 func TestGenerateBranchFormat(t *testing.T) {
 	branch := GenerateBranch(nil)
 
-	// fix/<mmdd>-<hhmm>-<animal>
-	pattern := regexp.MustCompile(`^fix/\d{4}-\d{4}-[a-z]`)
+	pattern := regexp.MustCompile(`^feat/[a-z][a-z0-9]*$`)
 	if !pattern.MatchString(branch) {
-		t.Fatalf("GenerateBranch() = %q, want fix/<mmdd>-<hhmm>-<animal>", branch)
+		t.Fatalf("GenerateBranch() = %q, want feat/<animal>", branch)
 	}
 }
 
