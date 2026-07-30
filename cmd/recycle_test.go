@@ -304,8 +304,8 @@ func TestRecycleAutoGeneratesUniqueAnimalBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recycleWorkspace() error = %v", err)
 	}
-	if !regexp.MustCompile(`^feat/[a-z][a-z0-9]*$`).MatchString(result.Workspace.Branch) {
-		t.Fatalf("auto branch = %q, want feat/<animal>", result.Workspace.Branch)
+	if !regexp.MustCompile(`^feat/\d{2}-\d{2}-[a-z]+-[a-z]+$`).MatchString(result.Workspace.Branch) {
+		t.Fatalf("auto branch = %q, want feat/<MM-DD>-<adjective>-<animal>", result.Workspace.Branch)
 	}
 	if result.Workspace.Branch == "feat/old" || result.Workspace.Branch == "feat/otter" {
 		t.Fatalf("auto branch reused existing name %q", result.Workspace.Branch)

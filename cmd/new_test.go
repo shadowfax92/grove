@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -521,8 +522,8 @@ func TestCreateWorktreeHereAutoNamesBranch(t *testing.T) {
 	}
 
 	branch := st.Workspaces[0].Branch
-	if !strings.HasPrefix(branch, "feat/") || branch == "feat/" {
-		t.Fatalf("auto branch = %q, want feat/<animal>", branch)
+	if !regexp.MustCompile(`^feat/\d{2}-\d{2}-[a-z]+-[a-z]+$`).MatchString(branch) {
+		t.Fatalf("auto branch = %q, want feat/<MM-DD>-<adjective>-<animal>", branch)
 	}
 	if got := newTestGitOutput(t, st.Workspaces[0].WorktreePath, "branch", "--show-current"); got != branch {
 		t.Fatalf("worktree branch = %q, want %q", got, branch)
