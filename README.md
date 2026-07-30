@@ -48,7 +48,7 @@ grove cd mono/feat/build-auth     # find an existing workspace, print its path
 grove recycle feat/next-task      # reuse this warm worktree for the next branch
 grove list --json                  # print state-backed workspace JSON
 grove reap --dry-run             # preview stale merged workspaces safe to retire
-grove reap --force -j 10         # discard all managed worktrees, 10 at a time
+grove reap --force -j 10         # force-remove managed worktrees, 10 at a time
 grove rm --path ~/worktrees/mono/feat-build-auth --yes
 grove done mono/feat/build-auth   # finish it and remove the worktree
 grove sync export                # select local clones for the portable manifest
