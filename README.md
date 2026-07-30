@@ -14,6 +14,7 @@ Grove is path-first by default: commands print a workspace path, and the `gv` fi
 
 - **Picker-first** — bare `grove` fuzzy-finds a workspace and prints its path; `gv` drops you in
 - **A worktree per branch** — `grove new` adds a git worktree, so branches are directories instead of stashes
+- **Warm worktree recycling** — `grove recycle` rotates a finished slot onto a fresh branch without reinstalling its environment
 - **tmux-ready** — `grove new -t` creates and switches to a `gv/<repo>/<branch>` session
 - **Shared roots** — every worktree lives under one `~/worktrees` tree, overridable per repo
 - **Prepare & setup hooks** — pull main, install deps, run anything before and after a worktree is born
@@ -44,6 +45,7 @@ grove new mono feat/build-auth    # create a worktree, print its path
 grove new -t mono feat/build-auth # create a worktree and open it in tmux
 grove new --here --json             # auto-name a branch and print metadata JSON
 grove cd mono/feat/build-auth     # find an existing workspace, print its path
+grove recycle feat/next-task      # reuse this warm worktree for the next branch
 grove list --json                  # print state-backed workspace JSON
 grove reap --dry-run                # preview stale merged workspaces safe to retire
 grove rm --path ~/worktrees/mono/feat-build-auth --yes
@@ -113,6 +115,21 @@ grove new --json mono agent        # print worktree_path, branch, repo, repo_pat
 ```
 
 Inside tmux, `--tmux` switches the current client to the new session. Outside tmux, it leaves the new session detached.
+
+### Recycle
+
+```sh
+grove recycle                      # recycle the current worktree onto an auto-named feat/<animal> branch
+grove recycle feat/next-task       # use an explicit new branch
+grove recycle mono/feat/old        # recycle a named workspace with an auto-generated branch
+grove recycle mono/feat/old feat/next-task
+grove recycle --json               # print the same metadata fields as grove new --json
+grove recycle --force feat/next    # bypass the merged-branch check, but still require a clean tree
+```
+
+Recycling keeps the worktree directory and its warm environment in place. Grove requires a clean tree (including no untracked files), fetches `origin`, and normally verifies that the old branch is reachable from `origin/<default>` before creating the new branch there. It never reruns prepare or setup hooks and never pushes. `--force` bypasses only the reachability check.
+
+The directory remains the original slot name even though state and a live tmux session are renamed to `g/<repo>/<new-branch>`. For example, recycling `feat/old` to `feat/next-task` can leave the directory at `~/worktrees/mono/feat-old/`; this is intentional.
 
 ### Remove
 
