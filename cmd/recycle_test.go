@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -132,6 +133,7 @@ func TestRecycleRefusesUnmergedUnlessForced(t *testing.T) {
 		calls = append(calls, "switch")
 		return nil
 	}
+	recycleSessionExists = func(string) (bool, error) { return false, nil }
 	recycleRenameSession = func(_, _ string) error {
 		calls = append(calls, "rename")
 		return nil
@@ -213,6 +215,7 @@ func TestRecycleHappyPathKeepsWarmWorktreeAndUpdatesState(t *testing.T) {
 
 	now := time.Date(2026, 7, 30, 19, 0, 0, 0, time.UTC)
 	recycleNow = func() time.Time { return now }
+	recycleSessionExists = func(string) (bool, error) { return false, nil }
 	var renamedFrom, renamedTo string
 	recycleRenameSession = func(oldName, newName string) error {
 		renamedFrom, renamedTo = oldName, newName
@@ -292,6 +295,7 @@ func TestRecycleAutoGeneratesUniqueAnimalBranch(t *testing.T) {
 	recycleWorktreeClean = func(string) (bool, error) { return true, nil }
 	recycleFetchOrigin = func(string) error { return nil }
 	recycleSwitchBranch = func(_, _, _ string) error { return nil }
+	recycleSessionExists = func(string) (bool, error) { return false, nil }
 	recycleRenameSession = func(_, _ string) error { return nil }
 
 	result, err := recycleWorkspace(recycleTestConfig("/repo"), mgr, st, &st.Workspaces[0], "", true)
@@ -358,6 +362,151 @@ func TestRecycleCommandDocumentsSafetyFlags(t *testing.T) {
 	}
 }
 
+func TestRecycleRefusesExistingDestinationTmuxSessionBeforeSwitch(t *testing.T) {
+	preserveRecycleHooks(t)
+	t.Setenv("HOME", t.TempDir())
+
+	worktreePath := t.TempDir()
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &state.State{Version: 1, Workspaces: []state.Workspace{
+		recycleTestWorkspace("/repo", worktreePath),
+	}}
+	recycleCurrentBranch = func(string) string { return "feat/old" }
+	recycleWorktreeClean = func(string) (bool, error) { return true, nil }
+	recycleFetchOrigin = func(string) error { return nil }
+	recycleSessionExists = func(name string) (bool, error) {
+		if name != "g/mono/feat/next" {
+			t.Fatalf("destination session check = %q", name)
+		}
+		return true, nil
+	}
+	switched := false
+	recycleSwitchBranch = func(_, _, _ string) error {
+		switched = true
+		return nil
+	}
+
+	_, err = recycleWorkspace(recycleTestConfig("/repo"), mgr, st, &st.Workspaces[0], "feat/next", true)
+	if err == nil || !strings.Contains(err.Error(), `tmux session "g/mono/feat/next" already exists`) {
+		t.Fatalf("recycleWorkspace() error = %v, want destination session collision", err)
+	}
+	if switched {
+		t.Fatal("git branch switched despite destination tmux session collision")
+	}
+}
+
+func TestRenameTmuxSessionUsesExactTargets(t *testing.T) {
+	binDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "tmux.log")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TMUX_TEST_LOG\"\n"
+	if err := os.WriteFile(filepath.Join(binDir, "tmux"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TMUX_TEST_LOG", logPath)
+
+	if err := renameTmuxSessionIfLive("g/mono/feat/foo", "g/mono/feat/bar"); err != nil {
+		t.Fatalf("renameTmuxSessionIfLive() error = %v", err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimSpace(string(data)), "\n")
+	want := []string{
+		"has-session -t =g/mono/feat/foo",
+		"rename-session -t =g/mono/feat/foo g/mono/feat/bar",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("tmux calls = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("tmux call %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestRecycleRestoresOldBranchWhenStateSaveFails(t *testing.T) {
+	preserveRecycleHooks(t)
+	t.Setenv("HOME", t.TempDir())
+
+	worktreePath := t.TempDir()
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &state.State{Version: 1, Workspaces: []state.Workspace{
+		recycleTestWorkspace("/repo", worktreePath),
+	}}
+	original := st.Workspaces[0]
+	if err := mgr.Save(st); err != nil {
+		t.Fatal(err)
+	}
+
+	recycleCurrentBranch = func(string) string { return "feat/old" }
+	recycleWorktreeClean = func(string) (bool, error) { return true, nil }
+	recycleFetchOrigin = func(string) error { return nil }
+	recycleSwitchBranch = func(_, _, _ string) error { return nil }
+	recycleSessionExists = func(string) (bool, error) { return false, nil }
+	recycleSaveState = func(*state.StateManager, *state.State) error {
+		return errors.New("disk full")
+	}
+	var restoredOld, removedNew string
+	recycleRestoreBranch = func(_ string, oldBranch, newBranch string) error {
+		restoredOld, removedNew = oldBranch, newBranch
+		return nil
+	}
+	renamed := false
+	recycleRenameSession = func(_, _ string) error {
+		renamed = true
+		return nil
+	}
+
+	_, err = recycleWorkspace(recycleTestConfig("/repo"), mgr, st, &st.Workspaces[0], "feat/next", true)
+	if err == nil || !strings.Contains(err.Error(), "saving state: disk full") {
+		t.Fatalf("recycleWorkspace() error = %v, want state-save failure", err)
+	}
+	if st.Workspaces[0] != original {
+		t.Fatalf("in-memory workspace = %#v, want restored %#v", st.Workspaces[0], original)
+	}
+	if restoredOld != "feat/old" || removedNew != "feat/next" {
+		t.Fatalf("branch rollback = old %q, new %q", restoredOld, removedNew)
+	}
+	if renamed {
+		t.Fatal("tmux session renamed after state save failed")
+	}
+	loaded, err := mgr.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Workspaces[0] != original {
+		t.Fatalf("persisted workspace = %#v, want unchanged %#v", loaded.Workspaces[0], original)
+	}
+}
+
+func TestGitRestoreRecycledBranchSwitchesBackAndDeletesNewBranch(t *testing.T) {
+	repoPath := initRecycleTestRepo(t)
+	worktreePath := filepath.Join(t.TempDir(), "slot")
+	runRecycleTestGit(t, repoPath, "worktree", "add", "-b", "feat/old", worktreePath)
+	runRecycleTestGit(t, worktreePath, "switch", "-c", "feat/new", "main")
+
+	if err := gitRestoreRecycledBranch(worktreePath, "feat/old", "feat/new"); err != nil {
+		t.Fatalf("gitRestoreRecycledBranch() error = %v", err)
+	}
+	if got := recycleTestGitOutput(t, worktreePath, "branch", "--show-current"); got != "feat/old" {
+		t.Fatalf("current branch = %q, want feat/old", got)
+	}
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/feat/new")
+	cmd.Dir = repoPath
+	if err := cmd.Run(); err == nil {
+		t.Fatal("rolled-back branch feat/new still exists")
+	}
+}
+
 func preserveRecycleHooks(t *testing.T) {
 	t.Helper()
 	origNow := recycleNow
@@ -366,6 +515,9 @@ func preserveRecycleHooks(t *testing.T) {
 	origMerged := recycleMergedIntoDefault
 	origFetch := recycleFetchOrigin
 	origSwitch := recycleSwitchBranch
+	origRestore := recycleRestoreBranch
+	origSaveState := recycleSaveState
+	origSessionExists := recycleSessionExists
 	origRename := recycleRenameSession
 	t.Cleanup(func() {
 		recycleNow = origNow
@@ -374,6 +526,9 @@ func preserveRecycleHooks(t *testing.T) {
 		recycleMergedIntoDefault = origMerged
 		recycleFetchOrigin = origFetch
 		recycleSwitchBranch = origSwitch
+		recycleRestoreBranch = origRestore
+		recycleSaveState = origSaveState
+		recycleSessionExists = origSessionExists
 		recycleRenameSession = origRename
 	})
 }
