@@ -178,21 +178,44 @@ func TestValidateNewFromFlagAllowsBranch(t *testing.T) {
 	}
 }
 
-func TestNewHereBranchRequiresExactlyOneBranch(t *testing.T) {
-	for _, args := range [][]string{nil, []string{"repo", "branch"}} {
-		if _, err := newHereBranch(args); err == nil {
-			t.Fatalf("newHereBranch(%#v) error = nil, want validation error", args)
-		}
+func TestNewHereBranchAllowsAutomatic(t *testing.T) {
+	branch, err := newHereBranch(nil, false, nil)
+	if err != nil {
+		t.Fatalf("newHereBranch() error = %v", err)
+	}
+	if branch != "" {
+		t.Fatalf("branch = %q, want empty for downstream auto-generation", branch)
 	}
 }
 
-func TestNewHereBranchReturnsBranch(t *testing.T) {
-	branch, err := newHereBranch([]string{"feat/here"})
+func TestNewHereBranchPromptsWhenManual(t *testing.T) {
+	branch, err := newHereBranch(nil, true, func() (string, error) {
+		return "feat/manual", nil
+	})
+	if err != nil {
+		t.Fatalf("newHereBranch() error = %v", err)
+	}
+	if branch != "feat/manual" {
+		t.Fatalf("branch = %q, want feat/manual", branch)
+	}
+}
+
+func TestNewHereBranchReturnsExplicitBranch(t *testing.T) {
+	branch, err := newHereBranch([]string{"feat/here"}, true, func() (string, error) {
+		t.Fatal("prompt called for explicit branch")
+		return "", nil
+	})
 	if err != nil {
 		t.Fatalf("newHereBranch() error = %v", err)
 	}
 	if branch != "feat/here" {
 		t.Fatalf("branch = %q, want feat/here", branch)
+	}
+}
+
+func TestNewHereBranchRejectsMultipleArguments(t *testing.T) {
+	if _, err := newHereBranch([]string{"repo", "branch"}, false, nil); err == nil {
+		t.Fatal("newHereBranch() error = nil, want validation error")
 	}
 }
 
@@ -471,6 +494,38 @@ func TestCreateWorktreeHereReusesRegisteredRepo(t *testing.T) {
 	}
 	if got := st.Workspaces[0].WorktreePath; got != worktreePath {
 		t.Fatalf("workspace WorktreePath = %q, want %q", got, worktreePath)
+	}
+}
+
+func TestCreateWorktreeHereAutoNamesBranch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := initNewTestRepo(t)
+	writeNewTestCommit(t, repoPath, "base.txt", "base")
+	root := t.TempDir()
+
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatalf("state.NewManager() error = %v", err)
+	}
+	st := &state.State{Version: 1}
+	cfg := &config.Config{Repos: []config.RepoConfig{{
+		Name:         "custom",
+		Path:         repoPath,
+		Type:         "worktree",
+		WorktreeRoot: root,
+	}}}
+
+	if err := createWorktreeHere(repoPath, "", "", cfg, mgr, st, true); err != nil {
+		t.Fatalf("createWorktreeHere() error = %v", err)
+	}
+
+	branch := st.Workspaces[0].Branch
+	if !strings.HasPrefix(branch, "feat/") || branch == "feat/" {
+		t.Fatalf("auto branch = %q, want feat/<animal>", branch)
+	}
+	if got := newTestGitOutput(t, st.Workspaces[0].WorktreePath, "branch", "--show-current"); got != branch {
+		t.Fatalf("worktree branch = %q, want %q", got, branch)
 	}
 }
 

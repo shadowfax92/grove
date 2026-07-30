@@ -42,7 +42,7 @@ make install
 grove init                        # register the current repo in config
 grove new mono feat/build-auth    # create a worktree, print its path
 grove new -t mono feat/build-auth # create a worktree and open it in tmux
-grove new --here chore/readme --json  # create and print metadata JSON
+grove new --here --json             # auto-name a branch and print metadata JSON
 grove cd mono/feat/build-auth     # find an existing workspace, print its path
 grove list --json                  # print state-backed workspace JSON
 grove reap --dry-run                # preview stale merged workspaces safe to retire
@@ -73,7 +73,7 @@ Grove lays worktrees out under a shared root so a repo's branches sit together:
 gv                          # pick a workspace and cd into it
 gv n mono feat/build-auth   # new worktree, then cd in
 gv n -t mono feat/build-auth # new worktree, then switch to its tmux session
-gv n --here fix/local-bug   # worktree the current repo, then cd in
+gv n --here                 # auto-name a worktree for the current repo, then cd in
 gv cd mono/feat/build-auth  # cd into an existing workspace
 gv dd                       # finish the current workspace and cd home
 gv ls                       # list workspaces
@@ -105,7 +105,9 @@ grove new -m                       # prompt for the branch name
 grove new mono feat/build-auth     # create or check out a specific branch
 grove new --tmux mono feat/build-auth # create and open a gv/ tmux session
 grove new mono agent --from feat/base   # branch agent off feat/base
-grove new --here fix/local-bug     # worktree the current git repo
+grove new --here                   # auto-name a feat/<animal> branch for the current repo
+grove new --here -m                # prompt for the current repo's branch name
+grove new --here fix/local-bug     # use an explicit branch for the current repo
 grove new --no-prepare mono agent  # skip prepare commands
 grove new --json mono agent        # print worktree_path, branch, repo, repo_path, created_at
 ```
