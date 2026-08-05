@@ -17,7 +17,7 @@ Grove is path-first by default: commands print a workspace path, and the `gv` fi
 - **Warm worktree recycling** — `grove recycle` rotates a finished slot onto a fresh branch without reinstalling its environment
 - **tmux-ready** — `grove new -t` creates and switches to a `gv/<repo>/<branch>` session
 - **Shared roots** — every worktree lives under one `~/worktrees` tree, overridable per repo
-- **Prepare & setup hooks** — pull main, install deps, run anything before and after a worktree is born
+- **Fresh remote bases & hooks** — reset to the remote default, then run custom prepare and setup commands
 - **Fish helper** — `gv`, `gv n`, `gv cd`, `gv dd` wrap the path-printing core into real `cd`s
 - **Plain & dir workspaces** — not everything needs a worktree; back one with any directory or just `$HOME`
 - **Self-cleaning** — `grove done` retires one workspace, `grove reap` safely retires stale merged workspaces, `grove cleanup` sweeps orphaned worktrees
@@ -111,11 +111,12 @@ grove new mono agent --from feat/base   # branch agent off feat/base
 grove new --here                   # auto-name e.g. feat/07-30-cozy-otter for the current repo
 grove new --here -m                # prompt for the current repo's branch name
 grove new --here fix/local-bug     # use an explicit branch for the current repo
-grove new --no-prepare mono agent  # skip prepare commands
 grove new --json mono agent        # print worktree_path, branch, repo, repo_path, created_at
 ```
 
 Inside tmux, `--tmux` switches the current client to the new session. Outside tmux, it leaves the new session detached.
+
+Before creating a worktree, Grove fetches `origin`, force-switches the base checkout to its configured default branch, hard-resets it to `origin/<default>`, and removes untracked files. Ignored files remain. Grove then runs every configured prepare command. Fresh branches start at that same remote default unless `--from` supplies another start point; existing local or remote branches are reused. This discards uncommitted work in the base checkout.
 
 ### Recycle
 
@@ -125,10 +126,9 @@ grove recycle feat/next-task       # use an explicit new branch
 grove recycle mono/feat/old        # recycle a named workspace with an auto-generated branch
 grove recycle mono/feat/old feat/next-task
 grove recycle --json               # print the same metadata fields as grove new --json
-grove recycle --force feat/next    # bypass the merged-branch check, but still require a clean tree
 ```
 
-Recycling keeps the worktree directory and its warm environment in place. Grove requires a clean tree (including no untracked files), fetches `origin`, and normally verifies that the old branch is reachable from `origin/<default>` before creating the new branch there. It never reruns prepare or setup hooks and never pushes. `--force` bypasses only the reachability check.
+Recycling keeps the worktree directory and its warm environment in place. Grove fetches `origin`, discards tracked and untracked changes in the recycled worktree, and creates the new branch at `origin/<default>`. Ignored files remain, the old local branch is preserved, and no merge check is performed. Recycling never reruns prepare or setup hooks and never pushes.
 
 The directory remains the original slot name even though state and a live tmux session are renamed to `g/<repo>/<new-branch>`. For example, recycling `feat/old` to `feat/next-task` can leave the directory at `~/worktrees/mono/feat-old/`; this is intentional.
 
@@ -234,9 +234,7 @@ repos:
     name: mono
     default_branch: main
     prepare:
-      - git diff --quiet && git diff --cached --quiet || (echo "uncommitted changes" && exit 1)
-      - git checkout main
-      - git pull
+      - git submodule update --init --recursive
     setup:
       - bun install
 
@@ -257,10 +255,10 @@ repos:
 | `path` | Base repo path |
 | `name` | Config name used by commands and session names |
 | `type` | `worktree` (default), `dir` for a directory-backed workspace, or `plain` for a home-rooted one |
-| `default_branch` | Branch checked out by the default prepare commands |
+| `default_branch` | Branch the base checkout is hard-reset to from `origin` before worktree creation |
 | `worktree_root` | Per-repo override for where this repo's worktrees land |
 | `workdir` | Subdirectory to print and enter after the worktree is created |
-| `prepare` | Commands run in the base repo before a workspace is created |
+| `prepare` | Commands run in the base repo after its built-in remote reset and before workspace creation |
 | `setup` | Commands run in the new workspace after the worktree exists |
 
 ### Reap
@@ -287,7 +285,7 @@ Where a worktree lands depends on which `worktree_root` is set:
 | Repo-level `worktree_root` | `<repo worktree_root>/<branch-dashed>/` — no repo name added |
 | Neither | `<repo>/.grove/worktrees/<branch>/` — legacy layout |
 
-`grove init` appends a worktree entry for the current git root: it infers the name from the directory, the default branch from `origin/HEAD` → `main` → `master` → the current branch, and leaves `setup: []` for you to fill in.
+`grove init` appends a worktree entry for the current git root: it infers the name from the directory, the default branch from `origin/HEAD` → `main` → `master` → the current branch, and leaves `prepare: []` and `setup: []` for you to fill in.
 
 ## Machine-readable automation
 

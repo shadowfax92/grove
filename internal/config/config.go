@@ -32,7 +32,6 @@ type RepoConfig struct {
 	Setup         []string `yaml:"setup"`
 }
 
-const DefaultPrepareCleanCommand = `git diff --quiet && git diff --cached --quiet || (echo "uncommitted changes in base repo" && exit 1)`
 const DefaultWorktreeRoot = "~/worktrees"
 const DefaultReapTTL = 6 * time.Hour
 
@@ -89,23 +88,18 @@ func DefaultConfigPath() (string, error) {
 	return filepath.Join(home, ".config", "grove", "config.yaml"), nil
 }
 
-// NewWorktreeRepo builds the default config entry created by `grove init`.
-// Shared worktree placement comes from the top-level config unless this entry is later given an override.
+// NewWorktreeRepo builds the config entry created by `grove init`.
 func NewWorktreeRepo(path, name, defaultBranch string) RepoConfig {
 	return RepoConfig{
 		Path:          path,
 		Name:          name,
 		DefaultBranch: defaultBranch,
-		Prepare: []string{
-			DefaultPrepareCleanCommand,
-			"git checkout " + defaultBranch,
-		},
-		Setup: []string{},
+		Prepare:       []string{},
+		Setup:         []string{},
 	}
 }
 
-// AddRepoToFile appends a repo entry to a Grove config file without rewriting unrelated sections.
-// It rejects duplicate names or paths before editing so `grove init` is safe to run repeatedly.
+// AddRepoToFile appends a unique repo entry without rewriting unrelated config.
 func AddRepoToFile(path string, repo RepoConfig) error {
 	if strings.TrimSpace(repo.Path) == "" {
 		return fmt.Errorf("repo path is required")

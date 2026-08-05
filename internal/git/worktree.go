@@ -124,8 +124,52 @@ func CurrentBranch(dir string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// DefaultBranch returns the branch Grove should reset to before creating new worktrees.
-// Remote HEAD is preferred because the current checkout may already be on a feature branch.
+func FetchOrigin(repoPath string) error {
+	cmd := exec.Command("git", "fetch", "origin")
+	cmd.Dir = repoPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("fetching origin: %s (%w)", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+func CleanWorktree(worktreePath string) error {
+	reset := exec.Command("git", "reset", "--hard", "HEAD")
+	reset.Dir = worktreePath
+	out, err := reset.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("resetting worktree: %s (%w)", strings.TrimSpace(string(out)), err)
+	}
+
+	clean := exec.Command("git", "clean", "-fd")
+	clean.Dir = worktreePath
+	out, err = clean.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("cleaning worktree: %s (%w)", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+func ResetToRemoteBranch(repoPath, branch string) error {
+	if err := FetchOrigin(repoPath); err != nil {
+		return err
+	}
+	if err := CleanWorktree(repoPath); err != nil {
+		return err
+	}
+
+	startPoint := "origin/" + branch
+	cmd := exec.Command("git", "switch", "--discard-changes", "-C", branch, startPoint)
+	cmd.Dir = repoPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("resetting %s to %s: %s (%w)", branch, startPoint, strings.TrimSpace(string(out)), err)
+	}
+	return CleanWorktree(repoPath)
+}
+
+// DefaultBranch prefers remote HEAD because the current checkout may be a feature branch.
 func DefaultBranch(repoPath string) string {
 	if branch := remoteHeadBranch(repoPath); branch != "" {
 		return branch

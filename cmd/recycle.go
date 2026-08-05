@@ -19,7 +19,6 @@ import (
 )
 
 func init() {
-	recycleCmd.Flags().Bool("force", false, "Recycle even when the current branch has not reached origin/default")
 	recycleCmd.Flags().Bool("json", false, "Print workspace metadata as JSON")
 	rootCmd.AddCommand(recycleCmd)
 }
@@ -31,10 +30,9 @@ var recycleCmd = &cobra.Command{
 	Short:       "Reuse a warm worktree for a fresh branch",
 	Long: `Reuse an existing worktree while rotating it onto a fresh branch.
 
-The worktree must be clean. Grove fetches origin, verifies that the current
-branch is reachable from origin/<default>, creates the new branch there, and
-updates the workspace state without running prepare or setup hooks. --force
-bypasses only the merged-branch check.
+Grove fetches origin, discards tracked and untracked changes in the worktree,
+creates the new branch at origin/<default>, and updates the workspace state
+without running prepare or setup hooks.
 
   grove recycle                     — recycle the current workspace, auto-name the branch
   grove recycle feat/next-task      — recycle the current workspace onto this branch
@@ -43,7 +41,6 @@ bypasses only the merged-branch check.
                                     — recycle an explicit workspace onto this branch`,
 	Args: cobra.MaximumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		force, _ := cmd.Flags().GetBool("force")
 		jsonOut, _ := cmd.Flags().GetBool("json")
 
 		cfg, err := config.Load()
@@ -67,7 +64,7 @@ bypasses only the merged-branch check.
 		if err != nil {
 			return err
 		}
-		result, err := recycleWorkspace(cfg, mgr, st, ws, branch, force)
+		result, err := recycleWorkspace(cfg, mgr, st, ws, branch)
 		if err != nil {
 			return err
 		}
@@ -76,17 +73,16 @@ bypasses only the merged-branch check.
 }
 
 var (
-	recycleNow               = time.Now
-	recycleCurrentBranch     = git.CurrentBranch
-	recycleWorktreeClean     = gitWorktreeClean
-	recycleMergedIntoDefault = gitMergedIntoDefault
-	recycleFetchOrigin       = gitFetchOrigin
-	recycleResolveRef        = gitResolveCommit
-	recycleSwitchBranch      = gitSwitchNewBranch
-	recycleRestoreBranch     = gitRestoreRecycledBranch
-	recycleSaveState         = func(mgr *state.StateManager, st *state.State) error { return mgr.Save(st) }
-	recycleSessionExists     = tmuxSessionExistsExact
-	recycleRenameSession     = renameTmuxSessionIfLive
+	recycleNow           = time.Now
+	recycleCurrentBranch = git.CurrentBranch
+	recycleCleanWorktree = git.CleanWorktree
+	recycleFetchOrigin   = git.FetchOrigin
+	recycleResolveRef    = gitResolveCommit
+	recycleSwitchBranch  = gitSwitchNewBranch
+	recycleRestoreBranch = gitRestoreRecycledBranch
+	recycleSaveState     = func(mgr *state.StateManager, st *state.State) error { return mgr.Save(st) }
+	recycleSessionExists = tmuxSessionExistsExact
+	recycleRenameSession = renameTmuxSessionIfLive
 )
 
 func resolveRecycleTarget(mgr *state.StateManager, st *state.State, args []string) (*state.Workspace, string, error) {
@@ -125,7 +121,6 @@ func recycleWorkspace(
 	st *state.State,
 	ws *state.Workspace,
 	branch string,
-	force bool,
 ) (*newWorkspaceResult, error) {
 	if ws == nil {
 		return nil, fmt.Errorf("workspace is required")
@@ -142,14 +137,6 @@ func recycleWorkspace(
 		return nil, fmt.Errorf("workspace %q branch mismatch: state=%q worktree=%q", ws.Name, ws.Branch, currentBranch)
 	}
 
-	clean, err := recycleWorktreeClean(ws.WorktreePath)
-	if err != nil {
-		return nil, fmt.Errorf("checking worktree status: %w", err)
-	}
-	if !clean {
-		return nil, fmt.Errorf("workspace %q has a dirty worktree; commit, stash, or remove changes (including untracked files) before recycling", ws.Name)
-	}
-
 	defaultBranch := defaultBranchForReap(cfg, *ws)
 	if defaultBranch == "" {
 		return nil, fmt.Errorf("could not determine the default branch for workspace %q", ws.Name)
@@ -157,16 +144,6 @@ func recycleWorkspace(
 	if err := recycleFetchOrigin(ws.RepoPath); err != nil {
 		return nil, err
 	}
-	if !force {
-		merged, err := recycleMergedIntoDefault(ws.RepoPath, ws.WorktreePath, defaultBranch)
-		if err != nil {
-			return nil, fmt.Errorf("checking whether %q reached origin/%s: %w", currentBranch, defaultBranch, err)
-		}
-		if !merged {
-			return nil, fmt.Errorf("branch %q is not reachable from origin/%s; merge and push it first or use --force", currentBranch, defaultBranch)
-		}
-	}
-
 	if branch == "" {
 		branch = names.GenerateBranch(existingWorktreeNames(st, ws.Repo))
 	}
@@ -185,6 +162,9 @@ func recycleWorkspace(
 	startOID, err := recycleResolveRef(ws.WorktreePath, startPoint)
 	if err != nil {
 		return nil, err
+	}
+	if err := recycleCleanWorktree(ws.WorktreePath); err != nil {
+		return nil, fmt.Errorf("cleaning workspace %q: %w", ws.Name, err)
 	}
 	if err := recycleSwitchBranch(ws.WorktreePath, branch, startPoint); err != nil {
 		rollbackErr := recoverFailedRecycleSwitch(ws.WorktreePath, currentBranch, branch, startOID)
@@ -219,16 +199,6 @@ func recycleWorkspace(
 		Path:      workspaceDirWithConfig(ws, cfg),
 		Workspace: *ws,
 	}, nil
-}
-
-func gitFetchOrigin(repoPath string) error {
-	cmd := exec.Command("git", "fetch", "origin")
-	cmd.Dir = repoPath
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("fetching origin: %s (%w)", strings.TrimSpace(string(out)), err)
-	}
-	return nil
 }
 
 func gitResolveCommit(dir, ref string) (string, error) {

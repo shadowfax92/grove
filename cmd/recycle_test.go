@@ -70,16 +70,33 @@ func TestResolveRecycleTargetFromCwdOrExplicitWorkspace(t *testing.T) {
 	}
 }
 
-func TestRecycleRefusesUntrackedFilesWithClearError(t *testing.T) {
+func TestRecycleDiscardsDirtyWorktreeWithoutMergeCheck(t *testing.T) {
 	preserveRecycleHooks(t)
 	t.Setenv("HOME", t.TempDir())
 
+	originPath := filepath.Join(t.TempDir(), "origin.git")
+	runRecycleTestGit(t, "", "init", "--bare", "--initial-branch=main", originPath)
 	repoPath := initRecycleTestRepo(t)
+	writeRecycleTestFile(t, filepath.Join(repoPath, ".gitignore"), "cache/\n")
+	runRecycleTestGit(t, repoPath, "add", ".gitignore")
+	runRecycleTestGit(t, repoPath, "commit", "-m", "ignore warm cache")
+	runRecycleTestGit(t, repoPath, "remote", "add", "origin", originPath)
+	runRecycleTestGit(t, repoPath, "push", "-u", "origin", "main")
+
 	worktreePath := filepath.Join(t.TempDir(), "slot")
 	runRecycleTestGit(t, repoPath, "worktree", "add", "-b", "feat/old", worktreePath)
+	writeRecycleTestFile(t, filepath.Join(worktreePath, "feature.txt"), "committed\n")
+	runRecycleTestGit(t, worktreePath, "add", "feature.txt")
+	runRecycleTestGit(t, worktreePath, "commit", "-m", "unmerged feature")
+	oldHead := recycleTestGitOutput(t, worktreePath, "rev-parse", "HEAD")
+	writeRecycleTestFile(t, filepath.Join(worktreePath, "README.md"), "dirty tracked change\n")
 	if err := os.WriteFile(filepath.Join(worktreePath, "untracked.txt"), []byte("dirty\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(worktreePath, "cache"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeRecycleTestFile(t, filepath.Join(worktreePath, "cache", "warm.txt"), "keep me\n")
 
 	mgr, err := state.NewManager()
 	if err != nil {
@@ -89,22 +106,31 @@ func TestRecycleRefusesUntrackedFilesWithClearError(t *testing.T) {
 		recycleTestWorkspace(repoPath, worktreePath),
 	}}
 	cfg := recycleTestConfig(repoPath)
+	recycleSessionExists = func(string) (bool, error) { return false, nil }
+	recycleRenameSession = func(_, _ string) (bool, error) { return false, nil }
 
-	_, err = recycleWorkspace(cfg, mgr, st, &st.Workspaces[0], "feat/next", false)
-	if err == nil {
-		t.Fatal("recycleWorkspace() error = nil, want dirty-worktree refusal")
+	result, err := recycleWorkspace(cfg, mgr, st, &st.Workspaces[0], "feat/next")
+	if err != nil {
+		t.Fatalf("recycleWorkspace() error = %v", err)
 	}
-	for _, want := range []string{"dirty worktree", "untracked files"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("error = %q, want containing %q", err, want)
-		}
+	if result.Workspace.Branch != "feat/next" {
+		t.Fatalf("branch = %q, want feat/next", result.Workspace.Branch)
 	}
-	if got := recycleTestGitOutput(t, worktreePath, "branch", "--show-current"); got != "feat/old" {
-		t.Fatalf("branch changed to %q despite dirty-worktree refusal", got)
+	if got := recycleTestGitOutput(t, worktreePath, "status", "--porcelain", "--untracked-files=all"); got != "" {
+		t.Fatalf("recycled worktree status = %q, want clean", got)
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, "untracked.txt")); !os.IsNotExist(err) {
+		t.Fatalf("untracked file survived recycle: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, "cache", "warm.txt")); err != nil {
+		t.Fatalf("ignored warm file was removed: %v", err)
+	}
+	if got := recycleTestGitOutput(t, repoPath, "rev-parse", "feat/old"); got != oldHead {
+		t.Fatalf("old branch head = %s, want preserved %s", got, oldHead)
 	}
 }
 
-func TestRecycleRefusesUnmergedUnlessForced(t *testing.T) {
+func TestRecycleDoesNotCheckWhetherOldBranchMerged(t *testing.T) {
 	preserveRecycleHooks(t)
 	t.Setenv("HOME", t.TempDir())
 
@@ -120,14 +146,10 @@ func TestRecycleRefusesUnmergedUnlessForced(t *testing.T) {
 
 	var calls []string
 	recycleCurrentBranch = func(string) string { return "feat/old" }
-	recycleWorktreeClean = func(string) (bool, error) { return true, nil }
+	recycleCleanWorktree = func(string) error { return nil }
 	recycleFetchOrigin = func(string) error {
 		calls = append(calls, "fetch")
 		return nil
-	}
-	recycleMergedIntoDefault = func(_, _, _ string) (bool, error) {
-		calls = append(calls, "merged")
-		return false, nil
 	}
 	recycleSwitchBranch = func(_, _, _ string) error {
 		calls = append(calls, "switch")
@@ -140,29 +162,15 @@ func TestRecycleRefusesUnmergedUnlessForced(t *testing.T) {
 		return true, nil
 	}
 
-	_, err = recycleWorkspace(cfg, mgr, st, &st.Workspaces[0], "feat/next", false)
-	if err == nil {
-		t.Fatal("recycleWorkspace() error = nil, want unmerged refusal")
-	}
-	for _, want := range []string{"not reachable from origin/main", "--force"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("error = %q, want containing %q", err, want)
-		}
-	}
-	if got := strings.Join(calls, ","); got != "fetch,merged" {
-		t.Fatalf("calls = %q, want fetch,merged", got)
-	}
-
-	calls = nil
-	result, err := recycleWorkspace(cfg, mgr, st, &st.Workspaces[0], "feat/next", true)
+	result, err := recycleWorkspace(cfg, mgr, st, &st.Workspaces[0], "feat/next")
 	if err != nil {
-		t.Fatalf("recycleWorkspace(force) error = %v", err)
+		t.Fatalf("recycleWorkspace() error = %v", err)
 	}
 	if result.Workspace.Branch != "feat/next" {
 		t.Fatalf("branch = %q, want feat/next", result.Workspace.Branch)
 	}
 	if got := strings.Join(calls, ","); got != "fetch,switch,rename" {
-		t.Fatalf("force calls = %q, want fetch,switch,rename", got)
+		t.Fatalf("calls = %q, want fetch,switch,rename", got)
 	}
 }
 
@@ -223,7 +231,7 @@ func TestRecycleHappyPathKeepsWarmWorktreeAndUpdatesState(t *testing.T) {
 		return true, nil
 	}
 
-	result, err := recycleWorkspace(cfg, mgr, st, &st.Workspaces[0], "feat/next", false)
+	result, err := recycleWorkspace(cfg, mgr, st, &st.Workspaces[0], "feat/next")
 	if err != nil {
 		t.Fatalf("recycleWorkspace() error = %v", err)
 	}
@@ -293,14 +301,14 @@ func TestRecycleAutoGeneratesUniqueAnimalBranch(t *testing.T) {
 		},
 	}}
 	recycleCurrentBranch = func(string) string { return "feat/old" }
-	recycleWorktreeClean = func(string) (bool, error) { return true, nil }
+	recycleCleanWorktree = func(string) error { return nil }
 	recycleFetchOrigin = func(string) error { return nil }
 	recycleResolveRef = func(_, _ string) (string, error) { return "start-oid", nil }
 	recycleSwitchBranch = func(_, _, _ string) error { return nil }
 	recycleSessionExists = func(string) (bool, error) { return false, nil }
 	recycleRenameSession = func(_, _ string) (bool, error) { return false, nil }
 
-	result, err := recycleWorkspace(recycleTestConfig("/repo"), mgr, st, &st.Workspaces[0], "", true)
+	result, err := recycleWorkspace(recycleTestConfig("/repo"), mgr, st, &st.Workspaces[0], "")
 	if err != nil {
 		t.Fatalf("recycleWorkspace() error = %v", err)
 	}
@@ -351,13 +359,14 @@ func TestRecycleJSONMatchesNewJSONShape(t *testing.T) {
 	}
 }
 
-func TestRecycleCommandDocumentsSafetyFlags(t *testing.T) {
-	for _, name := range []string{"force", "json"} {
-		if recycleCmd.Flags().Lookup(name) == nil {
-			t.Fatalf("recycle command missing --%s", name)
-		}
+func TestRecycleCommandDocumentsDestructiveReset(t *testing.T) {
+	if recycleCmd.Flags().Lookup("force") != nil {
+		t.Fatal("recycle command still exposes obsolete --force flag")
 	}
-	for _, want := range []string{"clean", "origin/<default>", "without running prepare or setup hooks"} {
+	if recycleCmd.Flags().Lookup("json") == nil {
+		t.Fatal("recycle command missing --json")
+	}
+	for _, want := range []string{"discards tracked and untracked changes", "origin/<default>", "without running prepare or setup hooks"} {
 		if !strings.Contains(recycleCmd.Long, want) {
 			t.Fatalf("recycle help missing %q", want)
 		}
@@ -377,7 +386,7 @@ func TestRecycleRefusesExistingDestinationTmuxSessionBeforeSwitch(t *testing.T) 
 		recycleTestWorkspace("/repo", worktreePath),
 	}}
 	recycleCurrentBranch = func(string) string { return "feat/old" }
-	recycleWorktreeClean = func(string) (bool, error) { return true, nil }
+	recycleCleanWorktree = func(string) error { return nil }
 	recycleFetchOrigin = func(string) error { return nil }
 	recycleSessionExists = func(name string) (bool, error) {
 		if name != "g/mono/feat/next" {
@@ -391,7 +400,7 @@ func TestRecycleRefusesExistingDestinationTmuxSessionBeforeSwitch(t *testing.T) 
 		return nil
 	}
 
-	_, err = recycleWorkspace(recycleTestConfig("/repo"), mgr, st, &st.Workspaces[0], "feat/next", true)
+	_, err = recycleWorkspace(recycleTestConfig("/repo"), mgr, st, &st.Workspaces[0], "feat/next")
 	if err == nil || !strings.Contains(err.Error(), `tmux session "g/mono/feat/next" already exists`) {
 		t.Fatalf("recycleWorkspace() error = %v, want destination session collision", err)
 	}
@@ -454,7 +463,7 @@ func TestRecycleRestoresOldBranchWhenStateSaveFails(t *testing.T) {
 	}
 
 	recycleCurrentBranch = func(string) string { return "feat/old" }
-	recycleWorktreeClean = func(string) (bool, error) { return true, nil }
+	recycleCleanWorktree = func(string) error { return nil }
 	recycleFetchOrigin = func(string) error { return nil }
 	recycleResolveRef = func(_, _ string) (string, error) { return "start-oid", nil }
 	recycleSwitchBranch = func(_, _, _ string) error { return nil }
@@ -473,7 +482,7 @@ func TestRecycleRestoresOldBranchWhenStateSaveFails(t *testing.T) {
 		return true, nil
 	}
 
-	_, err = recycleWorkspace(recycleTestConfig("/repo"), mgr, st, &st.Workspaces[0], "feat/next", true)
+	_, err = recycleWorkspace(recycleTestConfig("/repo"), mgr, st, &st.Workspaces[0], "feat/next")
 	if err == nil || !strings.Contains(err.Error(), "saving state: disk full") {
 		t.Fatalf("recycleWorkspace() error = %v, want state-save failure", err)
 	}
@@ -561,7 +570,7 @@ func TestRecycleCompensatesWhenSwitchFailsAfterCheckout(t *testing.T) {
 		}
 		return "feat/old"
 	}
-	recycleWorktreeClean = func(string) (bool, error) { return true, nil }
+	recycleCleanWorktree = func(string) error { return nil }
 	recycleFetchOrigin = func(string) error { return nil }
 	recycleResolveRef = func(_, _ string) (string, error) { return "start-oid", nil }
 	recycleSessionExists = func(string) (bool, error) { return false, nil }
@@ -578,7 +587,7 @@ func TestRecycleCompensatesWhenSwitchFailsAfterCheckout(t *testing.T) {
 		return nil
 	}
 
-	_, err = recycleWorkspace(recycleTestConfig("/repo"), mgr, st, &st.Workspaces[0], "feat/next", true)
+	_, err = recycleWorkspace(recycleTestConfig("/repo"), mgr, st, &st.Workspaces[0], "feat/next")
 	if err == nil || !strings.Contains(err.Error(), "post-checkout hook failed") {
 		t.Fatalf("recycleWorkspace() error = %v, want switch failure", err)
 	}
@@ -604,7 +613,7 @@ func TestRecycleRollsBackGitWhenTmuxRenameFails(t *testing.T) {
 	}}
 	original := st.Workspaces[0]
 	recycleCurrentBranch = func(string) string { return "feat/old" }
-	recycleWorktreeClean = func(string) (bool, error) { return true, nil }
+	recycleCleanWorktree = func(string) error { return nil }
 	recycleFetchOrigin = func(string) error { return nil }
 	recycleResolveRef = func(_, _ string) (string, error) { return "start-oid", nil }
 	recycleSessionExists = func(string) (bool, error) { return false, nil }
@@ -623,7 +632,7 @@ func TestRecycleRollsBackGitWhenTmuxRenameFails(t *testing.T) {
 		return nil
 	}
 
-	_, err = recycleWorkspace(recycleTestConfig("/repo"), mgr, st, &st.Workspaces[0], "feat/next", true)
+	_, err = recycleWorkspace(recycleTestConfig("/repo"), mgr, st, &st.Workspaces[0], "feat/next")
 	if err == nil || !strings.Contains(err.Error(), "renaming tmux session: tmux server stopped") {
 		t.Fatalf("recycleWorkspace() error = %v, want tmux rename failure", err)
 	}
@@ -642,8 +651,7 @@ func preserveRecycleHooks(t *testing.T) {
 	t.Helper()
 	origNow := recycleNow
 	origCurrentBranch := recycleCurrentBranch
-	origClean := recycleWorktreeClean
-	origMerged := recycleMergedIntoDefault
+	origClean := recycleCleanWorktree
 	origFetch := recycleFetchOrigin
 	origResolveRef := recycleResolveRef
 	origSwitch := recycleSwitchBranch
@@ -654,8 +662,7 @@ func preserveRecycleHooks(t *testing.T) {
 	t.Cleanup(func() {
 		recycleNow = origNow
 		recycleCurrentBranch = origCurrentBranch
-		recycleWorktreeClean = origClean
-		recycleMergedIntoDefault = origMerged
+		recycleCleanWorktree = origClean
 		recycleFetchOrigin = origFetch
 		recycleResolveRef = origResolveRef
 		recycleSwitchBranch = origSwitch

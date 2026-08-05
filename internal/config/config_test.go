@@ -60,12 +60,8 @@ func TestNewWorktreeRepoUsesInitDefaults(t *testing.T) {
 		t.Fatal("Setup = nil, want explicit empty setup list")
 	}
 
-	wantPrepare := []string{
-		DefaultPrepareCleanCommand,
-		"git checkout main",
-	}
-	if got := strings.Join(repo.Prepare, "\n"); got != strings.Join(wantPrepare, "\n") {
-		t.Fatalf("Prepare = %#v, want %#v", repo.Prepare, wantPrepare)
+	if repo.Prepare == nil || len(repo.Prepare) != 0 {
+		t.Fatalf("Prepare = %#v, want explicit empty list", repo.Prepare)
 	}
 }
 
@@ -98,7 +94,7 @@ func TestAddRepoToFileAppendsWorktreeRepo(t *testing.T) {
 		"worktree_root: ~/worktrees",
 		"name: project",
 		"default_branch: main",
-		"git checkout main",
+		"prepare: []",
 		"setup: []",
 	} {
 		if !strings.Contains(out, want) {

@@ -25,6 +25,17 @@ func TestNewCommandExposesTmuxFlagAndShortForm(t *testing.T) {
 	}
 }
 
+func TestNewCommandDoesNotExposeNoPrepareFlag(t *testing.T) {
+	if newCmd.Flags().Lookup("no-prepare") != nil {
+		t.Fatal("new command still exposes obsolete --no-prepare flag")
+	}
+	for _, want := range []string{"discards tracked and", "untracked changes in the base checkout", "origin/<default>", "prepare commands"} {
+		if !strings.Contains(newCmd.Long, want) {
+			t.Fatalf("new help missing %q", want)
+		}
+	}
+}
+
 func TestFinishNewResultCreatesAndSwitchesTmuxSessionWithJSON(t *testing.T) {
 	t.Setenv("TMUX", "/tmp/tmux")
 	original := newTmuxCommand
@@ -127,7 +138,7 @@ func TestFinishNewResultReportsTmuxFailureAndKeepsWorkspace(t *testing.T) {
 	}
 	st := &state.State{Version: 1}
 	repo := &config.RepoConfig{Name: "mono", Path: repoPath, Type: "worktree"}
-	result, err := createWorktreeWithResult(&config.Config{}, repo, "feat/tmux", "", mgr, st, true, false)
+	result, err := createWorktreeWithResult(&config.Config{}, repo, "feat/tmux", "", mgr, st, false)
 	if err != nil {
 		t.Fatalf("createWorktreeWithResult() error = %v", err)
 	}
@@ -241,7 +252,7 @@ func TestCreateWorktreeUsesFromStartPoint(t *testing.T) {
 		Type: "worktree",
 	}
 
-	if err := createWorktree(&config.Config{}, repo, "agent", "feat/base", mgr, st, true, false); err != nil {
+	if err := createWorktree(&config.Config{}, repo, "agent", "feat/base", mgr, st, false); err != nil {
 		t.Fatalf("createWorktree() error = %v", err)
 	}
 
@@ -251,6 +262,76 @@ func TestCreateWorktreeUsesFromStartPoint(t *testing.T) {
 	}
 	if got := st.Workspaces[0].WorktreePath; got != worktreePath {
 		t.Fatalf("workspace WorktreePath = %q, want %q", got, worktreePath)
+	}
+}
+
+func TestCreateWorktreeResetsBaseAndStartsAtUpdatedOriginDefault(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := initNewTestRepo(t)
+	originPath := newTestGitOutput(t, repoPath, "remote", "get-url", "origin")
+	writeNewTestCommit(t, repoPath, ".gitignore", ".grove/\ncache/\n")
+
+	runNewTestGit(t, repoPath, "switch", "-c", "feat/local")
+	writeNewTestCommit(t, repoPath, "feature.txt", "local feature\n")
+	localHead := newTestGitOutput(t, repoPath, "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("dirty feature\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "untracked.txt"), []byte("discard me\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoPath, "cache"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "cache", "warm.txt"), []byte("keep me\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	contributorPath := filepath.Join(t.TempDir(), "contributor")
+	runNewTestGit(t, "", "clone", originPath, contributorPath)
+	runNewTestGit(t, contributorPath, "config", "user.name", "Grove Test")
+	runNewTestGit(t, contributorPath, "config", "user.email", "grove@example.test")
+	writeNewTestCommit(t, contributorPath, "untracked.txt", "new remote work\n")
+	remoteHead := newTestGitOutput(t, contributorPath, "rev-parse", "HEAD")
+
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &state.State{Version: 1}
+	repo := &config.RepoConfig{
+		Name:          "mono",
+		Path:          repoPath,
+		Type:          "worktree",
+		DefaultBranch: "main",
+		Prepare:       []string{"git config grove.prepared true"},
+	}
+
+	result, err := createWorktreeWithResult(&config.Config{}, repo, "feat/next", "", mgr, st, false)
+	if err != nil {
+		t.Fatalf("createWorktreeWithResult() error = %v", err)
+	}
+	if got := newTestGitOutput(t, repoPath, "branch", "--show-current"); got != "main" {
+		t.Fatalf("base branch = %q, want main", got)
+	}
+	if got := newTestGitOutput(t, repoPath, "rev-parse", "HEAD"); got != remoteHead {
+		t.Fatalf("base HEAD = %s, want origin/main %s", got, remoteHead)
+	}
+	if got := newTestGitOutput(t, result.Path, "rev-parse", "HEAD"); got != remoteHead {
+		t.Fatalf("new worktree HEAD = %s, want origin/main %s", got, remoteHead)
+	}
+	if got := newTestGitOutput(t, repoPath, "status", "--porcelain", "--untracked-files=all"); got != "" {
+		t.Fatalf("base worktree status = %q, want clean", got)
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, "cache", "warm.txt")); err != nil {
+		t.Fatalf("ignored warm file was removed: %v", err)
+	}
+	if got := newTestGitOutput(t, repoPath, "config", "--get", "grove.prepared"); got != "true" {
+		t.Fatalf("prepare marker = %q, want true", got)
+	}
+	if got := newTestGitOutput(t, repoPath, "rev-parse", "feat/local"); got != localHead {
+		t.Fatalf("local feature head = %s, want preserved %s", got, localHead)
 	}
 }
 
@@ -271,7 +352,7 @@ func TestCreateWorktreeWithResultReturnsJSONMetadata(t *testing.T) {
 		Type: "worktree",
 	}
 
-	result, err := createWorktreeWithResult(&config.Config{}, repo, "feat/json", "", mgr, st, true, false)
+	result, err := createWorktreeWithResult(&config.Config{}, repo, "feat/json", "", mgr, st, false)
 	if err != nil {
 		t.Fatalf("createWorktreeWithResult() error = %v", err)
 	}
@@ -351,7 +432,7 @@ func TestCreateWorktreeUsesGlobalRootAndDashedBranch(t *testing.T) {
 	}
 	cfg := &config.Config{WorktreeRoot: root}
 
-	if err := createWorktree(cfg, repo, "feat/build-payments", "", mgr, st, true, false); err != nil {
+	if err := createWorktree(cfg, repo, "feat/build-payments", "", mgr, st, false); err != nil {
 		t.Fatalf("createWorktree() error = %v", err)
 	}
 
@@ -385,7 +466,7 @@ func TestCreateWorktreeUsesRepoRootOverride(t *testing.T) {
 	}
 	cfg := &config.Config{WorktreeRoot: root}
 
-	if err := createWorktree(cfg, repo, "feat/build-payments", "", mgr, st, true, false); err != nil {
+	if err := createWorktree(cfg, repo, "feat/build-payments", "", mgr, st, false); err != nil {
 		t.Fatalf("createWorktree() error = %v", err)
 	}
 
@@ -413,7 +494,7 @@ func TestCreateWorktreeStoresConfiguredWorkdirAsStartPath(t *testing.T) {
 		Workdir: "packages/app",
 	}
 
-	if err := createWorktree(&config.Config{}, repo, "agent", "", mgr, st, true, false); err != nil {
+	if err := createWorktree(&config.Config{}, repo, "agent", "", mgr, st, false); err != nil {
 		t.Fatalf("createWorktree() error = %v", err)
 	}
 
@@ -438,7 +519,7 @@ func TestCreateWorktreeHereAddsUnregisteredRepo(t *testing.T) {
 	st := &state.State{Version: 1}
 	cfg := &config.Config{}
 
-	if err := createWorktreeHere(repoPath, "feat/here-thing", "", cfg, mgr, st, true); err != nil {
+	if err := createWorktreeHere(repoPath, "feat/here-thing", "", cfg, mgr, st); err != nil {
 		t.Fatalf("createWorktreeHere() error = %v", err)
 	}
 
@@ -485,7 +566,7 @@ func TestCreateWorktreeHereReusesRegisteredRepo(t *testing.T) {
 		WorktreeRoot: root,
 	}}}
 
-	if err := createWorktreeHere(repoPath, "fix/sort-order", "", cfg, mgr, st, true); err != nil {
+	if err := createWorktreeHere(repoPath, "fix/sort-order", "", cfg, mgr, st); err != nil {
 		t.Fatalf("createWorktreeHere() error = %v", err)
 	}
 
@@ -517,7 +598,7 @@ func TestCreateWorktreeHereAutoNamesBranch(t *testing.T) {
 		WorktreeRoot: root,
 	}}}
 
-	if err := createWorktreeHere(repoPath, "", "", cfg, mgr, st, true); err != nil {
+	if err := createWorktreeHere(repoPath, "", "", cfg, mgr, st); err != nil {
 		t.Fatalf("createWorktreeHere() error = %v", err)
 	}
 
@@ -549,7 +630,7 @@ func TestCreateWorktreeHereFromManagedWorktreeUsesRegisteredRepo(t *testing.T) {
 		WorktreeRoot: root,
 	}}}
 
-	if err := createWorktree(cfg, &cfg.Repos[0], "feat/source", "", mgr, st, true, false); err != nil {
+	if err := createWorktree(cfg, &cfg.Repos[0], "feat/source", "", mgr, st, false); err != nil {
 		t.Fatalf("createWorktree(source) error = %v", err)
 	}
 	cwd := filepath.Join(st.Workspaces[0].WorktreePath, "packages", "app")
@@ -557,7 +638,7 @@ func TestCreateWorktreeHereFromManagedWorktreeUsesRegisteredRepo(t *testing.T) {
 		t.Fatalf("creating cwd: %v", err)
 	}
 
-	if err := createWorktreeHere(cwd, "feat/child", "", cfg, mgr, st, true); err != nil {
+	if err := createWorktreeHere(cwd, "feat/child", "", cfg, mgr, st); err != nil {
 		t.Fatalf("createWorktreeHere() error = %v", err)
 	}
 
@@ -584,12 +665,7 @@ func TestCreateWorktreeHereUsesNestedGitRepoOverRegisteredParent(t *testing.T) {
 	parentPath := initNewTestRepo(t)
 	writeNewTestCommit(t, parentPath, "base.txt", "base")
 	nestedPath := filepath.Join(parentPath, "deps", "nested")
-	if err := os.MkdirAll(nestedPath, 0755); err != nil {
-		t.Fatalf("creating nested repo dir: %v", err)
-	}
-	runNewTestGit(t, nestedPath, "init", "-b", "main")
-	runNewTestGit(t, nestedPath, "config", "user.name", "Grove Test")
-	runNewTestGit(t, nestedPath, "config", "user.email", "grove@example.test")
+	initNewTestRepoAt(t, nestedPath)
 	writeNewTestCommit(t, nestedPath, "nested.txt", "nested")
 
 	mgr, err := state.NewManager()
@@ -605,7 +681,7 @@ func TestCreateWorktreeHereUsesNestedGitRepoOverRegisteredParent(t *testing.T) {
 		WorktreeRoot: parentRoot,
 	}}}
 
-	if err := createWorktreeHere(nestedPath, "feat/nested", "", cfg, mgr, st, true); err != nil {
+	if err := createWorktreeHere(nestedPath, "feat/nested", "", cfg, mgr, st); err != nil {
 		t.Fatalf("createWorktreeHere() error = %v", err)
 	}
 
@@ -641,10 +717,10 @@ func TestCreateWorktreeUsesHashSuffixForDashedBranchCollision(t *testing.T) {
 
 	cfg := &config.Config{WorktreeRoot: root}
 
-	if err := createWorktree(cfg, repo, "feat/foo", "", mgr, st, true, false); err != nil {
+	if err := createWorktree(cfg, repo, "feat/foo", "", mgr, st, false); err != nil {
 		t.Fatalf("createWorktree(feat/foo) error = %v", err)
 	}
-	if err := createWorktree(cfg, repo, "feat-foo", "", mgr, st, true, false); err != nil {
+	if err := createWorktree(cfg, repo, "feat-foo", "", mgr, st, false); err != nil {
 		t.Fatalf("createWorktree(feat-foo) error = %v", err)
 	}
 
@@ -654,6 +730,30 @@ func TestCreateWorktreeUsesHashSuffixForDashedBranchCollision(t *testing.T) {
 	wantSecond := filepath.Join(root, "mono", "feat-foo-"+branchPathHash("feat-foo"))
 	if got := st.Workspaces[1].WorktreePath; got != wantSecond {
 		t.Fatalf("second WorktreePath = %q, want %q", got, wantSecond)
+	}
+}
+
+func TestCreateWorktreeResetPreservesExistingLegacyWorktrees(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := initNewTestRepo(t)
+	writeNewTestCommit(t, repoPath, "base.txt", "base")
+	mgr, err := state.NewManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &state.State{Version: 1}
+	repo := &config.RepoConfig{Name: "mono", Path: repoPath, Type: "worktree", DefaultBranch: "main"}
+
+	if err := createWorktree(&config.Config{}, repo, "feat/one", "", mgr, st, false); err != nil {
+		t.Fatalf("createWorktree(feat/one) error = %v", err)
+	}
+	firstPath := st.Workspaces[0].WorktreePath
+	if err := createWorktree(&config.Config{}, repo, "feat/two", "", mgr, st, false); err != nil {
+		t.Fatalf("createWorktree(feat/two) error = %v", err)
+	}
+	if got := newTestGitOutput(t, firstPath, "branch", "--show-current"); got != "feat/one" {
+		t.Fatalf("first worktree branch = %q, want feat/one", got)
 	}
 }
 
@@ -675,7 +775,7 @@ func TestCreateDirWorkspaceRunsPrepareCommands(t *testing.T) {
 		},
 	}
 
-	if err := createDirWorkspace(repo, "agent", mgr, st, false); err != nil {
+	if err := createDirWorkspace(repo, "agent", mgr, st); err != nil {
 		t.Fatalf("createDirWorkspace() error = %v", err)
 	}
 
@@ -684,40 +784,25 @@ func TestCreateDirWorkspaceRunsPrepareCommands(t *testing.T) {
 	}
 }
 
-func TestCreateDirWorkspaceSkipsPrepareWhenRequested(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	repoPath := t.TempDir()
-	mgr, err := state.NewManager()
-	if err != nil {
-		t.Fatalf("state.NewManager() error = %v", err)
-	}
-	st := &state.State{Version: 1}
-	repo := &config.RepoConfig{
-		Name: "main",
-		Path: repoPath,
-		Type: "dir",
-		Prepare: []string{
-			"printf prepared > prepared.txt",
-		},
-	}
-
-	if err := createDirWorkspace(repo, "agent", mgr, st, true); err != nil {
-		t.Fatalf("createDirWorkspace() error = %v", err)
-	}
-
-	if _, err := os.Stat(filepath.Join(repoPath, "prepared.txt")); !os.IsNotExist(err) {
-		t.Fatalf("prepared.txt stat error = %v, want not exist", err)
-	}
-}
-
 func initNewTestRepo(t *testing.T) string {
 	t.Helper()
 
 	repoPath := t.TempDir()
+	return initNewTestRepoAt(t, repoPath)
+}
+
+func initNewTestRepoAt(t *testing.T, repoPath string) string {
+	t.Helper()
+
+	if err := os.MkdirAll(repoPath, 0755); err != nil {
+		t.Fatalf("creating repo path: %v", err)
+	}
+	originPath := filepath.Join(t.TempDir(), "origin.git")
+	runNewTestGit(t, "", "init", "--bare", "--initial-branch=main", originPath)
 	runNewTestGit(t, repoPath, "init", "-b", "main")
 	runNewTestGit(t, repoPath, "config", "user.name", "Grove Test")
 	runNewTestGit(t, repoPath, "config", "user.email", "grove@example.test")
+	runNewTestGit(t, repoPath, "remote", "add", "origin", originPath)
 	return repoPath
 }
 
@@ -729,6 +814,8 @@ func writeNewTestCommit(t *testing.T, repoPath, name, content string) {
 	}
 	runNewTestGit(t, repoPath, "add", name)
 	runNewTestGit(t, repoPath, "commit", "-m", name)
+	branch := newTestGitOutput(t, repoPath, "branch", "--show-current")
+	runNewTestGit(t, repoPath, "push", "-u", "origin", branch)
 }
 
 func newTestGitOutput(t *testing.T, dir string, args ...string) string {

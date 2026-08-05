@@ -20,7 +20,6 @@ import (
 
 func init() {
 	newCmd.Flags().Bool("here", false, "Create a worktree for the current git repo")
-	newCmd.Flags().Bool("no-prepare", false, "Skip prepare commands before workspace creation")
 	newCmd.Flags().BoolP("manual", "m", false, "Prompt for the branch name instead of auto-generating")
 	newCmd.Flags().String("from", "", "Create a new branch from this start point")
 	newCmd.Flags().Bool("json", false, "Print workspace metadata as JSON")
@@ -35,6 +34,10 @@ var newCmd = &cobra.Command{
 	Short:       "Create a new workspace",
 	Long: `Create a new workspace and print its path by default. With --tmux, create
 a detached tmux session and switch the current tmux client to it.
+
+Before creating a worktree, Grove fetches origin. It discards tracked and
+untracked changes in the base checkout, resets it to origin/<default>, and runs
+prepare commands.
 
   grove new                 — pick a repo (or type a plain workspace name), then print its path
   grove new <repo>          — auto-create feat/<MM-DD>-<adjective>-<animal>, then print its path
@@ -51,7 +54,6 @@ a detached tmux session and switch the current tmux client to it.
   grove new <name>          — plain workspace (if name doesn't match a repo)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		here, _ := cmd.Flags().GetBool("here")
-		noPrepare, _ := cmd.Flags().GetBool("no-prepare")
 		manual, _ := cmd.Flags().GetBool("manual")
 		from, _ := cmd.Flags().GetString("from")
 		jsonOut, _ := cmd.Flags().GetBool("json")
@@ -90,7 +92,7 @@ a detached tmux session and switch the current tmux client to it.
 			if err != nil {
 				return err
 			}
-			result, err := createWorktreeHereWithResult(cwd, branch, from, cfg, mgr, st, noPrepare)
+			result, err := createWorktreeHereWithResult(cwd, branch, from, cfg, mgr, st)
 			if err != nil {
 				return err
 			}
@@ -125,9 +127,9 @@ a detached tmux session and switch the current tmux client to it.
 			if repo.Type == "plain" {
 				result, err = createPlainRepoWithResult(repo, branch, mgr, st)
 			} else if repo.Type == "dir" {
-				result, err = createDirWorkspaceWithResult(repo, branch, mgr, st, noPrepare)
+				result, err = createDirWorkspaceWithResult(repo, branch, mgr, st)
 			} else {
-				result, err = createWorktreeWithResult(cfg, repo, branch, from, mgr, st, noPrepare, manual)
+				result, err = createWorktreeWithResult(cfg, repo, branch, from, mgr, st, manual)
 			}
 			if err != nil {
 				return err
@@ -261,12 +263,12 @@ func createPlainWithResult(name string, mgr *state.StateManager, st *state.State
 	return &newWorkspaceResult{Path: dir, Workspace: st.Workspaces[len(st.Workspaces)-1]}, nil
 }
 
-func createWorktree(cfg *config.Config, repo *config.RepoConfig, branch, from string, mgr *state.StateManager, st *state.State, noPrepare, manual bool) error {
-	_, err := createWorktreeWithResult(cfg, repo, branch, from, mgr, st, noPrepare, manual)
+func createWorktree(cfg *config.Config, repo *config.RepoConfig, branch, from string, mgr *state.StateManager, st *state.State, manual bool) error {
+	_, err := createWorktreeWithResult(cfg, repo, branch, from, mgr, st, manual)
 	return err
 }
 
-func createWorktreeWithResult(cfg *config.Config, repo *config.RepoConfig, branch, from string, mgr *state.StateManager, st *state.State, noPrepare, manual bool) (*newWorkspaceResult, error) {
+func createWorktreeWithResult(cfg *config.Config, repo *config.RepoConfig, branch, from string, mgr *state.StateManager, st *state.State, manual bool) (*newWorkspaceResult, error) {
 	if branch == "" && manual {
 		prompted, err := promptNameFzf("branch > ", "Type a branch name or Enter for auto")
 		if err != nil {
@@ -286,17 +288,29 @@ func createWorktreeWithResult(cfg *config.Config, repo *config.RepoConfig, branc
 
 	worktreePath := collisionSafeWorktreePath(cfg, repo, branch, st)
 
-	if !noPrepare {
-		if err := runPrepareCommands(repo); err != nil {
-			return nil, err
-		}
+	defaultBranch := strings.TrimSpace(repo.DefaultBranch)
+	if defaultBranch == "" {
+		defaultBranch = git.DefaultBranch(repo.Path)
+	}
+	if defaultBranch == "" {
+		return nil, fmt.Errorf("could not determine the default branch for repo %q", repo.Name)
+	}
+	if err := git.ResetToRemoteBranch(repo.Path, defaultBranch); err != nil {
+		return nil, err
+	}
+	if err := runPrepareCommands(repo); err != nil {
+		return nil, err
 	}
 
 	if err := git.EnsureGitignore(repo.Path); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not update .gitignore: %v\n", err)
 	}
 
-	if err := git.AddWorktreeFrom(repo.Path, worktreePath, branch, from); err != nil {
+	startPoint := from
+	if startPoint == "" && !git.LocalBranchExists(repo.Path, branch) && !git.RemoteBranchExists(repo.Path, branch) {
+		startPoint = "origin/" + defaultBranch
+	}
+	if err := git.AddWorktreeFrom(repo.Path, worktreePath, branch, startPoint); err != nil {
 		return nil, fmt.Errorf("creating worktree: %w", err)
 	}
 
@@ -333,12 +347,12 @@ func createWorktreeWithResult(cfg *config.Config, repo *config.RepoConfig, branc
 	return &newWorkspaceResult{Path: setupDir, Workspace: st.Workspaces[len(st.Workspaces)-1]}, nil
 }
 
-func createWorktreeHere(cwd, branch, from string, cfg *config.Config, mgr *state.StateManager, st *state.State, noPrepare bool) error {
-	_, err := createWorktreeHereWithResult(cwd, branch, from, cfg, mgr, st, noPrepare)
+func createWorktreeHere(cwd, branch, from string, cfg *config.Config, mgr *state.StateManager, st *state.State) error {
+	_, err := createWorktreeHereWithResult(cwd, branch, from, cfg, mgr, st)
 	return err
 }
 
-func createWorktreeHereWithResult(cwd, branch, from string, cfg *config.Config, mgr *state.StateManager, st *state.State, noPrepare bool) (*newWorkspaceResult, error) {
+func createWorktreeHereWithResult(cwd, branch, from string, cfg *config.Config, mgr *state.StateManager, st *state.State) (*newWorkspaceResult, error) {
 	repoRoot := git.RepoRoot(cwd)
 	if repoRoot == "" {
 		return nil, fmt.Errorf("not inside a git repository")
@@ -348,7 +362,7 @@ func createWorktreeHereWithResult(cwd, branch, from string, cfg *config.Config, 
 		if repo.Type != "" && repo.Type != "worktree" {
 			return nil, fmt.Errorf("repo %s is registered as type %s, not worktree", repo.Name, repo.Type)
 		}
-		return createWorktreeWithResult(cfg, repo, branch, from, mgr, st, noPrepare, false)
+		return createWorktreeWithResult(cfg, repo, branch, from, mgr, st, false)
 	}
 
 	if repoName := repoNameForManagedWorktreeRoot(st, repoRoot); repoName != "" {
@@ -362,7 +376,7 @@ func createWorktreeHereWithResult(cwd, branch, from string, cfg *config.Config, 
 		if repo.Type != "" && repo.Type != "worktree" {
 			return nil, fmt.Errorf("repo %s is registered as type %s, not worktree", repo.Name, repo.Type)
 		}
-		return createWorktreeWithResult(cfg, repo, branch, from, mgr, st, noPrepare, false)
+		return createWorktreeWithResult(cfg, repo, branch, from, mgr, st, false)
 	}
 
 	defaultBranch := git.DefaultBranch(repoRoot)
@@ -389,7 +403,7 @@ func createWorktreeHereWithResult(cwd, branch, from string, cfg *config.Config, 
 		return nil, fmt.Errorf("repo %s is registered as type %s, not worktree", repo.Name, repo.Type)
 	}
 
-	return createWorktreeWithResult(refreshed, repo, branch, from, mgr, st, noPrepare, false)
+	return createWorktreeWithResult(refreshed, repo, branch, from, mgr, st, false)
 }
 
 func repoNameForManagedWorktreeRoot(st *state.State, repoRoot string) string {
@@ -502,12 +516,12 @@ func branchPathHash(branch string) string {
 	return hex.EncodeToString(sum[:])[:8]
 }
 
-func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State, noPrepare bool) error {
-	_, err := createDirWorkspaceWithResult(repo, name, mgr, st, noPrepare)
+func createDirWorkspace(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State) error {
+	_, err := createDirWorkspaceWithResult(repo, name, mgr, st)
 	return err
 }
 
-func createDirWorkspaceWithResult(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State, noPrepare bool) (*newWorkspaceResult, error) {
+func createDirWorkspaceWithResult(repo *config.RepoConfig, name string, mgr *state.StateManager, st *state.State) (*newWorkspaceResult, error) {
 	if name == "" {
 		existing := existingDirNames(st, repo.Name)
 		prompted, err := promptNameFzf("name > ", "Type a name or enter for random")
@@ -527,10 +541,8 @@ func createDirWorkspaceWithResult(repo *config.RepoConfig, name string, mgr *sta
 		return nil, fmt.Errorf("workspace %q already exists", repo.Name+"/"+name)
 	}
 
-	if !noPrepare {
-		if err := runPrepareCommands(repo); err != nil {
-			return nil, err
-		}
+	if err := runPrepareCommands(repo); err != nil {
+		return nil, err
 	}
 
 	startDir := repo.Path
@@ -553,7 +565,6 @@ func createDirWorkspaceWithResult(repo *config.RepoConfig, name string, mgr *sta
 	return &newWorkspaceResult{Path: startDir, Workspace: st.Workspaces[len(st.Workspaces)-1]}, nil
 }
 
-// runPrepareCommands runs repo-scoped shell commands before Grove records a workspace.
 func runPrepareCommands(repo *config.RepoConfig) error {
 	for _, prepCmd := range repo.Prepare {
 		fmt.Fprintf(os.Stderr, "Preparing: %s\n", prepCmd)
@@ -659,8 +670,7 @@ func pickRepoOrNameFzf(cfg *config.Config) (string, error) {
 
 const autoGenerateLabel = "(auto-generate)"
 
-// promptNameFzf shows an fzf prompt with a single "(auto-generate)" entry and
-// returns the typed name, or "" when the user picks auto-generate or enters nothing.
+// promptNameFzf returns an empty name when the user chooses automatic generation.
 func promptNameFzf(prompt, header string) (string, error) {
 	fzfCmd := exec.Command("fzf",
 		"--prompt", prompt,
