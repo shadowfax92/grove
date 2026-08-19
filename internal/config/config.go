@@ -1,24 +1,18 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"time"
 
+	"github.com/gofrs/flock"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	WorktreeRoot string       `yaml:"worktree_root,omitempty"`
-	Reap         ReapConfig   `yaml:"reap,omitempty"`
-	Repos        []RepoConfig `yaml:"repos"`
-}
-
-type ReapConfig struct {
-	TTL Duration `yaml:"ttl,omitempty"`
+	Repos []RepoConfig `yaml:"repos"`
 }
 
 type RepoConfig struct {
@@ -26,59 +20,8 @@ type RepoConfig struct {
 	Name          string   `yaml:"name"`
 	Type          string   `yaml:"type"`
 	DefaultBranch string   `yaml:"default_branch"`
-	WorktreeRoot  string   `yaml:"worktree_root"`
 	Workdir       string   `yaml:"workdir"`
-	Prepare       []string `yaml:"prepare"`
 	Setup         []string `yaml:"setup"`
-}
-
-const DefaultPrepareCleanCommand = `git diff --quiet && git diff --cached --quiet || (echo "uncommitted changes in base repo" && exit 1)`
-const DefaultWorktreeRoot = "~/worktrees"
-const DefaultReapTTL = 6 * time.Hour
-
-// Duration unmarshals human TTL values like "6h", "90m", or "1d".
-type Duration time.Duration
-
-func (d Duration) Duration() time.Duration { return time.Duration(d) }
-
-func (d Duration) MarshalYAML() (any, error) {
-	return formatDuration(time.Duration(d)), nil
-}
-
-func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
-	dur, err := ParseTTL(value.Value)
-	if err != nil {
-		return err
-	}
-	*d = Duration(dur)
-	return nil
-}
-
-// ParseTTL parses CLI/config duration strings, including a "d" day suffix.
-func ParseTTL(raw string) (time.Duration, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return 0, nil
-	}
-	if strings.HasSuffix(raw, "d") {
-		days, err := strconv.Atoi(strings.TrimSuffix(raw, "d"))
-		if err != nil || days <= 0 {
-			return 0, fmt.Errorf("invalid duration %q (examples: 1h, 90m, 1d)", raw)
-		}
-		return time.Duration(days) * 24 * time.Hour, nil
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		return 0, fmt.Errorf("invalid duration %q (examples: 1h, 90m, 1d)", raw)
-	}
-	return d, nil
-}
-
-func formatDuration(d time.Duration) string {
-	if d%(24*time.Hour) == 0 {
-		return fmt.Sprintf("%dd", int(d/(24*time.Hour)))
-	}
-	return d.String()
 }
 
 func DefaultConfigPath() (string, error) {
@@ -89,23 +32,15 @@ func DefaultConfigPath() (string, error) {
 	return filepath.Join(home, ".config", "grove", "config.yaml"), nil
 }
 
-// NewWorktreeRepo builds the default config entry created by `grove init`.
-// Shared worktree placement comes from the top-level config unless this entry is later given an override.
 func NewWorktreeRepo(path, name, defaultBranch string) RepoConfig {
 	return RepoConfig{
 		Path:          path,
 		Name:          name,
 		DefaultBranch: defaultBranch,
-		Prepare: []string{
-			DefaultPrepareCleanCommand,
-			"git checkout " + defaultBranch,
-		},
-		Setup: []string{},
+		Setup:         []string{},
 	}
 }
 
-// AddRepoToFile appends a repo entry to a Grove config file without rewriting unrelated sections.
-// It rejects duplicate names or paths before editing so `grove init` is safe to run repeatedly.
 func AddRepoToFile(path string, repo RepoConfig) error {
 	if strings.TrimSpace(repo.Path) == "" {
 		return fmt.Errorf("repo path is required")
@@ -113,7 +48,15 @@ func AddRepoToFile(path string, repo RepoConfig) error {
 	if strings.TrimSpace(repo.Name) == "" {
 		return fmt.Errorf("repo name is required")
 	}
+	lock, err := lockConfig(path)
+	if err != nil {
+		return fmt.Errorf("locking config: %w", err)
+	}
+	defer unlockConfig(lock)
+	return addRepoToFileLocked(path, repo)
+}
 
+func addRepoToFileLocked(path string, repo RepoConfig) error {
 	if _, err := os.Stat(path); err != nil {
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("stat config: %w", err)
@@ -127,7 +70,6 @@ func AddRepoToFile(path string, repo RepoConfig) error {
 	if err != nil {
 		return fmt.Errorf("reading config: %w", err)
 	}
-
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return fmt.Errorf("parsing config: %w", err)
@@ -138,54 +80,51 @@ func AddRepoToFile(path string, repo RepoConfig) error {
 	if err := rejectDuplicateRepo(&cfg, repo); err != nil {
 		return err
 	}
-
 	updated, err := appendRepoEntry(data, repo)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, updated, 0644); err != nil {
+	if err := writeFileAtomic(path, updated); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 	return nil
 }
 
 func Load() (*Config, error) {
-	return load(true)
-}
-
-func LoadFast() (*Config, error) {
-	return load(false)
-}
-
-func load(validate bool) (*Config, error) {
 	path, err := DefaultConfigPath()
 	if err != nil {
 		return nil, err
 	}
-
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return createDefault(path)
+			lock, lockErr := lockConfig(path)
+			if lockErr != nil {
+				return nil, fmt.Errorf("locking config: %w", lockErr)
+			}
+			defer unlockConfig(lock)
+			data, err = os.ReadFile(path)
+			if os.IsNotExist(err) {
+				return createDefault(path)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("reading config: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("reading config: %w", err)
 		}
-		return nil, fmt.Errorf("reading config: %w", err)
 	}
+	return parseConfig(data)
+}
 
+func parseConfig(data []byte) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
-
 	if err := cfg.resolve(); err != nil {
 		return nil, err
 	}
-
-	if validate {
-		if err := cfg.validate(); err != nil {
-			return nil, err
-		}
-	}
-
 	return &cfg, nil
 }
 
@@ -194,73 +133,13 @@ func (c *Config) resolve() error {
 	if err != nil {
 		return err
 	}
-
-	c.WorktreeRoot = expandTilde(c.WorktreeRoot, home)
-	if c.Reap.TTL <= 0 {
-		c.Reap.TTL = Duration(DefaultReapTTL)
-	}
-	for i := range c.Repos {
-		c.Repos[i].Path = expandTilde(c.Repos[i].Path, home)
-		c.Repos[i].WorktreeRoot = expandTilde(c.Repos[i].WorktreeRoot, home)
-		if c.Repos[i].Name == "" {
-			c.Repos[i].Name = filepath.Base(c.Repos[i].Path)
+	for index := range c.Repos {
+		c.Repos[index].Path = expandTilde(c.Repos[index].Path, home)
+		if c.Repos[index].Name == "" {
+			c.Repos[index].Name = filepath.Base(c.Repos[index].Path)
 		}
-		if c.Repos[i].Type == "" {
-			c.Repos[i].Type = "worktree"
-		}
-	}
-
-	return nil
-}
-
-// EffectiveWorktreeRoot returns the root used before appending a dashed branch directory.
-func (c *Config) EffectiveWorktreeRoot(repo *RepoConfig) string {
-	if repo == nil {
-		return ""
-	}
-	if repo.WorktreeRoot != "" {
-		return repo.WorktreeRoot
-	}
-	if c == nil || c.WorktreeRoot == "" {
-		return ""
-	}
-	name := repo.Name
-	if name == "" {
-		name = filepath.Base(repo.Path)
-	}
-	if name == "" || name == "." || name == string(filepath.Separator) {
-		return ""
-	}
-	return filepath.Join(c.WorktreeRoot, name)
-}
-
-func (c *Config) validate() error {
-	seen := make(map[string]bool)
-	for _, r := range c.Repos {
-		if seen[r.Name] {
-			return fmt.Errorf("duplicate repo name: %s", r.Name)
-		}
-		seen[r.Name] = true
-
-		if r.Type == "plain" {
-			continue
-		}
-
-		info, err := os.Stat(r.Path)
-		if err != nil {
-			return fmt.Errorf("repo %s: path %s does not exist", r.Name, r.Path)
-		}
-		if !info.IsDir() {
-			return fmt.Errorf("repo %s: path %s is not a directory", r.Name, r.Path)
-		}
-	}
-	return nil
-}
-
-func (c *Config) FindRepo(name string) *RepoConfig {
-	for i := range c.Repos {
-		if c.Repos[i].Name == name {
-			return &c.Repos[i]
+		if c.Repos[index].Type == "" {
+			c.Repos[index].Type = "worktree"
 		}
 	}
 	return nil
@@ -270,38 +149,24 @@ func createDefault(path string) (*Config, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return nil, err
 	}
-
-	raw := Config{
-		WorktreeRoot: DefaultWorktreeRoot,
-		Reap: ReapConfig{
-			TTL: Duration(DefaultReapTTL),
-		},
-		Repos: []RepoConfig{},
-	}
-
+	raw := Config{Repos: []RepoConfig{}}
 	data, err := yaml.Marshal(raw)
 	if err != nil {
 		return nil, err
 	}
-
-	header := "# Grove configuration\n# See: grove config --path for file location\n\n"
-	if err := os.WriteFile(path, []byte(header+string(data)), 0644); err != nil {
+	data = append([]byte("# Grove configuration\n\n"), data...)
+	if err := writeFileAtomic(path, data); err != nil {
 		return nil, err
 	}
-
-	cfg := raw
-	if err := cfg.resolve(); err != nil {
-		return nil, err
-	}
-	return &cfg, nil
+	return &raw, nil
 }
 
 func expandTilde(path, home string) string {
-	if strings.HasPrefix(path, "~/") {
-		return filepath.Join(home, path[2:])
-	}
 	if path == "~" {
 		return home
+	}
+	if strings.HasPrefix(path, "~/") {
+		return filepath.Join(home, path[2:])
 	}
 	return path
 }
@@ -312,7 +177,6 @@ func rejectDuplicateRepo(cfg *Config, repo RepoConfig) error {
 		return err
 	}
 	repoPath := normalizeRepoPath(repo.Path, home)
-
 	for _, existing := range cfg.Repos {
 		if existing.Name == repo.Name {
 			return fmt.Errorf("repo name %s already exists", repo.Name)
@@ -326,8 +190,8 @@ func rejectDuplicateRepo(cfg *Config, repo RepoConfig) error {
 
 func normalizeRepoPath(path, home string) string {
 	path = expandTilde(path, home)
-	if abs, err := filepath.Abs(path); err == nil {
-		path = abs
+	if absolute, err := filepath.Abs(path); err == nil {
+		path = absolute
 	}
 	return filepath.Clean(path)
 }
@@ -341,19 +205,31 @@ func appendRepoEntry(data []byte, repo RepoConfig) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	reposKey, reposNode := mappingValue(mapping, "repos")
 	entry := renderRepoEntry(repo)
 	if reposNode == nil {
+		if repoNeedsNodeEncoding(repo) || mapping.Style&yaml.FlowStyle != 0 || len(mapping.Content) == 0 {
+			return appendRepoNode(&root, mapping, nil, repo)
+		}
 		out := strings.TrimRight(string(data), "\n")
 		if strings.TrimSpace(out) != "" {
 			out += "\n\n"
 		}
 		out += "repos:\n" + entry
-		return []byte(out + "\n"), nil
+		updated := []byte(out + "\n")
+		if err := validateAppendedRepo(updated, repo); err != nil {
+			return nil, err
+		}
+		return updated, nil
+	}
+	if reposNode.Kind == yaml.ScalarNode && reposNode.Tag == "!!null" {
+		return appendRepoNode(&root, mapping, reposNode, repo)
 	}
 	if reposNode.Kind != yaml.SequenceNode {
 		return nil, fmt.Errorf("config repos must be a list")
+	}
+	if repoNeedsNodeEncoding(repo) || reposNode.Style&yaml.FlowStyle != 0 || len(reposNode.Content) == 0 {
+		return appendRepoNode(&root, mapping, reposNode, repo)
 	}
 
 	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
@@ -361,26 +237,122 @@ func appendRepoEntry(data []byte, repo RepoConfig) ([]byte, error) {
 	if keyIndex < 0 || keyIndex >= len(lines) {
 		return nil, fmt.Errorf("could not locate repos in config")
 	}
-
-	if isEmptyFlowSequenceLine(lines[keyIndex]) {
-		lines[keyIndex] = strings.TrimSuffix(lines[keyIndex], " []")
-		lines = insertLines(lines, keyIndex+1, strings.TrimRight(entry, "\n"))
-		return []byte(strings.Join(lines, "\n") + "\n"), nil
-	}
-
 	insertAt := len(lines)
-	for i := keyIndex + 1; i < len(lines); i++ {
-		if isNextTopLevelKey(lines[i]) {
-			insertAt = i
+	for index := keyIndex + 1; index < len(lines); index++ {
+		if isNextTopLevelKey(lines[index]) {
+			insertAt = index
 			break
 		}
 	}
-
 	if len(reposNode.Content) > 0 {
 		entry = "\n" + entry
 	}
 	lines = insertLines(lines, insertAt, strings.TrimRight(entry, "\n"))
-	return []byte(strings.Join(lines, "\n") + "\n"), nil
+	updated := []byte(strings.Join(lines, "\n") + "\n")
+	if err := validateAppendedRepo(updated, repo); err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+func appendRepoNode(root, mapping, reposNode *yaml.Node, repo RepoConfig) ([]byte, error) {
+	if reposNode == nil {
+		reposNode = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		if mapping.Style&yaml.FlowStyle != 0 {
+			reposNode.Style = yaml.FlowStyle
+		}
+		mapping.Content = append(mapping.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "repos"},
+			reposNode,
+		)
+	} else if reposNode.Kind != yaml.SequenceNode {
+		*reposNode = yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", HeadComment: reposNode.HeadComment, LineComment: reposNode.LineComment, FootComment: reposNode.FootComment}
+	}
+	reposNode.Content = append(reposNode.Content, repositoryMappingNode(repo))
+	var output bytes.Buffer
+	encoder := yaml.NewEncoder(&output)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(root); err != nil {
+		return nil, fmt.Errorf("encoding config: %w", err)
+	}
+	if err := encoder.Close(); err != nil {
+		return nil, fmt.Errorf("encoding config: %w", err)
+	}
+	updated := output.Bytes()
+	if err := validateAppendedRepo(updated, repo); err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+func repositoryMappingNode(repo RepoConfig) *yaml.Node {
+	mapping := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	appendScalar := func(key, value string) {
+		mapping.Content = append(mapping.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
+		)
+	}
+	appendScalar("path", repo.Path)
+	appendScalar("name", repo.Name)
+	if repo.DefaultBranch != "" {
+		appendScalar("default_branch", repo.DefaultBranch)
+	}
+	if repo.Workdir != "" {
+		appendScalar("workdir", repo.Workdir)
+	}
+	if repo.Setup != nil {
+		sequence := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		for _, instruction := range repo.Setup {
+			sequence.Content = append(sequence.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: instruction})
+		}
+		mapping.Content = append(mapping.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "setup"},
+			sequence,
+		)
+	}
+	return mapping
+}
+
+func repoNeedsNodeEncoding(repo RepoConfig) bool {
+	for _, value := range []string{repo.Path, repo.Name, repo.DefaultBranch, repo.Workdir} {
+		if strings.ContainsAny(value, "\r\n") {
+			return true
+		}
+	}
+	for _, instruction := range repo.Setup {
+		if strings.ContainsAny(instruction, "\r\n") {
+			return true
+		}
+	}
+	return false
+}
+
+func validateAppendedRepo(data []byte, want RepoConfig) error {
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("generated invalid config: %w", err)
+	}
+	if len(cfg.Repos) == 0 {
+		return fmt.Errorf("generated config is missing the repository entry")
+	}
+	got := cfg.Repos[len(cfg.Repos)-1]
+	if got.Path != want.Path || got.Name != want.Name || got.DefaultBranch != want.DefaultBranch || got.Workdir != want.Workdir || !sameStrings(got.Setup, want.Setup) {
+		return fmt.Errorf("generated config changed repository values")
+	}
+	return nil
+}
+
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func rootMappingNode(root *yaml.Node) (*yaml.Node, error) {
@@ -394,25 +366,17 @@ func rootMappingNode(root *yaml.Node) (*yaml.Node, error) {
 }
 
 func mappingValue(mapping *yaml.Node, key string) (*yaml.Node, *yaml.Node) {
-	for i := 0; i+1 < len(mapping.Content); i += 2 {
-		if mapping.Content[i].Value == key {
-			return mapping.Content[i], mapping.Content[i+1]
+	for index := 0; index+1 < len(mapping.Content); index += 2 {
+		if mapping.Content[index].Value == key {
+			return mapping.Content[index], mapping.Content[index+1]
 		}
 	}
 	return nil, nil
 }
 
-func isEmptyFlowSequenceLine(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	return trimmed == "repos: []"
-}
-
 func isNextTopLevelKey(line string) bool {
 	trimmed := strings.TrimSpace(line)
-	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-		return false
-	}
-	return line == strings.TrimLeft(line, " \t")
+	return trimmed != "" && !strings.HasPrefix(trimmed, "#") && line == strings.TrimLeft(line, " \t")
 }
 
 func insertLines(lines []string, index int, block string) []string {
@@ -425,38 +389,29 @@ func insertLines(lines []string, index int, block string) []string {
 }
 
 func renderRepoEntry(repo RepoConfig) string {
-	var b strings.Builder
-	b.WriteString("  - path: " + yamlScalar(repo.Path) + "\n")
-	b.WriteString("    name: " + yamlScalar(repo.Name) + "\n")
-	if repo.Type != "" {
-		b.WriteString("    type: " + yamlScalar(repo.Type) + "\n")
-	}
+	var out strings.Builder
+	out.WriteString("  - path: " + yamlScalar(repo.Path) + "\n")
+	out.WriteString("    name: " + yamlScalar(repo.Name) + "\n")
 	if repo.DefaultBranch != "" {
-		b.WriteString("    default_branch: " + yamlScalar(repo.DefaultBranch) + "\n")
-	}
-	if repo.WorktreeRoot != "" {
-		b.WriteString("    worktree_root: " + yamlScalar(repo.WorktreeRoot) + "\n")
+		out.WriteString("    default_branch: " + yamlScalar(repo.DefaultBranch) + "\n")
 	}
 	if repo.Workdir != "" {
-		b.WriteString("    workdir: " + yamlScalar(repo.Workdir) + "\n")
-	}
-	if repo.Prepare != nil {
-		writeStringList(&b, "prepare", repo.Prepare)
+		out.WriteString("    workdir: " + yamlScalar(repo.Workdir) + "\n")
 	}
 	if repo.Setup != nil {
-		writeStringList(&b, "setup", repo.Setup)
+		writeStringList(&out, "setup", repo.Setup)
 	}
-	return b.String()
+	return out.String()
 }
 
-func writeStringList(b *strings.Builder, key string, values []string) {
+func writeStringList(out *strings.Builder, key string, values []string) {
 	if len(values) == 0 {
-		b.WriteString("    " + key + ": []\n")
+		out.WriteString("    " + key + ": []\n")
 		return
 	}
-	b.WriteString("    " + key + ":\n")
+	out.WriteString("    " + key + ":\n")
 	for _, value := range values {
-		b.WriteString("      - " + yamlScalar(value) + "\n")
+		out.WriteString("      - " + yamlScalar(value) + "\n")
 	}
 }
 
@@ -471,7 +426,7 @@ func isPlainYAMLScalar(value string) bool {
 	if value == "" || strings.TrimSpace(value) != value {
 		return false
 	}
-	if strings.ContainsAny(value, "\n\r\t") || strings.Contains(value, ": ") || strings.Contains(value, " #") {
+	if strings.ContainsAny(value, "\n\r\t") || strings.Contains(value, ": ") || strings.HasSuffix(value, ":") || strings.Contains(value, " #") {
 		return false
 	}
 	switch strings.ToLower(value) {
@@ -484,4 +439,70 @@ func isPlainYAMLScalar(value string) bool {
 		}
 	}
 	return true
+}
+
+func writeFileAtomic(path string, data []byte) error {
+	target, err := atomicWriteTarget(path)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".grove-config-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	mode := os.FileMode(0644)
+	if info, err := os.Stat(target); err == nil {
+		mode = info.Mode().Perm()
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, target)
+}
+
+func atomicWriteTarget(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return path, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return path, nil
+	}
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("resolving config symlink: %w", err)
+	}
+	return target, nil
+}
+
+func lockConfig(path string) (*flock.Flock, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return nil, err
+	}
+	lock := flock.New(path + ".lock")
+	if err := lock.Lock(); err != nil {
+		return nil, err
+	}
+	return lock, nil
+}
+
+func unlockConfig(lock *flock.Flock) {
+	_ = lock.Close()
 }
