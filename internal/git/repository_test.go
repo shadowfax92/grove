@@ -151,6 +151,87 @@ func TestManagedPathPreservesBranchHierarchy(t *testing.T) {
 	}
 }
 
+func TestCreateWorktreeRejectsNestedRegisteredWorktree(t *testing.T) {
+	mainPath := initTestRepo(t)
+	writeCommit(t, mainPath, "base.txt", "base")
+	repo, err := OpenRepository(mainPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root, err := repo.EnsureManagedRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentPath := filepath.Join(root, "feat")
+	runGit(t, mainPath, "worktree", "add", "-b", "parent", parentPath)
+	_, _, err = repo.CreateWorktree("feat/auth", "main")
+	if err == nil || !strings.Contains(err.Error(), "nested") {
+		t.Fatalf("CreateWorktree(feat/auth) error = %v, want nested-worktree refusal", err)
+	}
+	if _, err := os.Stat(filepath.Join(parentPath, "auth")); !os.IsNotExist(err) {
+		t.Fatalf("nested destination exists: %v", err)
+	}
+}
+
+func TestCreateWorktreeRejectsSymlinkedDestinationParent(t *testing.T) {
+	mainPath := initTestRepo(t)
+	writeCommit(t, mainPath, "base.txt", "base")
+	repo, err := OpenRepository(mainPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := repo.EnsureManagedRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "feat")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = repo.CreateWorktree("feat/auth", "main")
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("CreateWorktree() error = %v, want symlink refusal", err)
+	}
+}
+
+func TestCreateWorktreeRejectsPrunableRegistration(t *testing.T) {
+	mainPath := initTestRepo(t)
+	writeCommit(t, mainPath, "base.txt", "base")
+	linkedPath := filepath.Join(t.TempDir(), "linked")
+	runGit(t, mainPath, "worktree", "add", "-b", "feat/stale", linkedPath)
+	if err := os.RemoveAll(linkedPath); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := OpenRepository(mainPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = repo.CreateWorktree("feat/stale", "")
+	if err == nil || !strings.Contains(err.Error(), "prunable") {
+		t.Fatalf("CreateWorktree() error = %v, want prunable-registration error", err)
+	}
+}
+
+func TestCreateWorktreeRejectsDuplicateBranchCheckouts(t *testing.T) {
+	mainPath := initTestRepo(t)
+	writeCommit(t, mainPath, "base.txt", "base")
+	firstPath := filepath.Join(t.TempDir(), "first")
+	secondPath := filepath.Join(t.TempDir(), "second")
+	runGit(t, mainPath, "worktree", "add", "-b", "feat/duplicate", firstPath)
+	runGit(t, mainPath, "worktree", "add", "--force", secondPath, "feat/duplicate")
+	repo, err := OpenRepository(mainPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = repo.CreateWorktree("feat/duplicate", "")
+	if err == nil || !strings.Contains(err.Error(), "multiple worktrees") {
+		t.Fatalf("CreateWorktree() error = %v, want duplicate-checkout error", err)
+	}
+}
+
 func TestRemoveWorktreeRequiresDiscardForDirtyTree(t *testing.T) {
 	mainPath := initTestRepo(t)
 	writeCommit(t, mainPath, "base.txt", "base")
@@ -191,6 +272,41 @@ func TestRemoveWorktreeDoesNotOverrideLock(t *testing.T) {
 	}
 	if _, err := os.Stat(linkedPath); err != nil {
 		t.Fatalf("locked worktree was removed: %v", err)
+	}
+}
+
+func TestRemoveWorktreeRefusesNestedLinkedWorktree(t *testing.T) {
+	mainPath := initTestRepo(t)
+	writeCommit(t, mainPath, "base.txt", "base")
+	parentPath := filepath.Join(t.TempDir(), "parent")
+	childPath := filepath.Join(parentPath, "nested")
+	runGit(t, mainPath, "worktree", "add", "-b", "feat/parent", parentPath)
+	runGit(t, mainPath, "worktree", "add", "-b", "feat/child", childPath)
+	runGit(t, mainPath, "worktree", "lock", childPath)
+	repo, err := OpenRepository(mainPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = repo.RemoveWorktree(parentPath, true)
+	if err == nil || !strings.Contains(err.Error(), "contains") {
+		t.Fatalf("RemoveWorktree() error = %v, want nested-worktree refusal", err)
+	}
+	for _, path := range []string{parentPath, childPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("worktree %q was removed: %v", path, err)
+		}
+	}
+}
+
+func TestParseWorktreesDoesNotPromoteLinkedTreeOfBareRepository(t *testing.T) {
+	data := []byte("worktree /tmp/repo.git\x00bare\x00\x00worktree /tmp/linked\x00HEAD abc\x00branch refs/heads/main\x00\x00")
+	worktrees := parseWorktreesPorcelain(data)
+	if len(worktrees) != 2 {
+		t.Fatalf("len(worktrees) = %d, want 2", len(worktrees))
+	}
+	if worktrees[0].Main || worktrees[1].Main {
+		t.Fatalf("bare repository has a main worktree: %#v", worktrees)
 	}
 }
 

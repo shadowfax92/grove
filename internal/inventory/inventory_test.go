@@ -70,6 +70,44 @@ func TestResolvePathFindsContainingWorktree(t *testing.T) {
 	}
 }
 
+func TestResolvePreservesTrailingWhitespaceInExactPath(t *testing.T) {
+	repoPath := initInventoryRepo(t)
+	base := t.TempDir()
+	plainPath := filepath.Join(base, "tree")
+	spacedPath := filepath.Join(base, "tree ")
+	runInventoryGit(t, repoPath, "worktree", "add", "-b", "feat/plain", plainPath)
+	runInventoryGit(t, repoPath, "worktree", "add", "-b", "feat/spaced", spacedPath)
+	cat, _ := catalog.Build(&config.Config{Repos: []config.RepoConfig{{Path: repoPath, Name: "app"}}}, repoPath)
+	inv, _ := Build(cat)
+
+	got, err := inv.Resolve(spacedPath, repoPath)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if got.Worktree.Branch != "feat/spaced" {
+		t.Fatalf("Resolve() branch = %q, want feat/spaced", got.Worktree.Branch)
+	}
+}
+
+func TestResolveRejectsDuplicateBranchCheckouts(t *testing.T) {
+	repoPath := initInventoryRepo(t)
+	firstPath := filepath.Join(t.TempDir(), "first")
+	secondPath := filepath.Join(t.TempDir(), "second")
+	runInventoryGit(t, repoPath, "worktree", "add", "-b", "feat/duplicate", firstPath)
+	runInventoryGit(t, repoPath, "worktree", "add", "--force", secondPath, "feat/duplicate")
+	cat, _ := catalog.Build(&config.Config{Repos: []config.RepoConfig{{Path: repoPath, Name: "app"}}}, repoPath)
+	inv, _ := Build(cat)
+
+	_, err := inv.Resolve("feat/duplicate", repoPath)
+	if err == nil || !strings.Contains(err.Error(), "multiple worktrees") || !strings.Contains(err.Error(), firstPath) || !strings.Contains(err.Error(), secondPath) {
+		t.Fatalf("Resolve() error = %v, want both ambiguous paths", err)
+	}
+	got, err := inv.Resolve(secondPath, repoPath)
+	if err != nil || got.Worktree.Path != canonicalInventoryPath(t, secondPath) {
+		t.Fatalf("Resolve(exact path) = %#v, %v", got, err)
+	}
+}
+
 func TestResolveBareBranchRequiresCurrentRepository(t *testing.T) {
 	repoPath := initInventoryRepo(t)
 	cat, _ := catalog.Build(&config.Config{Repos: []config.RepoConfig{{Path: repoPath, Name: "app"}}}, "")

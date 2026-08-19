@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"grove/internal/inventory"
 	"grove/internal/picker"
@@ -63,17 +64,28 @@ func (a *application) pickWorktree(context *commandContext, prompt string) (*inv
 }
 
 func (a *application) writeWorktree(cmd *cobra.Command, entry *inventory.Entry) error {
-	if !a.jsonOutput {
-		fmt.Fprintln(cmd.OutOrStdout(), entry.Worktree.Path)
-		return nil
+	if a.jsonOutput {
+		return writeJSON(cmd, worktreeOutput{
+			Version:    1,
+			Repository: entry.Repository.Name,
+			Branch:     entry.Worktree.Branch,
+			Path:       entry.Worktree.Path,
+			Main:       entry.Worktree.Main,
+		})
 	}
-	return writeJSON(cmd, worktreeOutput{
-		Version:    1,
-		Repository: entry.Repository.Name,
-		Branch:     entry.Worktree.Branch,
-		Path:       entry.Worktree.Path,
-		Main:       entry.Worktree.Main,
-	})
+	return a.writePath(cmd, entry.Worktree.Path)
+}
+
+func (a *application) writePath(cmd *cobra.Command, path string) error {
+	if a.nullOutput {
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s%c", path, byte(0))
+		return err
+	}
+	if strings.ContainsAny(path, "\r\n") {
+		return fmt.Errorf("path contains a newline; use --null or --json for unambiguous output")
+	}
+	_, err := fmt.Fprintln(cmd.OutOrStdout(), path)
+	return err
 }
 
 func writeJSON(cmd *cobra.Command, value any) error {

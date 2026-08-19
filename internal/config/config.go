@@ -1,10 +1,12 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"gopkg.in/yaml.v3"
 )
@@ -46,6 +48,15 @@ func AddRepoToFile(path string, repo RepoConfig) error {
 	if strings.TrimSpace(repo.Name) == "" {
 		return fmt.Errorf("repo name is required")
 	}
+	lock, err := lockConfig(path)
+	if err != nil {
+		return fmt.Errorf("locking config: %w", err)
+	}
+	defer unlockConfig(lock)
+	return addRepoToFileLocked(path, repo)
+}
+
+func addRepoToFileLocked(path string, repo RepoConfig) error {
 	if _, err := os.Stat(path); err != nil {
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("stat config: %w", err)
@@ -87,10 +98,26 @@ func Load() (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return createDefault(path)
+			lock, lockErr := lockConfig(path)
+			if lockErr != nil {
+				return nil, fmt.Errorf("locking config: %w", lockErr)
+			}
+			defer unlockConfig(lock)
+			data, err = os.ReadFile(path)
+			if os.IsNotExist(err) {
+				return createDefault(path)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("reading config: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("reading config: %w", err)
 		}
-		return nil, fmt.Errorf("reading config: %w", err)
 	}
+	return parseConfig(data)
+}
+
+func parseConfig(data []byte) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
@@ -181,15 +208,28 @@ func appendRepoEntry(data []byte, repo RepoConfig) ([]byte, error) {
 	reposKey, reposNode := mappingValue(mapping, "repos")
 	entry := renderRepoEntry(repo)
 	if reposNode == nil {
+		if mapping.Style&yaml.FlowStyle != 0 || len(mapping.Content) == 0 {
+			return appendRepoNode(&root, mapping, nil, entry)
+		}
 		out := strings.TrimRight(string(data), "\n")
 		if strings.TrimSpace(out) != "" {
 			out += "\n\n"
 		}
 		out += "repos:\n" + entry
-		return []byte(out + "\n"), nil
+		updated := []byte(out + "\n")
+		if err := validateConfigYAML(updated); err != nil {
+			return nil, err
+		}
+		return updated, nil
+	}
+	if reposNode.Kind == yaml.ScalarNode && reposNode.Tag == "!!null" {
+		return appendRepoNode(&root, mapping, reposNode, entry)
 	}
 	if reposNode.Kind != yaml.SequenceNode {
 		return nil, fmt.Errorf("config repos must be a list")
+	}
+	if reposNode.Style&yaml.FlowStyle != 0 || len(reposNode.Content) == 0 {
+		return appendRepoNode(&root, mapping, reposNode, entry)
 	}
 
 	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
@@ -197,12 +237,6 @@ func appendRepoEntry(data []byte, repo RepoConfig) ([]byte, error) {
 	if keyIndex < 0 || keyIndex >= len(lines) {
 		return nil, fmt.Errorf("could not locate repos in config")
 	}
-	if strings.TrimSpace(lines[keyIndex]) == "repos: []" {
-		lines[keyIndex] = strings.TrimSuffix(lines[keyIndex], " []")
-		lines = insertLines(lines, keyIndex+1, strings.TrimRight(entry, "\n"))
-		return []byte(strings.Join(lines, "\n") + "\n"), nil
-	}
-
 	insertAt := len(lines)
 	for index := keyIndex + 1; index < len(lines); index++ {
 		if isNextTopLevelKey(lines[index]) {
@@ -214,7 +248,57 @@ func appendRepoEntry(data []byte, repo RepoConfig) ([]byte, error) {
 		entry = "\n" + entry
 	}
 	lines = insertLines(lines, insertAt, strings.TrimRight(entry, "\n"))
-	return []byte(strings.Join(lines, "\n") + "\n"), nil
+	updated := []byte(strings.Join(lines, "\n") + "\n")
+	if err := validateConfigYAML(updated); err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+func appendRepoNode(root, mapping, reposNode *yaml.Node, entry string) ([]byte, error) {
+	var rendered yaml.Node
+	if err := yaml.Unmarshal([]byte("repos:\n"+entry), &rendered); err != nil {
+		return nil, fmt.Errorf("rendering repository entry: %w", err)
+	}
+	_, renderedSequence := mappingValue(rendered.Content[0], "repos")
+	if renderedSequence == nil || len(renderedSequence.Content) != 1 {
+		return nil, fmt.Errorf("rendering repository entry")
+	}
+	if reposNode == nil {
+		reposNode = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		if mapping.Style&yaml.FlowStyle != 0 {
+			reposNode.Style = yaml.FlowStyle
+		}
+		mapping.Content = append(mapping.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "repos"},
+			reposNode,
+		)
+	} else if reposNode.Kind != yaml.SequenceNode {
+		*reposNode = yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", HeadComment: reposNode.HeadComment, LineComment: reposNode.LineComment, FootComment: reposNode.FootComment}
+	}
+	reposNode.Content = append(reposNode.Content, renderedSequence.Content[0])
+	var output bytes.Buffer
+	encoder := yaml.NewEncoder(&output)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(root); err != nil {
+		return nil, fmt.Errorf("encoding config: %w", err)
+	}
+	if err := encoder.Close(); err != nil {
+		return nil, fmt.Errorf("encoding config: %w", err)
+	}
+	updated := output.Bytes()
+	if err := validateConfigYAML(updated); err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+func validateConfigYAML(data []byte) error {
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("generated invalid config: %w", err)
+	}
+	return nil
 }
 
 func rootMappingNode(root *yaml.Node) (*yaml.Node, error) {
@@ -288,7 +372,7 @@ func isPlainYAMLScalar(value string) bool {
 	if value == "" || strings.TrimSpace(value) != value {
 		return false
 	}
-	if strings.ContainsAny(value, "\n\r\t") || strings.Contains(value, ": ") || strings.Contains(value, " #") {
+	if strings.ContainsAny(value, "\n\r\t") || strings.Contains(value, ": ") || strings.HasSuffix(value, ":") || strings.Contains(value, " #") {
 		return false
 	}
 	switch strings.ToLower(value) {
@@ -304,14 +388,18 @@ func isPlainYAMLScalar(value string) bool {
 }
 
 func writeFileAtomic(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".grove-config-*")
+	target, err := atomicWriteTarget(path)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".grove-config-*")
 	if err != nil {
 		return err
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 	mode := os.FileMode(0644)
-	if info, err := os.Stat(path); err == nil {
+	if info, err := os.Stat(target); err == nil {
 		mode = info.Mode().Perm()
 	}
 	if err := tmp.Chmod(mode); err != nil {
@@ -329,5 +417,43 @@ func writeFileAtomic(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	return os.Rename(tmpPath, target)
+}
+
+func atomicWriteTarget(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return path, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return path, nil
+	}
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("resolving config symlink: %w", err)
+	}
+	return target, nil
+}
+
+func lockConfig(path string) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return nil, err
+	}
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		lock.Close()
+		return nil, err
+	}
+	return lock, nil
+}
+
+func unlockConfig(lock *os.File) {
+	_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	_ = lock.Close()
 }

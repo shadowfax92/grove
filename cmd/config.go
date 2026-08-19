@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 
@@ -22,8 +21,10 @@ func (a *application) configCommand() *cobra.Command {
 				return err
 			}
 			if showPath {
-				fmt.Fprintln(cmd.OutOrStdout(), path)
-				return nil
+				if a.jsonOutput {
+					return writeJSON(cmd, map[string]any{"version": 1, "path": path})
+				}
+				return a.writePath(cmd, path)
 			}
 			if _, err := config.Load(); err != nil {
 				return err

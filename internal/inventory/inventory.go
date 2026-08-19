@@ -65,8 +65,7 @@ func Build(cat *catalog.Catalog) (*Inventory, []Failure) {
 }
 
 func (i *Inventory) Resolve(selector, baseDir string) (*Entry, error) {
-	selector = strings.TrimSpace(selector)
-	if selector == "" {
+	if strings.TrimSpace(selector) == "" {
 		return nil, fmt.Errorf("worktree selector is required")
 	}
 	if isPathSelector(selector) {
@@ -105,21 +104,48 @@ func (i *Inventory) PickerItems() []PickerItem {
 	return items
 }
 
-func (i *Inventory) resolveInRepository(repository *catalog.Repository, branch string) (*Entry, error) {
-	for _, entry := range i.byRepo[repository] {
-		matches := branch == "" && entry.Worktree.Main || branch != "" && entry.Worktree.Branch == branch
-		if !matches {
+func (i *Inventory) Descendants(path string) []*Entry {
+	var descendants []*Entry
+	for _, entry := range i.Entries {
+		if entry.Worktree.Prunable || !pathStrictlyContains(path, entry.Worktree.Path) {
 			continue
 		}
-		if entry.Worktree.Prunable {
-			return nil, fmt.Errorf("worktree %q is prunable and unavailable", entry.Selector())
+		descendants = append(descendants, entry)
+	}
+	return descendants
+}
+
+func (i *Inventory) resolveInRepository(repository *catalog.Repository, branch string) (*Entry, error) {
+	var matches []*Entry
+	for _, entry := range i.byRepo[repository] {
+		matchesTarget := branch == "" && entry.Worktree.Main || branch != "" && entry.Worktree.Branch == branch
+		if !matchesTarget {
+			continue
 		}
-		return entry, nil
+		matches = append(matches, entry)
+	}
+	if len(matches) > 1 {
+		paths := make([]string, 0, len(matches))
+		for _, match := range matches {
+			paths = append(paths, match.Worktree.Path)
+		}
+		return nil, fmt.Errorf("branch %q is checked out in multiple worktrees: %s; use an absolute path", branch, strings.Join(paths, ", "))
+	}
+	if len(matches) == 1 {
+		if matches[0].Worktree.Prunable {
+			return nil, fmt.Errorf("worktree %q is prunable and unavailable", matches[0].Selector())
+		}
+		return matches[0], nil
 	}
 	if branch == "" {
 		return nil, fmt.Errorf("main worktree for repository %q not found", repository.Name)
 	}
 	return nil, fmt.Errorf("worktree for branch %q not found in repository %q", branch, repository.Name)
+}
+
+func pathStrictlyContains(parent, child string) bool {
+	relative, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(child))
+	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func (i *Inventory) resolvePath(selector, baseDir string) (*Entry, error) {

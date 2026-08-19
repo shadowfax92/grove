@@ -130,6 +130,37 @@ func TestNewCreatesCanonicalNestedWorktreeAndAutoRegisters(t *testing.T) {
 	}
 }
 
+func TestNewRegistersBeforeCreatingWorktree(t *testing.T) {
+	repoPath := initV2Repo(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDirectory := filepath.Join(home, ".config", "grove")
+	configPath := filepath.Join(configDirectory, "config.yaml")
+	if err := os.MkdirAll(configDirectory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte("repos: []\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(configDirectory, 0555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(configDirectory, 0755) })
+	root := newRootCommand(commandDependencies{
+		getwd:       func() (string, error) { return repoPath, nil },
+		interactive: func() bool { return false },
+	})
+
+	_, _, err := executeV2(root, "new", "auth")
+	if err == nil || !strings.Contains(err.Error(), "registering repository") {
+		t.Fatalf("new error = %v, want registration failure", err)
+	}
+	worktreePath := filepath.Join(canonicalV2Path(t, repoPath), ".wt", "feat", "auth")
+	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {
+		t.Fatalf("worktree was created before registration succeeded: %v", err)
+	}
+}
+
 func TestNewUsesExplicitProfileButPrintsWorktreeRoot(t *testing.T) {
 	repoPath := initV2Repo(t)
 	if err := os.Mkdir(filepath.Join(repoPath, "subdir"), 0755); err != nil {
@@ -170,6 +201,40 @@ func TestNewUsesExplicitProfileButPrintsWorktreeRoot(t *testing.T) {
 	}
 }
 
+func TestNewRefusesSetupWorkdirSymlinkOutsideWorktree(t *testing.T) {
+	repoPath := initV2Repo(t)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(repoPath, "tools")); err != nil {
+		t.Fatal(err)
+	}
+	runV2Git(t, repoPath, "add", "tools")
+	runV2Git(t, repoPath, "commit", "-m", "add tools link")
+	writeV2Config(t, "", strings.Join([]string{
+		"  - path: " + repoPath,
+		"    name: agent",
+		"    default_branch: main",
+		"    workdir: tools",
+		"    setup:",
+		"      - touch escaped",
+		"",
+	}, "\n"))
+	root := newRootCommand(commandDependencies{
+		getwd:       func() (string, error) { return repoPath, nil },
+		interactive: func() bool { return false },
+	})
+
+	_, stderr, err := executeV2(root, "new", "agent:auth")
+	if err != nil {
+		t.Fatalf("new error = %v", err)
+	}
+	if !strings.Contains(stderr, "setup skipped") || !strings.Contains(stderr, "escapes") {
+		t.Fatalf("stderr = %q, want escaped-workdir warning", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "escaped")); !os.IsNotExist(err) {
+		t.Fatalf("setup ran outside worktree: %v", err)
+	}
+}
+
 func TestRemoveRequiresDiscardAndPrintsMainPath(t *testing.T) {
 	repoPath := initV2Repo(t)
 	linkedPath := filepath.Join(t.TempDir(), "linked")
@@ -195,6 +260,54 @@ func TestRemoveRequiresDiscardAndPrintsMainPath(t *testing.T) {
 	}
 	if _, err := os.Stat(linkedPath); !os.IsNotExist(err) {
 		t.Fatalf("worktree still exists: %v", err)
+	}
+}
+
+func TestRemoveExactPathPreservesTrailingWhitespace(t *testing.T) {
+	repoPath := initV2Repo(t)
+	base := t.TempDir()
+	plainPath := filepath.Join(base, "tree")
+	spacedPath := filepath.Join(base, "tree ")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/plain", plainPath)
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/spaced", spacedPath)
+	writeV2Config(t, repoPath, "")
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+
+	_, _, err := executeV2(root, "rm", spacedPath)
+	if err != nil {
+		t.Fatalf("rm error = %v", err)
+	}
+	if _, err := os.Stat(spacedPath); !os.IsNotExist(err) {
+		t.Fatalf("spaced worktree remains: %v", err)
+	}
+	if _, err := os.Stat(plainPath); err != nil {
+		t.Fatalf("plain worktree was removed: %v", err)
+	}
+}
+
+func TestRemoveRefusesConfiguredRepositoryNestedInsideTarget(t *testing.T) {
+	parentRepo := initV2Repo(t)
+	parentPath := filepath.Join(t.TempDir(), "parent")
+	runV2Git(t, parentRepo, "worktree", "add", "-b", "feat/parent", parentPath)
+	childRepo := filepath.Join(parentPath, "nested-repo")
+	initV2RepoAt(t, childRepo)
+	writeV2Config(t, "", strings.Join([]string{
+		"  - path: " + parentRepo,
+		"    name: parent",
+		"    default_branch: main",
+		"  - path: " + childRepo,
+		"    name: child",
+		"    default_branch: main",
+		"",
+	}, "\n"))
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return parentRepo, nil }, interactive: func() bool { return false }})
+
+	_, _, err := executeV2(root, "rm", "--discard", "parent:feat/parent")
+	if err == nil || !strings.Contains(err.Error(), "contains") || !strings.Contains(err.Error(), childRepo) {
+		t.Fatalf("rm error = %v, want nested-repository refusal", err)
+	}
+	if _, err := os.Stat(childRepo); err != nil {
+		t.Fatalf("nested repository was removed: %v", err)
 	}
 }
 
@@ -233,6 +346,74 @@ func TestRemoveMergedBulkIsConservative(t *testing.T) {
 	}
 	if _, err := os.Stat(openPath); err != nil {
 		t.Fatalf("open worktree removed: %v", err)
+	}
+}
+
+func TestRemoveMergedIgnoresUnregisteredCurrentRepository(t *testing.T) {
+	repoPath := initV2Repo(t)
+	linkedPath := filepath.Join(t.TempDir(), "merged")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/merged", linkedPath)
+	writeV2Config(t, "", "")
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+
+	stdout, _, err := executeV2(root, "rm", "--merged")
+	if err != nil {
+		t.Fatalf("rm --merged error = %v", err)
+	}
+	if strings.Contains(stdout, "feat/merged") {
+		t.Fatalf("stdout = %q, unregistered repository was included", stdout)
+	}
+	if _, err := os.Stat(linkedPath); err != nil {
+		t.Fatalf("unregistered worktree was removed: %v", err)
+	}
+}
+
+func TestRemoveMergedJSONDryRunReportsWouldRemove(t *testing.T) {
+	repoPath := initV2Repo(t)
+	linkedPath := filepath.Join(t.TempDir(), "merged")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/merged", linkedPath)
+	writeV2Config(t, repoPath, "")
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+
+	stdout, _, err := executeV2(root, "--json", "rm", "--merged", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run error = %v", err)
+	}
+	var output struct {
+		DryRun      bool  `json:"dry_run"`
+		Removed     []any `json:"removed"`
+		WouldRemove []any `json:"would_remove"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
+		t.Fatalf("JSON: %v\n%s", err, stdout)
+	}
+	if !output.DryRun || len(output.Removed) != 0 || len(output.WouldRemove) != 1 {
+		t.Fatalf("dry-run JSON = %s", stdout)
+	}
+	if _, err := os.Stat(linkedPath); err != nil {
+		t.Fatalf("dry-run removed worktree: %v", err)
+	}
+}
+
+func TestNullPathOutputPreservesNewlines(t *testing.T) {
+	repoPath := initV2Repo(t)
+	linkedPath := filepath.Join(t.TempDir(), "line\nbreak")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/unusual", linkedPath)
+	writeV2Config(t, repoPath, "")
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+
+	stdout, _, err := executeV2(root, "--null", "cd", linkedPath)
+	if err != nil {
+		t.Fatalf("cd --null error = %v", err)
+	}
+	if got, want := stdout, canonicalV2Path(t, linkedPath)+"\x00"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+
+	root = newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+	_, _, err = executeV2(root, "cd", linkedPath)
+	if err == nil || !strings.Contains(err.Error(), "--null") {
+		t.Fatalf("plain cd error = %v, want --null guidance", err)
 	}
 }
 
@@ -304,6 +485,15 @@ func executeV2(root *cobra.Command, args ...string) (string, string, error) {
 func initV2Repo(t *testing.T) string {
 	t.Helper()
 	path := t.TempDir()
+	initV2RepoAt(t, path)
+	return path
+}
+
+func initV2RepoAt(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(path, 0755); err != nil {
+		t.Fatal(err)
+	}
 	runV2Git(t, path, "init", "-b", "main")
 	runV2Git(t, path, "config", "user.name", "Grove Test")
 	runV2Git(t, path, "config", "user.email", "grove@example.test")
@@ -312,7 +502,6 @@ func initV2Repo(t *testing.T) string {
 	}
 	runV2Git(t, path, "add", "README")
 	runV2Git(t, path, "commit", "-m", "initial")
-	return path
 }
 
 func writeV2Config(t *testing.T, repoPath, extraEntries string) {

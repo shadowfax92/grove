@@ -105,9 +105,11 @@ func (r *Repository) ManagedPath(branch string) (string, error) {
 }
 
 func (r *Repository) ValidateBranch(branch string) error {
-	branch = strings.TrimSpace(branch)
-	if branch == "" {
+	if strings.TrimSpace(branch) == "" {
 		return fmt.Errorf("branch is required")
+	}
+	if strings.TrimSpace(branch) != branch {
+		return fmt.Errorf("invalid branch %q: leading or trailing whitespace is not allowed", branch)
 	}
 	cmd := exec.Command("git", "check-ref-format", "--branch", branch)
 	cmd.Dir = r.MainPath
@@ -130,9 +132,31 @@ func (r *Repository) CreateWorktree(branch, startPoint string) (string, bool, er
 	if err != nil {
 		return "", false, err
 	}
+	var matches []WorktreeInfo
 	for _, worktree := range worktrees {
 		if worktree.Branch == branch {
-			return worktree.Path, false, nil
+			matches = append(matches, worktree)
+		}
+	}
+	if len(matches) > 1 {
+		paths := make([]string, 0, len(matches))
+		for _, match := range matches {
+			paths = append(paths, match.Path)
+		}
+		return "", false, fmt.Errorf("branch %q is checked out in multiple worktrees: %s; use an absolute path", branch, strings.Join(paths, ", "))
+	}
+	if len(matches) == 1 {
+		if matches[0].Prunable {
+			return "", false, fmt.Errorf("branch %q has a prunable worktree registration at %s; run git worktree prune first", branch, matches[0].Path)
+		}
+		return matches[0].Path, false, nil
+	}
+	for _, worktree := range worktrees {
+		if worktree.Main || worktree.Prunable {
+			continue
+		}
+		if pathStrictlyContains(worktree.Path, destination) || pathStrictlyContains(destination, worktree.Path) {
+			return "", false, fmt.Errorf("refusing nested worktree destination %s because it overlaps registered worktree %s", destination, worktree.Path)
 		}
 	}
 	if _, err := os.Lstat(destination); err == nil {
@@ -140,7 +164,11 @@ func (r *Repository) CreateWorktree(branch, startPoint string) (string, bool, er
 	} else if !os.IsNotExist(err) {
 		return "", false, fmt.Errorf("checking destination: %w", err)
 	}
-	if _, err := r.EnsureManagedRoot(); err != nil {
+	root, err := r.EnsureManagedRoot()
+	if err != nil {
+		return "", false, err
+	}
+	if err := rejectSymlinkComponents(root, destination); err != nil {
 		return "", false, err
 	}
 
@@ -195,6 +223,14 @@ func (r *Repository) RemoveWorktree(path string, discard bool) error {
 			return fmt.Errorf("worktree is locked: %s", found.LockReason)
 		}
 		return fmt.Errorf("worktree is locked")
+	}
+	for _, worktree := range worktrees {
+		if worktree.Prunable || samePath(worktree.Path, target) {
+			continue
+		}
+		if pathStrictlyContains(target, worktree.Path) {
+			return fmt.Errorf("refusing to remove %s because it contains registered worktree %s", target, worktree.Path)
+		}
 	}
 
 	args := []string{"worktree", "remove"}
@@ -341,13 +377,35 @@ func parseWorktreesPorcelain(data []byte) []WorktreeInfo {
 			worktrees = append(worktrees, worktree)
 		}
 	}
-	for i := range worktrees {
-		if !worktrees[i].Bare {
-			worktrees[i].Main = true
-			break
-		}
+	if len(worktrees) != 0 && !worktrees[0].Bare {
+		worktrees[0].Main = true
 	}
 	return worktrees
+}
+
+func rejectSymlinkComponents(root, destination string) error {
+	relative, err := filepath.Rel(root, destination)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("destination escapes the managed worktree root: %s", destination)
+	}
+	current := root
+	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("checking destination component %s: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing symlinked destination component %s", current)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("destination component is not a directory: %s", current)
+		}
+	}
+	return nil
 }
 
 func canonicalPath(path string) (string, error) {
@@ -364,6 +422,11 @@ func canonicalPath(path string) (string, error) {
 
 func samePath(left, right string) bool {
 	return filepath.Clean(left) == filepath.Clean(right)
+}
+
+func pathStrictlyContains(parent, child string) bool {
+	relative, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(child))
+	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func runGitText(dir string, args ...string) (string, error) {

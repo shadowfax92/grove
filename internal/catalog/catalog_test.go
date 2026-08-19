@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -67,6 +68,31 @@ func TestBuildWarnsPastInvalidEntriesAndSilentlyIgnoresLegacyTypes(t *testing.T)
 	}
 	if !strings.Contains(warnings[0].Error(), "deleted") {
 		t.Fatalf("warnings = %q, want deleted entry", warnings[0].Error())
+	}
+}
+
+func TestBuildWarnsAndSkipsMalformedRows(t *testing.T) {
+	repoPath := initCatalogRepo(t)
+	cfg := &config.Config{Repos: []config.RepoConfig{
+		{Path: "", Name: "blank"},
+		{Path: "relative/repo", Name: "relative"},
+		{Path: repoPath, Name: "unknown", Type: "mystery"},
+		{Path: t.TempDir(), Name: "legacy", Type: "plain"},
+		{Path: repoPath, Name: "valid"},
+	}}
+
+	got, warnings := Build(cfg, repoPath)
+	if len(got.Repositories) != 1 || got.Repositories[0].Name != "valid" {
+		t.Fatalf("Repositories = %#v, want only valid", got.Repositories)
+	}
+	if len(warnings) != 3 {
+		t.Fatalf("warnings = %#v, want blank, relative, and unknown-type warnings", warnings)
+	}
+	text := fmt.Sprint(warnings)
+	for _, want := range []string{"blank", "relative", "mystery"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("warnings = %q, missing %q", text, want)
+		}
 	}
 }
 

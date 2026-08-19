@@ -11,9 +11,11 @@ import (
 )
 
 type removeOutput struct {
-	Version    int            `json:"version"`
-	Removed    []removeResult `json:"removed"`
-	ReturnPath string         `json:"return_path,omitempty"`
+	Version     int            `json:"version"`
+	DryRun      bool           `json:"dry_run"`
+	Removed     []removeResult `json:"removed"`
+	WouldRemove []removeResult `json:"would_remove"`
+	ReturnPath  string         `json:"return_path,omitempty"`
 }
 
 type removeResult struct {
@@ -73,6 +75,9 @@ func (a *application) runRemove(cmd *cobra.Command, args []string, discard, merg
 	if entry.Worktree.Locked {
 		return lockedError(entry)
 	}
+	if descendants := context.inventory.Descendants(entry.Worktree.Path); len(descendants) != 0 {
+		return fmt.Errorf("refusing to remove %s because it contains registered worktree %s", entry.Worktree.Path, descendants[0].Worktree.Path)
+	}
 	dirty, err := entry.Repository.Git.Dirty(entry.Worktree.Path)
 	if err != nil {
 		return err
@@ -85,13 +90,13 @@ func (a *application) runRemove(cmd *cobra.Command, args []string, discard, merg
 	}
 	if a.jsonOutput {
 		return writeJSON(cmd, removeOutput{
-			Version:    1,
-			Removed:    []removeResult{{Selector: entry.Selector(), Path: entry.Worktree.Path}},
-			ReturnPath: entry.Repository.Git.MainPath,
+			Version:     1,
+			Removed:     []removeResult{{Selector: entry.Selector(), Path: entry.Worktree.Path}},
+			WouldRemove: []removeResult{},
+			ReturnPath:  entry.Repository.Git.MainPath,
 		})
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), entry.Repository.Git.MainPath)
-	return nil
+	return a.writePath(cmd, entry.Repository.Git.MainPath)
 }
 
 func (a *application) removeMerged(cmd *cobra.Command, context *commandContext, dryRun bool) error {
@@ -101,15 +106,30 @@ func (a *application) removeMerged(cmd *cobra.Command, context *commandContext, 
 	}
 	var candidates []removeCandidate
 	for _, entry := range context.inventory.Entries {
+		if context.catalog.Current == entry.Repository && !context.catalog.CurrentRegistered {
+			continue
+		}
 		if mergedSkipReason(entry, currentPath) != "" {
 			continue
 		}
+		if descendants := context.inventory.Descendants(entry.Worktree.Path); len(descendants) != 0 {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: contains registered worktree %s\n", entry.Selector(), descendants[0].Worktree.Path)
+			continue
+		}
 		dirty, err := entry.Repository.Git.Dirty(entry.Worktree.Path)
-		if err != nil || dirty {
+		if err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: %v\n", entry.Selector(), err)
+			continue
+		}
+		if dirty {
 			continue
 		}
 		merged, _, err := entry.Repository.Git.BranchMerged(entry.Worktree.Branch, entry.Repository.DefaultBranch)
-		if err != nil || !merged {
+		if err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: %v\n", entry.Selector(), err)
+			continue
+		}
+		if !merged {
 			continue
 		}
 		candidates = append(candidates, removeCandidate{entry: entry})
@@ -129,7 +149,11 @@ func (a *application) removeMerged(cmd *cobra.Command, context *commandContext, 
 			continue
 		}
 		merged, _, mergeErr := entry.Repository.Git.BranchMerged(entry.Worktree.Branch, entry.Repository.DefaultBranch)
-		if dirty || mergeErr != nil || !merged {
+		if mergeErr != nil {
+			failures = append(failures, fmt.Errorf("%s: %w", entry.Selector(), mergeErr))
+			continue
+		}
+		if dirty || !merged {
 			continue
 		}
 		if err := entry.Repository.Git.RemoveWorktree(entry.Worktree.Path, false); err != nil {
@@ -140,7 +164,13 @@ func (a *application) removeMerged(cmd *cobra.Command, context *commandContext, 
 	}
 
 	if a.jsonOutput {
-		if err := writeJSON(cmd, removeOutput{Version: 1, Removed: results}); err != nil {
+		output := removeOutput{Version: 1, DryRun: dryRun, Removed: []removeResult{}, WouldRemove: []removeResult{}}
+		if dryRun {
+			output.WouldRemove = results
+		} else {
+			output.Removed = results
+		}
+		if err := writeJSON(cmd, output); err != nil {
 			return err
 		}
 	} else if len(results) == 0 {

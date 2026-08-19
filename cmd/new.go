@@ -52,6 +52,12 @@ func (a *application) runNew(cmd *cobra.Command, args []string) error {
 	} else if !strings.Contains(branch, "/") {
 		branch = "feat/" + branch
 	}
+	if context.catalog.Current == repository && !context.catalog.CurrentRegistered {
+		if err := registerRepository(context.catalog, repository); err != nil {
+			return fmt.Errorf("registering repository: %w", err)
+		}
+		context.catalog.CurrentRegistered = true
+	}
 
 	startPoint := ""
 	if !repository.Git.RefExists("refs/heads/"+branch) && !repository.Git.RefExists("refs/remotes/origin/"+branch) {
@@ -64,19 +70,13 @@ func (a *application) runNew(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("creating worktree: %w", err)
 	}
-	if context.catalog.Current == repository && !context.catalog.CurrentRegistered {
-		if err := registerRepository(context.catalog, repository); err != nil {
-			return fmt.Errorf("registering repository: %w", err)
-		}
-	}
 	if created {
 		runSetup(cmd, path, profile)
 	}
 	if a.jsonOutput {
 		return writeJSON(cmd, newOutput{Version: 1, Repository: repository.Name, Branch: branch, Path: path, Created: created})
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), path)
-	return nil
+	return a.writePath(cmd, path)
 }
 
 func resolveNewTarget(cat *catalog.Catalog, raw string) (*catalog.Repository, *catalog.Profile, string, error) {
@@ -148,14 +148,18 @@ func runSetup(cmd *cobra.Command, worktreePath string, profile *catalog.Profile)
 }
 
 func setupDirectory(worktreePath, workdir string) (string, error) {
+	root, err := filepath.EvalSymlinks(worktreePath)
+	if err != nil {
+		return "", fmt.Errorf("resolving worktree: %w", err)
+	}
 	if workdir == "" {
-		return worktreePath, nil
+		return root, nil
 	}
 	if filepath.IsAbs(workdir) {
 		return "", fmt.Errorf("workdir must be relative: %s", workdir)
 	}
-	directory := filepath.Clean(filepath.Join(worktreePath, workdir))
-	rel, err := filepath.Rel(worktreePath, directory)
+	directory := filepath.Clean(filepath.Join(root, workdir))
+	rel, err := filepath.Rel(root, directory)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("workdir escapes the worktree: %s", workdir)
 	}
@@ -166,5 +170,13 @@ func setupDirectory(worktreePath, workdir string) (string, error) {
 	if !info.IsDir() {
 		return "", fmt.Errorf("workdir is not a directory: %s", workdir)
 	}
-	return directory, nil
+	resolved, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return "", fmt.Errorf("resolving workdir %s: %w", workdir, err)
+	}
+	rel, err = filepath.Rel(root, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("workdir escapes the worktree through a symlink: %s", workdir)
+	}
+	return resolved, nil
 }

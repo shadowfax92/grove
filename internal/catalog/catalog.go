@@ -87,7 +87,19 @@ func Build(cfg *config.Config, currentDir string) (*Catalog, []Warning) {
 				catalog.reservedNames[name] = true
 			}
 			kind := strings.TrimSpace(row.Type)
+			if kind == "dir" || kind == "plain" {
+				continue
+			}
 			if kind != "" && kind != "worktree" {
+				warnings = append(warnings, Warning{Name: name, Path: row.Path, Message: fmt.Sprintf("unsupported repository type %q", kind)})
+				continue
+			}
+			if strings.TrimSpace(row.Path) == "" {
+				warnings = append(warnings, Warning{Name: name, Path: row.Path, Message: "repository path is empty"})
+				continue
+			}
+			if !filepath.IsAbs(row.Path) {
+				warnings = append(warnings, Warning{Name: name, Path: row.Path, Message: "repository path must be absolute or start with ~/"})
 				continue
 			}
 			repo, err := gitx.OpenRepository(row.Path)

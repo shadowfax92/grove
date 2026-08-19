@@ -23,6 +23,7 @@ type application struct {
 	directory    string
 	noInput      bool
 	jsonOutput   bool
+	nullOutput   bool
 }
 
 func newRootCommand(dependencies commandDependencies) *cobra.Command {
@@ -43,6 +44,12 @@ func newRootCommand(dependencies commandDependencies) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.MaximumNArgs(1),
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if app.jsonOutput && app.nullOutput {
+				return fmt.Errorf("--json and --null cannot be used together")
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return app.runNavigate(cmd, args)
 		},
@@ -50,6 +57,7 @@ func newRootCommand(dependencies commandDependencies) *cobra.Command {
 	root.PersistentFlags().StringVarP(&app.directory, "directory", "C", "", "Run as if started in this directory")
 	root.PersistentFlags().BoolVar(&app.noInput, "no-input", false, "Never open an interactive picker")
 	root.PersistentFlags().BoolVar(&app.jsonOutput, "json", false, "Print versioned JSON")
+	root.PersistentFlags().BoolVarP(&app.nullOutput, "null", "0", false, "Terminate path output with NUL")
 	root.AddCommand(
 		app.cdCommand(),
 		app.configCommand(),

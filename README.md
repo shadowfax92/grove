@@ -64,6 +64,8 @@ New worktrees live inside the repository and preserve the branch hierarchy:
 
 Grove adds `/.wt/` to the shared `.git/info/exclude`. It never changes the tracked `.gitignore`.
 
+Each directory under `.wt` is a normal linked worktree with its own `.git` file. Opening Neovim there, running an agent from that root, and using `git status` all behave normally. The main checkout stays clean because `.wt` is excluded locally.
+
 The worktree returned by `grove new` is always its root. A configured `workdir` changes only where setup commands run; it never changes the path printed for an agent.
 
 Existing worktrees outside `.wt` remain visible and removable. Grove does not move them.
@@ -85,6 +87,8 @@ grove cd /absolute/path/to/a/worktree
 ```
 
 A process cannot change its parent's working directory, so the binary only prints paths. The `gv` Fish function captures that path and calls `cd` in the shell.
+
+Use `-0` or `--null` when a path may contain newlines. It terminates path output with NUL, and the Fish helper uses it internally.
 
 Selectors are exact:
 
@@ -143,6 +147,7 @@ Single removal refuses:
 - the main worktree;
 - locked worktrees;
 - dirty worktrees unless `--discard` is present.
+- targets that contain another registered worktree.
 
 `--discard` deliberately has no shorthand. Grove keeps the branch after removing its worktree.
 
@@ -197,6 +202,7 @@ grove --json list
 - `-C, --directory` sets repository context without changing the caller's cwd.
 - `--no-input` guarantees that Grove will not open fzf.
 - `--json` selects a versioned schema.
+- `-0, --null` makes path output NUL-terminated for unusual filesystem names.
 - stdout contains the requested path or data.
 - warnings and setup progress go to stderr.
 
@@ -211,3 +217,5 @@ git clean -ffdx
 The second `-f` deliberately permits deleting nested repositories. See the [`git clean` documentation](https://git-scm.com/docs/git-clean.html).
 
 Missing worktrees are shown as `[missing]` until Git prunes their stale administrative records. Grove will not invent a filesystem deletion fallback for them.
+
+Ignored files do not make a worktree dirty. Removing a worktree therefore also removes ignored caches and build output inside it; use `--dry-run` for bulk cleanup when you want to inspect candidates first.

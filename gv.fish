@@ -1,7 +1,9 @@
 function gv
     if test (count $argv) -eq 0
-        set -l path (grove)
-        or return $status
+        set -l path (grove --null | string split0)
+        set -l grove_status $pipestatus[1]
+        test $grove_status -eq 0
+        or return $grove_status
         test -n "$path"
         and cd -- $path
         return
@@ -17,13 +19,17 @@ function gv
 
     switch $subcommand
         case n new
-            set -l path (grove new $rest)
-            or return $status
+            set -l path (grove --null new $rest | string split0)
+            set -l grove_status $pipestatus[1]
+            test $grove_status -eq 0
+            or return $grove_status
             test -n "$path"
             and cd -- $path
         case cd
-            set -l path (grove cd $rest)
-            or return $status
+            set -l path (grove --null cd $rest | string split0)
+            set -l grove_status $pipestatus[1]
+            test $grove_status -eq 0
+            or return $grove_status
             test -n "$path"
             and cd -- $path
         case rm
@@ -31,8 +37,10 @@ function gv
                 grove rm $rest
                 return $status
             end
-            set -l path (grove rm $rest)
-            or return $status
+            set -l path (grove --null rm $rest | string split0)
+            set -l grove_status $pipestatus[1]
+            test $grove_status -eq 0
+            or return $grove_status
             test -n "$path"
             and cd -- $path
         case l ls list
