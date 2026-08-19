@@ -1,41 +1,37 @@
-# CLAUDE.md
+# Grove
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Grove is a Go CLI that discovers and manages Git worktrees. It is path-first: the binary prints paths or versioned JSON, while shell integration owns `cd`.
 
-## Project Overview
-
-Grove is a Go CLI (`grove`) that manages tmux sessions organized around git worktrees. It is picker-first: `grove` and `grove cd` print workspace paths via fzf, `grove new` creates a workspace and prints its path by default, and `grove new --tmux` creates a tmux session explicitly.
-
-## Build & Run
+## Build and verify
 
 ```sh
-make build          # builds ./grove binary with version stamped
-make install        # builds and copies to ~/bin/grove
+make build
+go test ./...
+go vet ./...
 ```
 
-Use `go test ./...` for verification. The module name is `grove` (not a URL-style module path).
+The module name is `grove`.
 
 ## Architecture
 
-**CLI layer** (`cmd/`): Cobra commands — workspace commands plus `sync` (`export`, `edit`, `status`) and `pull`. Each command lives in its own file and registers via `init()` → `rootCmd.AddCommand()` (sync children register on `syncCmd`).
+- `cmd/` builds the Cobra tree and owns output contracts for `cd`, `new`, `list`, `rm`, and `config`.
+- `internal/git/` is the Git boundary. It discovers canonical common directories, parses NUL-delimited worktree records, checks status and ancestry, creates `.wt/<branch>`, and removes through Git.
+- `internal/config/` parses and appends to `~/.config/grove/config.yaml` without making every configured path a load-time invariant.
+- `internal/catalog/` turns valid config rows into physical repositories and alias/setup profiles. Common Git directory is repository identity.
+- `internal/inventory/` joins catalog repositories to live Git worktrees and resolves exact selectors.
+- `internal/picker/` is the NUL-safe fzf boundary.
+- `internal/names/` generates readable default branch names.
 
-**Internal packages** (`internal/`):
-- `config/` — YAML config at `~/.config/grove/config.yaml`. `Load()` validates repo paths; `LoadFast()` skips validation for fast-path command reads.
-- `state/` — JSON state at `~/.local/state/grove/state.json`. File-locked via `flock()`. This is the source of truth for what workspaces exist. Atomic writes via rename.
-- `tmux/` — Thin wrappers around `tmux` CLI commands (no library).
-- `git/` — Git worktree operations, destructive worktree cleanup, and remote-default resets. `AddWorktree` tries `-b` first, then reuses an existing branch. Worktrees live under `<repo>/.grove/worktrees/<name>/`.
-- `names/` — Random animal name generator (~200 names). Checks against existing names for uniqueness.
-- `syncfile/` — Independent `~/.config/grove/sync.yaml` inventory, comment-preserving export append, pruned repo scanning, clone planning/execution, and local pull inspection/state transitions. It does not read or update config repos.
+Git metadata is the only worktree source of truth. Grove has no state file and no tmux or repository-sync lifecycle.
 
-**Data flow**: Config defines workspace repos → `grove new` / `grove done` / `grove rm` update state → workspace navigation reads state. Separately, sync.yaml defines clone target paths → `grove sync` fills only missing paths → `grove pull` safely advances default refs → `grove sync status` inspects local presence/dirty state without network.
+## Invariants
 
-**Session naming**: `g/<repo>/<branch>` for worktree workspaces, `g/<name>` for plain workspaces. (Changed from `grove/` prefix to `g/` for brevity.)
-
-## Key Patterns
-
-- State manager must be locked (`mgr.Lock()`) before mutating state, unlocked after save.
-- `tmux.IsInsideTmux()` checks `$TMUX` env var to decide between `switch-client` (inside tmux) vs `attach-session` (outside).
-- Worktree creation: fetch and reset the base checkout to `origin/<default>` → run prepare commands → git worktree add → run setup commands → add workspace to state → print the path or create/switch tmux with `--tmux`.
-- Sync identity is `group/name` (the target path), never the origin URL. Duplicate origins at different paths are valid.
-- Sync operations are non-destructive: no moves/deletes, `git pull --ff-only` on checked-out defaults, and a non-forced `<default>:<default>` fetch from feature branches. Per-repo failures must not stop the rest of a parallel run.
-- Export treats fzf selection as curation and appends YAML without re-marshalling existing hand edits. `.git` files, hidden directories, and `node_modules` are pruned from scans.
+- New worktrees are `<main-worktree>/.wt/<branch>` and preserve branch slashes.
+- `/.wt/` is written to the common `.git/info/exclude`, never tracked `.gitignore`.
+- Repository identity comes from the canonical Git common directory, including when invoked inside a linked worktree.
+- Main and locked worktrees are never removable.
+- Dirty removal requires the explicit `--discard` flag.
+- Worktree removal never falls back to `os.RemoveAll`.
+- Exact selectors never open fzf; omitted selectors require an interactive terminal.
+- Normal stdout remains machine-readable. Warnings and setup output use stderr.
+- Old external worktrees remain supported during migration and are never moved automatically.

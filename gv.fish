@@ -1,48 +1,42 @@
 function gv
     if test (count $argv) -eq 0
-        set -l output (grove cd)
+        set -l path (grove)
         or return $status
-        set -l path (string trim -- $output[-1])
         test -n "$path"
         and cd -- $path
         return
     end
 
-    set -l subcmd $argv[1]
+    set -l subcommand $argv[1]
     set -l rest $argv[2..]
 
-    if contains -- --help $rest; or contains -- -h $rest
+    if contains -- --help $rest; or contains -- -h $rest; or contains -- --json $rest
         grove $argv
-        return
+        return $status
     end
 
-    switch $subcmd
-        case n nd new
-            if contains -- --tmux $rest; or contains -- -t $rest
-                grove new $rest
-                return $status
-            end
-            set -l output (grove new $rest)
+    switch $subcommand
+        case n new
+            set -l path (grove new $rest)
             or return $status
-            set -l path (string trim -- $output[-1])
             test -n "$path"
             and cd -- $path
         case cd
-            set -l output (grove cd $rest)
+            set -l path (grove cd $rest)
             or return $status
-            set -l path (string trim -- $output[-1])
             test -n "$path"
             and cd -- $path
-        case d dd done
-            set -l output (grove done $rest)
+        case rm
+            if contains -- --merged $rest; or contains -- --dry-run $rest
+                grove rm $rest
+                return $status
+            end
+            set -l path (grove rm $rest)
             or return $status
-            set -l path (string trim -- $output[-1])
             test -n "$path"
             and cd -- $path
-        case ls l list
+        case l ls list
             grove list $rest
-        case rm remove
-            grove rm $rest
         case cfg config
             grove config $rest
         case '*'
