@@ -208,6 +208,27 @@ func TestAddRepoSerializesConcurrentUpdates(t *testing.T) {
 	}
 }
 
+func TestAddRepoPreservesEmbeddedNewlines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeConfigFile(t, path, "repos: []\n")
+	repoPath := filepath.Join(t.TempDir(), "line\nbreak")
+	repo := NewWorktreeRepo(repoPath, "line\nbreak", "main")
+	if err := AddRepoToFile(path, repo); err != nil {
+		t.Fatalf("AddRepoToFile() error = %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("updated config is invalid YAML: %v\n%s", err, data)
+	}
+	if len(cfg.Repos) != 1 || cfg.Repos[0].Path != repo.Path || cfg.Repos[0].Name != repo.Name {
+		t.Fatalf("decoded repo = %#v, want %#v\n%s", cfg.Repos, repo, data)
+	}
+}
+
 func TestAddRepoRejectsDuplicateNameAndPath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	existingPath := t.TempDir()

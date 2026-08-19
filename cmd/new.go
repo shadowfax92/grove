@@ -52,6 +52,13 @@ func (a *application) runNew(cmd *cobra.Command, args []string) error {
 	} else if !strings.Contains(branch, "/") {
 		branch = "feat/" + branch
 	}
+	outputPath, err := repository.Git.WorktreePath(branch)
+	if err != nil {
+		return fmt.Errorf("resolving worktree: %w", err)
+	}
+	if err := a.validatePathOutput(outputPath); err != nil {
+		return err
+	}
 	if context.catalog.Current == repository && !context.catalog.CurrentRegistered {
 		if err := registerRepository(context.catalog, repository); err != nil {
 			return fmt.Errorf("registering repository: %w", err)

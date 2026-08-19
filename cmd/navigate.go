@@ -77,15 +77,22 @@ func (a *application) writeWorktree(cmd *cobra.Command, entry *inventory.Entry) 
 }
 
 func (a *application) writePath(cmd *cobra.Command, path string) error {
+	if err := a.validatePathOutput(path); err != nil {
+		return err
+	}
 	if a.nullOutput {
 		_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s%c", path, byte(0))
 		return err
 	}
-	if strings.ContainsAny(path, "\r\n") {
-		return fmt.Errorf("path contains a newline; use --null or --json for unambiguous output")
-	}
 	_, err := fmt.Fprintln(cmd.OutOrStdout(), path)
 	return err
+}
+
+func (a *application) validatePathOutput(path string) error {
+	if !a.jsonOutput && !a.nullOutput && strings.ContainsAny(path, "\r\n") {
+		return fmt.Errorf("path contains a newline; use --null or --json for unambiguous output")
+	}
+	return nil
 }
 
 func writeJSON(cmd *cobra.Command, value any) error {

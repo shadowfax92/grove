@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"grove/internal/config"
 	"grove/internal/picker"
 
 	"github.com/spf13/cobra"
@@ -161,6 +162,47 @@ func TestNewRegistersBeforeCreatingWorktree(t *testing.T) {
 	}
 }
 
+func TestNewPreflightsPlainOutputBeforeMutation(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "line\nrepo")
+	initV2RepoAt(t, repoPath)
+	t.Setenv("HOME", t.TempDir())
+	root := newRootCommand(commandDependencies{
+		getwd:       func() (string, error) { return repoPath, nil },
+		interactive: func() bool { return false },
+	})
+
+	_, _, err := executeV2(root, "new", "auth")
+	if err == nil || !strings.Contains(err.Error(), "--null") {
+		t.Fatalf("new error = %v, want output preflight error", err)
+	}
+	worktreePath := filepath.Join(canonicalV2Path(t, repoPath), ".wt", "feat", "auth")
+	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {
+		t.Fatalf("worktree was created before output validation: %v", err)
+	}
+}
+
+func TestNewNullOutputRegistersNewlineRepositoryExactly(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "line\nrepo")
+	initV2RepoAt(t, repoPath)
+	t.Setenv("HOME", t.TempDir())
+	root := newRootCommand(commandDependencies{
+		getwd:       func() (string, error) { return repoPath, nil },
+		interactive: func() bool { return false },
+	})
+
+	_, _, err := executeV2(root, "--null", "new", "auth")
+	if err != nil {
+		t.Fatalf("new --null error = %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.Repos) != 1 || cfg.Repos[0].Path != canonicalV2Path(t, repoPath) {
+		t.Fatalf("registered repos = %#v, want exact newline path", cfg.Repos)
+	}
+}
+
 func TestNewUsesExplicitProfileButPrintsWorktreeRoot(t *testing.T) {
 	repoPath := initV2Repo(t)
 	if err := os.Mkdir(filepath.Join(repoPath, "subdir"), 0755); err != nil {
@@ -285,6 +327,23 @@ func TestRemoveExactPathPreservesTrailingWhitespace(t *testing.T) {
 	}
 }
 
+func TestRemovePreflightsPlainOutputBeforeMutation(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "line\nrepo")
+	initV2RepoAt(t, repoPath)
+	linkedPath := filepath.Join(t.TempDir(), "linked")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/linked", linkedPath)
+	writeV2Config(t, "", "")
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+
+	_, _, err := executeV2(root, "rm", "feat/linked")
+	if err == nil || !strings.Contains(err.Error(), "--null") {
+		t.Fatalf("rm error = %v, want output preflight error", err)
+	}
+	if _, err := os.Stat(linkedPath); err != nil {
+		t.Fatalf("worktree was removed before output validation: %v", err)
+	}
+}
+
 func TestRemoveRefusesConfiguredRepositoryNestedInsideTarget(t *testing.T) {
 	parentRepo := initV2Repo(t)
 	parentPath := filepath.Join(t.TempDir(), "parent")
@@ -392,6 +451,22 @@ func TestRemoveMergedJSONDryRunReportsWouldRemove(t *testing.T) {
 	}
 	if _, err := os.Stat(linkedPath); err != nil {
 		t.Fatalf("dry-run removed worktree: %v", err)
+	}
+}
+
+func TestRemoveMergedRejectsNullOutputBeforeMutation(t *testing.T) {
+	repoPath := initV2Repo(t)
+	linkedPath := filepath.Join(t.TempDir(), "merged")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/merged", linkedPath)
+	writeV2Config(t, repoPath, "")
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+
+	_, _, err := executeV2(root, "--null", "rm", "--merged=true")
+	if err == nil || !strings.Contains(err.Error(), "single-worktree") {
+		t.Fatalf("rm --null --merged error = %v", err)
+	}
+	if _, err := os.Stat(linkedPath); err != nil {
+		t.Fatalf("bulk worktree was removed: %v", err)
 	}
 }
 

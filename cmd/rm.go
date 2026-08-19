@@ -43,6 +43,9 @@ func (a *application) removeCommand() *cobra.Command {
 			if merged && discard {
 				return fmt.Errorf("--discard cannot be used with --merged")
 			}
+			if merged && a.nullOutput {
+				return fmt.Errorf("--null is only valid for single-worktree removal")
+			}
 			return a.runRemove(cmd, args, discard, merged, dryRun)
 		},
 	}
@@ -77,6 +80,9 @@ func (a *application) runRemove(cmd *cobra.Command, args []string, discard, merg
 	}
 	if descendants := context.inventory.Descendants(entry.Worktree.Path); len(descendants) != 0 {
 		return fmt.Errorf("refusing to remove %s because it contains registered worktree %s", entry.Worktree.Path, descendants[0].Worktree.Path)
+	}
+	if err := a.validatePathOutput(entry.Repository.Git.MainPath); err != nil {
+		return err
 	}
 	dirty, err := entry.Repository.Git.Dirty(entry.Worktree.Path)
 	if err != nil {

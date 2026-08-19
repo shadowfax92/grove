@@ -147,7 +147,7 @@ Single removal refuses:
 - the main worktree;
 - locked worktrees;
 - dirty worktrees unless `--discard` is present.
-- targets that contain another registered worktree.
+- targets that contain another Git repository or worktree, registered or not.
 
 `--discard` deliberately has no shorthand. Grove keeps the branch after removing its worktree.
 

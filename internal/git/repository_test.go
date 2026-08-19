@@ -299,6 +299,33 @@ func TestRemoveWorktreeRefusesNestedLinkedWorktree(t *testing.T) {
 	}
 }
 
+func TestRemoveWorktreeRefusesUnregisteredNestedRepository(t *testing.T) {
+	mainPath := initTestRepo(t)
+	writeCommit(t, mainPath, ".gitignore", "/nested-repo/\n")
+	parentPath := filepath.Join(t.TempDir(), "parent")
+	runGit(t, mainPath, "worktree", "add", "-b", "feat/parent", parentPath)
+	nestedPath := filepath.Join(parentPath, "nested-repo")
+	if err := os.MkdirAll(nestedPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, nestedPath, "init", "-b", "main")
+	runGit(t, nestedPath, "config", "user.name", "Grove Test")
+	runGit(t, nestedPath, "config", "user.email", "grove@example.test")
+	writeCommit(t, nestedPath, "unique.txt", "do not delete")
+	repo, err := OpenRepository(mainPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = repo.RemoveWorktree(parentPath, false)
+	if err == nil || !strings.Contains(err.Error(), "nested Git repository") {
+		t.Fatalf("RemoveWorktree() error = %v, want nested-repository refusal", err)
+	}
+	if got := gitOutput(t, nestedPath, "show", "HEAD:unique.txt"); got != "do not delete" {
+		t.Fatalf("nested commit content = %q", got)
+	}
+}
+
 func TestParseWorktreesDoesNotPromoteLinkedTreeOfBareRepository(t *testing.T) {
 	data := []byte("worktree /tmp/repo.git\x00bare\x00\x00worktree /tmp/linked\x00HEAD abc\x00branch refs/heads/main\x00\x00")
 	worktrees := parseWorktreesPorcelain(data)

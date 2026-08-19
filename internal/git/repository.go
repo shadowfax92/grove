@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -123,33 +124,18 @@ func (r *Repository) ValidateBranch(branch string) error {
 	return nil
 }
 
+func (r *Repository) WorktreePath(branch string) (string, error) {
+	path, _, _, err := r.resolveWorktreePath(branch)
+	return path, err
+}
+
 func (r *Repository) CreateWorktree(branch, startPoint string) (string, bool, error) {
-	destination, err := r.ManagedPath(branch)
+	destination, existing, worktrees, err := r.resolveWorktreePath(branch)
 	if err != nil {
 		return "", false, err
 	}
-	worktrees, err := r.Worktrees()
-	if err != nil {
-		return "", false, err
-	}
-	var matches []WorktreeInfo
-	for _, worktree := range worktrees {
-		if worktree.Branch == branch {
-			matches = append(matches, worktree)
-		}
-	}
-	if len(matches) > 1 {
-		paths := make([]string, 0, len(matches))
-		for _, match := range matches {
-			paths = append(paths, match.Path)
-		}
-		return "", false, fmt.Errorf("branch %q is checked out in multiple worktrees: %s; use an absolute path", branch, strings.Join(paths, ", "))
-	}
-	if len(matches) == 1 {
-		if matches[0].Prunable {
-			return "", false, fmt.Errorf("branch %q has a prunable worktree registration at %s; run git worktree prune first", branch, matches[0].Path)
-		}
-		return matches[0].Path, false, nil
+	if existing {
+		return destination, false, nil
 	}
 	for _, worktree := range worktrees {
 		if worktree.Main || worktree.Prunable {
@@ -196,6 +182,37 @@ func (r *Repository) CreateWorktree(branch, startPoint string) (string, bool, er
 	return destination, true, nil
 }
 
+func (r *Repository) resolveWorktreePath(branch string) (string, bool, []WorktreeInfo, error) {
+	destination, err := r.ManagedPath(branch)
+	if err != nil {
+		return "", false, nil, err
+	}
+	worktrees, err := r.Worktrees()
+	if err != nil {
+		return "", false, nil, err
+	}
+	var matches []WorktreeInfo
+	for _, worktree := range worktrees {
+		if worktree.Branch == branch {
+			matches = append(matches, worktree)
+		}
+	}
+	if len(matches) > 1 {
+		paths := make([]string, 0, len(matches))
+		for _, match := range matches {
+			paths = append(paths, match.Path)
+		}
+		return "", false, nil, fmt.Errorf("branch %q is checked out in multiple worktrees: %s; use an absolute path", branch, strings.Join(paths, ", "))
+	}
+	if len(matches) == 1 {
+		if matches[0].Prunable {
+			return "", false, nil, fmt.Errorf("branch %q has a prunable worktree registration at %s; run git worktree prune first", branch, matches[0].Path)
+		}
+		return matches[0].Path, true, worktrees, nil
+	}
+	return destination, false, worktrees, nil
+}
+
 func (r *Repository) RemoveWorktree(path string, discard bool) error {
 	target, err := canonicalPath(path)
 	if err != nil {
@@ -231,6 +248,13 @@ func (r *Repository) RemoveWorktree(path string, discard bool) error {
 		if pathStrictlyContains(target, worktree.Path) {
 			return fmt.Errorf("refusing to remove %s because it contains registered worktree %s", target, worktree.Path)
 		}
+	}
+	nested, err := nestedGitRepository(target)
+	if err != nil {
+		return fmt.Errorf("checking for nested Git repositories: %w", err)
+	}
+	if nested != "" {
+		return fmt.Errorf("refusing to remove %s because it contains nested Git repository %s", target, nested)
 	}
 
 	args := []string{"worktree", "remove"}
@@ -427,6 +451,38 @@ func samePath(left, right string) bool {
 func pathStrictlyContains(parent, child string) bool {
 	relative, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(child))
 	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func nestedGitRepository(root string) (string, error) {
+	rootMarker := filepath.Join(root, ".git")
+	var nested string
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == rootMarker {
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if entry.Name() == ".git" {
+			nested = filepath.Dir(path)
+			return fs.SkipAll
+		}
+		if entry.Name() != "HEAD" || entry.IsDir() || filepath.Dir(path) == root {
+			return nil
+		}
+		parent := filepath.Dir(path)
+		objects, objectsErr := os.Stat(filepath.Join(parent, "objects"))
+		refs, refsErr := os.Stat(filepath.Join(parent, "refs"))
+		if objectsErr == nil && refsErr == nil && objects.IsDir() && refs.IsDir() {
+			nested = parent
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return nested, err
 }
 
 func runGitText(dir string, args ...string) (string, error) {

@@ -5,7 +5,7 @@ function gv
         test $grove_status -eq 0
         or return $grove_status
         test -n "$path"
-        and cd -- $path
+        and builtin cd -- $path
         return
     end
 
@@ -24,16 +24,16 @@ function gv
             test $grove_status -eq 0
             or return $grove_status
             test -n "$path"
-            and cd -- $path
+            and builtin cd -- $path
         case cd
             set -l path (grove --null cd $rest | string split0)
             set -l grove_status $pipestatus[1]
             test $grove_status -eq 0
             or return $grove_status
             test -n "$path"
-            and cd -- $path
+            and builtin cd -- $path
         case rm
-            if contains -- --merged $rest; or contains -- --dry-run $rest
+            if contains -- --merged $rest; or contains -- --dry-run $rest; or string match -q -- '--merged=*' $rest; or string match -q -- '--dry-run=*' $rest
                 grove rm $rest
                 return $status
             end
@@ -42,7 +42,7 @@ function gv
             test $grove_status -eq 0
             or return $grove_status
             test -n "$path"
-            and cd -- $path
+            and builtin cd -- $path
         case l ls list
             grove list $rest
         case cfg config
