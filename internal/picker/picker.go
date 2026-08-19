@@ -18,24 +18,40 @@ type Item struct {
 }
 
 func Select(prompt string, items []Item) (string, error) {
-	if len(items) == 0 {
-		return "", fmt.Errorf("no worktrees")
+	selected, err := selectItems(prompt, items, false)
+	if err != nil {
+		return "", err
 	}
-	cmd := exec.Command("fzf", "--read0", "--print0", "--delimiter=\t", "--with-nth=2..", "--prompt", prompt)
+	return selected[0], nil
+}
+
+func SelectMany(prompt string, items []Item) ([]string, error) {
+	return selectItems(prompt, items, true)
+}
+
+func selectItems(prompt string, items []Item, multi bool) ([]string, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("no worktrees")
+	}
+	args := []string{"--read0", "--print0", "--delimiter=\t", "--with-nth=2..", "--prompt", prompt}
+	if multi {
+		args = append(args, "--multi", "--header", "tab/shift-tab select · enter confirm")
+	}
+	cmd := exec.Command("fzf", args...)
 	cmd.Stdin = bytes.NewReader(encodeItems(items))
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && (exitErr.ExitCode() == 1 || exitErr.ExitCode() == 130) {
-			return "", ErrCancelled
+			return nil, ErrCancelled
 		}
 		if errors.Is(err, exec.ErrNotFound) {
-			return "", fmt.Errorf("fzf is required for interactive selection")
+			return nil, fmt.Errorf("fzf is required for interactive selection")
 		}
-		return "", fmt.Errorf("fzf: %w", err)
+		return nil, fmt.Errorf("fzf: %w", err)
 	}
-	return decodeSelection(out, items)
+	return decodeSelections(out, items)
 }
 
 func Interactive() bool {
@@ -68,4 +84,23 @@ func decodeSelection(output []byte, items []Item) (string, error) {
 		return "", fmt.Errorf("invalid fzf selection index %q", record[:separator])
 	}
 	return items[index].Key, nil
+}
+
+func decodeSelections(output []byte, items []Item) ([]string, error) {
+	records := bytes.Split(bytes.TrimSuffix(output, []byte{0}), []byte{0})
+	selected := make([]string, 0, len(records))
+	for _, record := range records {
+		if len(record) == 0 {
+			continue
+		}
+		key, err := decodeSelection(record, items)
+		if err != nil {
+			return nil, err
+		}
+		selected = append(selected, key)
+	}
+	if len(selected) == 0 {
+		return nil, ErrCancelled
+	}
+	return selected, nil
 }

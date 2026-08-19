@@ -32,3 +32,15 @@ func TestDecodeSelectionUsesIndexInsteadOfDisplayText(t *testing.T) {
 		t.Fatalf("decodeSelection() = %q, want second", got)
 	}
 }
+
+func TestDecodeSelectionsReturnsEveryFZFSelection(t *testing.T) {
+	items := []Item{{Key: "first", Label: "one"}, {Key: "second", Label: "two"}, {Key: "third", Label: "three"}}
+
+	got, err := decodeSelections([]byte("2\tthree\x000\tone\x00"), items)
+	if err != nil {
+		t.Fatalf("decodeSelections() error = %v", err)
+	}
+	if strings.Join(got, ",") != "third,first" {
+		t.Fatalf("decodeSelections() = %#v", got)
+	}
+}

@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"grove/internal/inventory"
+	"grove/internal/picker"
 
 	"github.com/spf13/cobra"
 )
@@ -30,9 +32,9 @@ type removeCandidate struct {
 func (a *application) removeCommand() *cobra.Command {
 	var discard, merged, dryRun bool
 	command := &cobra.Command{
-		Use:   "rm [selector]",
-		Short: "Remove a worktree",
-		Args:  cobra.MaximumNArgs(1),
+		Use:   "rm [selector...]",
+		Short: "Remove worktrees",
+		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if dryRun && !merged {
 				return fmt.Errorf("--dry-run requires --merged")
@@ -49,7 +51,7 @@ func (a *application) removeCommand() *cobra.Command {
 			return a.runRemove(cmd, args, discard, merged, dryRun)
 		},
 	}
-	command.Flags().BoolVar(&discard, "discard", false, "Discard uncommitted files in one worktree")
+	command.Flags().BoolVar(&discard, "discard", false, "Discard uncommitted files in selected worktrees")
 	command.Flags().BoolVar(&merged, "merged", false, "Remove all clean worktrees merged into their default branches")
 	command.Flags().BoolVar(&dryRun, "dry-run", false, "Preview --merged without removing anything")
 	return command
@@ -63,25 +65,118 @@ func (a *application) runRemove(cmd *cobra.Command, args []string, discard, merg
 	if merged {
 		return a.removeMerged(cmd, context, dryRun)
 	}
-	var entry *inventory.Entry
-	if len(args) == 1 {
-		entry, err = context.inventory.Resolve(args[0], context.directory)
+	var entries []*inventory.Entry
+	if len(args) != 0 {
+		for _, selector := range args {
+			entry, resolveErr := context.inventory.Resolve(selector, context.directory)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			entries = appendUniqueEntry(entries, entry)
+		}
 	} else {
-		entry, err = a.pickWorktree(context, "remove > ")
+		entries, err = a.pickWorktreesForRemoval(context)
 	}
 	if err != nil {
 		return err
 	}
+	if len(entries) == 0 {
+		return picker.ErrCancelled
+	}
+	returnPath := removeReturnPath(context, entries)
+	if err := a.validatePathOutput(returnPath); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if err := validateRemoveEntry(context.inventory, entry, discard); err != nil {
+			return fmt.Errorf("%s: %w", entry.Selector(), err)
+		}
+	}
+	removed := make([]removeResult, 0, len(entries))
+	for _, entry := range entries {
+		if err := entry.Repository.Git.RemoveWorktree(entry.Worktree.Path, discard); err != nil {
+			return fmt.Errorf("%s: %w", entry.Selector(), err)
+		}
+		removed = append(removed, removeResult{Selector: entry.Selector(), Path: entry.Worktree.Path})
+	}
+	if a.jsonOutput {
+		return writeJSON(cmd, removeOutput{
+			Version:     1,
+			Removed:     removed,
+			WouldRemove: []removeResult{},
+			ReturnPath:  returnPath,
+		})
+	}
+	return a.writePath(cmd, returnPath)
+}
+
+func removeReturnPath(context *commandContext, entries []*inventory.Entry) string {
+	current, err := context.inventory.Resolve(".", context.directory)
+	if err != nil {
+		return entries[0].Repository.Git.MainPath
+	}
+	for _, entry := range entries {
+		if entry.Worktree.Path == current.Worktree.Path {
+			return current.Repository.Git.MainPath
+		}
+	}
+	return current.Worktree.Path
+}
+
+func (a *application) pickWorktreesForRemoval(context *commandContext) ([]*inventory.Entry, error) {
+	if a.noInput || !a.dependencies.interactive() {
+		return nil, fmt.Errorf("selector is required in non-interactive mode")
+	}
+	items := make([]picker.Item, 0, len(context.inventory.Entries))
+	now := time.Now()
+	for _, entry := range context.inventory.Entries {
+		if entry.Worktree.Main || entry.Worktree.Prunable {
+			continue
+		}
+		label := entry.Selector()
+		if age := worktreeCreationLabel(entry.Worktree.Path, now); age != "" {
+			label = fmt.Sprintf("%-36s %s", label, age)
+		}
+		if entry.Worktree.Locked {
+			label += "  [locked]"
+		}
+		items = append(items, picker.Item{Key: entry.Worktree.Path, Label: label})
+	}
+	paths, err := a.dependencies.pickMany("remove > ", items)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]*inventory.Entry, 0, len(paths))
+	for _, path := range paths {
+		entry, resolveErr := context.inventory.Resolve(path, context.directory)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		entries = appendUniqueEntry(entries, entry)
+	}
+	return entries, nil
+}
+
+func appendUniqueEntry(entries []*inventory.Entry, candidate *inventory.Entry) []*inventory.Entry {
+	for _, entry := range entries {
+		if entry.Worktree.Path == candidate.Worktree.Path {
+			return entries
+		}
+	}
+	return append(entries, candidate)
+}
+
+func validateRemoveEntry(inv *inventory.Inventory, entry *inventory.Entry, discard bool) error {
 	if entry.Worktree.Main {
 		return fmt.Errorf("refusing to remove the main worktree")
 	}
 	if entry.Worktree.Locked {
 		return lockedError(entry)
 	}
-	if descendants := context.inventory.Descendants(entry.Worktree.Path); len(descendants) != 0 {
+	if descendants := inv.Descendants(entry.Worktree.Path); len(descendants) != 0 {
 		return fmt.Errorf("refusing to remove %s because it contains registered worktree %s", entry.Worktree.Path, descendants[0].Worktree.Path)
 	}
-	if err := a.validatePathOutput(entry.Repository.Git.MainPath); err != nil {
+	if err := entry.Repository.Git.ValidateWorktreeRemoval(entry.Worktree.Path); err != nil {
 		return err
 	}
 	dirty, err := entry.Repository.Git.Dirty(entry.Worktree.Path)
@@ -91,18 +186,7 @@ func (a *application) runRemove(cmd *cobra.Command, args []string, discard, merg
 	if dirty && !discard {
 		return fmt.Errorf("worktree has uncommitted files; use --discard to remove it")
 	}
-	if err := entry.Repository.Git.RemoveWorktree(entry.Worktree.Path, discard); err != nil {
-		return err
-	}
-	if a.jsonOutput {
-		return writeJSON(cmd, removeOutput{
-			Version:     1,
-			Removed:     []removeResult{{Selector: entry.Selector(), Path: entry.Worktree.Path}},
-			WouldRemove: []removeResult{},
-			ReturnPath:  entry.Repository.Git.MainPath,
-		})
-	}
-	return a.writePath(cmd, entry.Repository.Git.MainPath)
+	return nil
 }
 
 func (a *application) removeMerged(cmd *cobra.Command, context *commandContext, dryRun bool) error {

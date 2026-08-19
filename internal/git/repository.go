@@ -214,49 +214,10 @@ func (r *Repository) resolveWorktreePath(branch string) (string, bool, []Worktre
 }
 
 func (r *Repository) RemoveWorktree(path string, discard bool) error {
-	target, err := canonicalPath(path)
-	if err != nil {
-		return fmt.Errorf("resolving worktree path: %w", err)
-	}
-	worktrees, err := r.Worktrees()
+	target, err := r.validateWorktreeRemoval(path)
 	if err != nil {
 		return err
 	}
-	var found *WorktreeInfo
-	for i := range worktrees {
-		if samePath(worktrees[i].Path, target) {
-			found = &worktrees[i]
-			break
-		}
-	}
-	if found == nil {
-		return fmt.Errorf("path is not a registered worktree: %s", target)
-	}
-	if found.Main {
-		return fmt.Errorf("refusing to remove the main worktree: %s", target)
-	}
-	if found.Locked {
-		if found.LockReason != "" {
-			return fmt.Errorf("worktree is locked: %s", found.LockReason)
-		}
-		return fmt.Errorf("worktree is locked")
-	}
-	for _, worktree := range worktrees {
-		if worktree.Prunable || samePath(worktree.Path, target) {
-			continue
-		}
-		if pathStrictlyContains(target, worktree.Path) {
-			return fmt.Errorf("refusing to remove %s because it contains registered worktree %s", target, worktree.Path)
-		}
-	}
-	nested, err := nestedGitRepository(target)
-	if err != nil {
-		return fmt.Errorf("checking for nested Git repositories: %w", err)
-	}
-	if nested != "" {
-		return fmt.Errorf("refusing to remove %s because it contains nested Git repository %s", target, nested)
-	}
-
 	args := []string{"worktree", "remove"}
 	if discard {
 		args = append(args, "--force")
@@ -266,6 +227,57 @@ func (r *Repository) RemoveWorktree(path string, discard bool) error {
 		return err
 	}
 	return nil
+}
+
+func (r *Repository) ValidateWorktreeRemoval(path string) error {
+	_, err := r.validateWorktreeRemoval(path)
+	return err
+}
+
+func (r *Repository) validateWorktreeRemoval(path string) (string, error) {
+	target, err := canonicalPath(path)
+	if err != nil {
+		return "", fmt.Errorf("resolving worktree path: %w", err)
+	}
+	worktrees, err := r.Worktrees()
+	if err != nil {
+		return "", err
+	}
+	var found *WorktreeInfo
+	for i := range worktrees {
+		if samePath(worktrees[i].Path, target) {
+			found = &worktrees[i]
+			break
+		}
+	}
+	if found == nil {
+		return "", fmt.Errorf("path is not a registered worktree: %s", target)
+	}
+	if found.Main {
+		return "", fmt.Errorf("refusing to remove the main worktree: %s", target)
+	}
+	if found.Locked {
+		if found.LockReason != "" {
+			return "", fmt.Errorf("worktree is locked: %s", found.LockReason)
+		}
+		return "", fmt.Errorf("worktree is locked")
+	}
+	for _, worktree := range worktrees {
+		if worktree.Prunable || samePath(worktree.Path, target) {
+			continue
+		}
+		if pathStrictlyContains(target, worktree.Path) {
+			return "", fmt.Errorf("refusing to remove %s because it contains registered worktree %s", target, worktree.Path)
+		}
+	}
+	nested, err := nestedGitRepository(target)
+	if err != nil {
+		return "", fmt.Errorf("checking for nested Git repositories: %w", err)
+	}
+	if nested != "" {
+		return "", fmt.Errorf("refusing to remove %s because it contains nested Git repository %s", target, nested)
+	}
+	return target, nil
 }
 
 func (r *Repository) Dirty(path string) (bool, error) {

@@ -34,6 +34,8 @@ grove cd feat/auth            # current repo
 grove cd browseros:feat/auth  # configured repo alias
 grove list                    # Git-backed repository/worktree tree
 grove rm .                    # remove the current clean worktree
+grove rm                      # pick one or more worktrees with fzf
+grove rm feat/auth fix/login  # remove several exact worktrees
 grove rm --discard .          # explicitly discard dirty files
 grove rm --merged --dry-run   # preview conservative bulk cleanup
 grove rm --merged             # remove clean merged worktrees
@@ -130,24 +132,29 @@ grove --json list --status
 
 The default list uses only `git worktree list --porcelain -z`. `--status` opts into the more expensive dirty and ahead/behind checks.
 
+Human output shows each repository path once, then a compact branch tree with creation ages and optional status. Worktree paths are omitted because selectors are enough for navigation. Color is automatic on a terminal; use `--color=always`, `--color=never`, or the `NO_COLOR` environment variable to control it. Paths, `--json`, and `--null` output are never colored.
+
 `--json` emits a versioned document. The same global flag also gives structured output for `cd`, `new`, and `rm`.
 
 ### Remove
 
 ```sh
 grove rm feat/auth
+grove rm feat/auth fix/login
 grove rm .
 grove rm --discard .
 grove rm --merged --dry-run
 grove rm --merged
 ```
 
-Single removal refuses:
+Removal refuses:
 
 - the main worktree;
 - locked worktrees;
 - dirty worktrees unless `--discard` is present.
 - targets that contain another Git repository or worktree, registered or not.
+
+With no selector, `grove rm` opens a multi-select picker. Use Tab or Shift-Tab to select worktrees and Enter to confirm. Grove validates the entire selection before deleting any target. Multiple exact selectors use the same all-target preflight.
 
 `--discard` deliberately has no shorthand. Grove keeps the branch after removing its worktree.
 
@@ -203,6 +210,7 @@ grove --json list
 - `--no-input` guarantees that Grove will not open fzf.
 - `--json` selects a versioned schema.
 - `-0, --null` makes path output NUL-terminated for unusual filesystem names.
+- `--color=auto|always|never` controls presentation output without affecting paths or JSON.
 - stdout contains the requested path or data.
 - warnings and setup progress go to stderr.
 

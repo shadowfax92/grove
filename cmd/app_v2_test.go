@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"grove/internal/config"
 	"grove/internal/picker"
@@ -305,6 +306,72 @@ func TestRemoveRequiresDiscardAndPrintsMainPath(t *testing.T) {
 	}
 }
 
+func TestRemovePickerSupportsMultipleWorktrees(t *testing.T) {
+	repoPath := initV2Repo(t)
+	firstPath := filepath.Join(t.TempDir(), "first")
+	secondPath := filepath.Join(t.TempDir(), "second")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/first", firstPath)
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/second", secondPath)
+	writeV2Config(t, repoPath, "")
+
+	root := newRootCommand(commandDependencies{
+		getwd:       func() (string, error) { return repoPath, nil },
+		interactive: func() bool { return true },
+		pickMany: func(prompt string, items []picker.Item) ([]string, error) {
+			if prompt != "remove > " || len(items) != 2 {
+				t.Fatalf("picker = %q %#v", prompt, items)
+			}
+			for _, item := range items {
+				if !strings.Contains(item.Label, "created") || strings.Contains(item.Label, item.Key) {
+					t.Fatalf("picker item = %#v, want compact label with creation age", item)
+				}
+			}
+			return []string{canonicalV2Path(t, firstPath), canonicalV2Path(t, secondPath)}, nil
+		},
+	})
+
+	stdout, _, err := executeV2(root, "rm")
+	if err != nil {
+		t.Fatalf("rm error = %v", err)
+	}
+	if got, want := stdout, canonicalV2Path(t, repoPath)+"\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	for _, path := range []string{firstPath, secondPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("worktree remains at %s: %v", path, err)
+		}
+	}
+}
+
+func TestRemoveMultiplePreflightsEveryTargetBeforeDeleting(t *testing.T) {
+	repoPath := initV2Repo(t)
+	firstPath := filepath.Join(t.TempDir(), "first")
+	secondPath := filepath.Join(t.TempDir(), "second")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/first", firstPath)
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/second", secondPath)
+	initV2RepoAt(t, filepath.Join(secondPath, "nested"))
+	writeV2Config(t, repoPath, "")
+
+	root := newRootCommand(commandDependencies{
+		getwd:       func() (string, error) { return repoPath, nil },
+		interactive: func() bool { return true },
+		pickMany: func(string, []picker.Item) ([]string, error) {
+			return []string{canonicalV2Path(t, firstPath), canonicalV2Path(t, secondPath)}, nil
+		},
+	})
+
+	_, _, err := executeV2(root, "rm", "--discard")
+	if err == nil || !strings.Contains(err.Error(), "nested Git repository") {
+		t.Fatalf("rm error = %v, want nested-repository refusal", err)
+	}
+	for _, path := range []string{firstPath, secondPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("worktree was removed before preflight completed: %s: %v", path, err)
+		}
+	}
+}
+
 func TestRemoveExactPathPreservesTrailingWhitespace(t *testing.T) {
 	repoPath := initV2Repo(t)
 	base := t.TempDir()
@@ -524,6 +591,108 @@ func TestListJSONIsVersionedAndStatusIsOptIn(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "\"dirty\": true") {
 		t.Fatalf("status JSON = %s", stdout)
+	}
+}
+
+func TestListOmitsWorktreePaths(t *testing.T) {
+	repoPath := initV2Repo(t)
+	linkedPath := filepath.Join(t.TempDir(), "linked")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/compact", linkedPath)
+	writeV2Config(t, repoPath, "")
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+
+	stdout, _, err := executeV2(root, "list")
+	if err != nil {
+		t.Fatalf("list error = %v", err)
+	}
+	if !strings.Contains(stdout, "feat/compact") {
+		t.Fatalf("stdout = %q, want branch", stdout)
+	}
+	if canonicalPath := canonicalV2Path(t, linkedPath); strings.Contains(stdout, canonicalPath) {
+		t.Fatalf("stdout = %q, contains worktree path %q", stdout, canonicalPath)
+	}
+}
+
+func TestListShowsLinkedWorktreeCreationAge(t *testing.T) {
+	repoPath := initV2Repo(t)
+	linkedPath := filepath.Join(t.TempDir(), "linked")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/aged", linkedPath)
+	createdAt := time.Now().Add(-26 * time.Hour)
+	if err := os.Chtimes(filepath.Join(linkedPath, ".git"), createdAt, createdAt); err != nil {
+		t.Fatal(err)
+	}
+	writeV2Config(t, repoPath, "")
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+
+	stdout, _, err := executeV2(root, "list")
+	if err != nil {
+		t.Fatalf("list error = %v", err)
+	}
+	if !strings.Contains(stdout, "feat/aged  created 1d ago") {
+		t.Fatalf("stdout = %q, want creation age", stdout)
+	}
+}
+
+func TestListColorsOnlyHumanOutput(t *testing.T) {
+	repoPath := initV2Repo(t)
+	linkedPath := filepath.Join(t.TempDir(), "linked")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/color", linkedPath)
+	writeV2Config(t, repoPath, "")
+
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+	colored, _, err := executeV2(root, "--color=always", "list")
+	if err != nil {
+		t.Fatalf("colored list error = %v", err)
+	}
+	if !strings.Contains(colored, "\x1b[1;36mapp\x1b[0m") || !strings.Contains(colored, "\x1b[32mfeat/color\x1b[0m") {
+		t.Fatalf("colored stdout = %q", colored)
+	}
+
+	root = newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+	plain, _, err := executeV2(root, "--color=never", "list")
+	if err != nil {
+		t.Fatalf("plain list error = %v", err)
+	}
+	if strings.Contains(plain, "\x1b[") {
+		t.Fatalf("plain stdout contains ANSI: %q", plain)
+	}
+
+	root = newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+	jsonOutput, _, err := executeV2(root, "--color=always", "--json", "list")
+	if err != nil {
+		t.Fatalf("JSON list error = %v", err)
+	}
+	if strings.Contains(jsonOutput, "\x1b[") || !json.Valid([]byte(jsonOutput)) {
+		t.Fatalf("JSON stdout = %q", jsonOutput)
+	}
+
+	root = newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+	pathOutput, _, err := executeV2(root, "--color=always", "cd", "app:")
+	if err != nil {
+		t.Fatalf("colored path command error = %v", err)
+	}
+	if got, want := pathOutput, canonicalV2Path(t, repoPath)+"\n"; got != want {
+		t.Fatalf("path stdout = %q, want %q", got, want)
+	}
+}
+
+func TestHelpUsesColorMode(t *testing.T) {
+	root := newRootCommand(commandDependencies{})
+	colored, _, err := executeV2(root, "--color=always", "--help")
+	if err != nil {
+		t.Fatalf("colored help error = %v", err)
+	}
+	if !strings.Contains(colored, "\x1b[1;36mUsage:\x1b[0m") || !strings.Contains(colored, "\x1b[32mlist\x1b[0m") {
+		t.Fatalf("colored help = %q", colored)
+	}
+
+	root = newRootCommand(commandDependencies{})
+	plain, _, err := executeV2(root, "--color=never", "--help")
+	if err != nil {
+		t.Fatalf("plain help error = %v", err)
+	}
+	if strings.Contains(plain, "\x1b[") {
+		t.Fatalf("plain help contains ANSI: %q", plain)
 	}
 }
 

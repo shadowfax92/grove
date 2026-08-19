@@ -2,7 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"grove/internal/catalog"
 	"grove/internal/inventory"
@@ -65,21 +68,103 @@ func (a *application) runList(cmd *cobra.Command, includeStatus bool) error {
 		fmt.Fprintln(cmd.OutOrStdout(), "No repositories. Run 'grove new' inside a Git repository.")
 		return nil
 	}
+	style := a.style(cmd.OutOrStdout())
+	now := time.Now()
 	for index, repository := range document.Repositories {
 		if index > 0 {
 			fmt.Fprintln(cmd.OutOrStdout())
 		}
 		aliases := aliasesSuffix(repository.Name, repository.Aliases)
-		fmt.Fprintf(cmd.OutOrStdout(), "%s%s  %s\n", repository.Name, aliases, repository.Path)
+		fmt.Fprintf(cmd.OutOrStdout(), "%s%s  %s\n", style.heading(repository.Name), style.muted(aliases), style.muted(repository.Path))
 		for worktreeIndex, worktree := range repository.Worktrees {
 			connector := "├──"
 			if worktreeIndex == len(repository.Worktrees)-1 {
 				connector = "└──"
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s %-28s %s%s\n", connector, worktreeLabel(worktree), worktree.Path, statusSuffix(worktree))
+			fmt.Fprintf(cmd.OutOrStdout(), "%s %s%s%s\n", style.muted(connector), styledWorktreeLabel(style, worktree), styledStatusSuffix(style, worktree), style.muted(createdSuffix(worktree, now)))
 		}
 	}
 	return nil
+}
+
+func styledWorktreeLabel(style outputStyle, worktree listWorktree) string {
+	label := worktree.Branch
+	if label == "" {
+		label = "@" + shortSHA(worktree.Head)
+	}
+	label = style.branch(label)
+	if worktree.Main {
+		label += style.muted(" [main]")
+	}
+	if worktree.Locked {
+		label += style.attention(" [locked]")
+	}
+	if worktree.Prunable {
+		label += style.danger(" [missing]")
+	}
+	return label
+}
+
+func styledStatusSuffix(style outputStyle, worktree listWorktree) string {
+	if worktree.Dirty == nil && worktree.StatusError == "" {
+		return ""
+	}
+	var labels []string
+	if worktree.Dirty != nil && *worktree.Dirty {
+		labels = append(labels, style.attention("dirty"))
+	}
+	if worktree.Ahead != nil && *worktree.Ahead > 0 {
+		labels = append(labels, style.info(fmt.Sprintf("↑%d", *worktree.Ahead)))
+	}
+	if worktree.Behind != nil && *worktree.Behind > 0 {
+		labels = append(labels, style.info(fmt.Sprintf("↓%d", *worktree.Behind)))
+	}
+	if worktree.StatusError != "" {
+		labels = append(labels, style.danger("status unavailable"))
+	}
+	if len(labels) == 0 {
+		labels = append(labels, style.muted("clean"))
+	}
+	return "  " + style.muted("[") + strings.Join(labels, style.muted(", ")) + style.muted("]")
+}
+
+func createdSuffix(worktree listWorktree, now time.Time) string {
+	if worktree.Main || worktree.Prunable {
+		return ""
+	}
+	label := worktreeCreationLabel(worktree.Path, now)
+	if label == "" {
+		return ""
+	}
+	return "  " + label
+}
+
+func worktreeCreationLabel(path string, now time.Time) string {
+	info, err := os.Stat(filepath.Join(path, ".git"))
+	if err != nil {
+		return ""
+	}
+	age := now.Sub(info.ModTime())
+	if age < time.Minute {
+		return "created just now"
+	}
+	return "created " + relativeAge(age) + " ago"
+}
+
+func relativeAge(age time.Duration) string {
+	if age < 0 {
+		age = 0
+	}
+	switch {
+	case age < time.Minute:
+		return "just now"
+	case age < time.Hour:
+		return fmt.Sprintf("%dm", int(age/time.Minute))
+	case age < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(age/time.Hour))
+	default:
+		return fmt.Sprintf("%dd", int(age/(24*time.Hour)))
+	}
 }
 
 func buildListDocument(cat *catalog.Catalog, inv *inventory.Inventory, includeStatus bool) listDocument {
@@ -140,46 +225,6 @@ func aliasesSuffix(name string, aliases []string) string {
 		return ""
 	}
 	return " (" + strings.Join(others, ", ") + ")"
-}
-
-func worktreeLabel(worktree listWorktree) string {
-	label := worktree.Branch
-	if label == "" {
-		label = "@" + shortSHA(worktree.Head)
-	}
-	if worktree.Main {
-		label += " [main]"
-	}
-	if worktree.Locked {
-		label += " [locked]"
-	}
-	if worktree.Prunable {
-		label += " [missing]"
-	}
-	return label
-}
-
-func statusSuffix(worktree listWorktree) string {
-	if worktree.Dirty == nil && worktree.StatusError == "" {
-		return ""
-	}
-	var labels []string
-	if worktree.Dirty != nil && *worktree.Dirty {
-		labels = append(labels, "dirty")
-	}
-	if worktree.Ahead != nil && *worktree.Ahead > 0 {
-		labels = append(labels, fmt.Sprintf("↑%d", *worktree.Ahead))
-	}
-	if worktree.Behind != nil && *worktree.Behind > 0 {
-		labels = append(labels, fmt.Sprintf("↓%d", *worktree.Behind))
-	}
-	if worktree.StatusError != "" {
-		labels = append(labels, "status unavailable")
-	}
-	if len(labels) == 0 {
-		labels = append(labels, "clean")
-	}
-	return "  [" + strings.Join(labels, ", ") + "]"
 }
 
 func shortSHA(head string) string {

@@ -33,5 +33,5 @@ Git metadata is the only worktree source of truth. Grove has no state file and n
 - Dirty removal requires the explicit `--discard` flag.
 - Worktree removal never falls back to `os.RemoveAll`.
 - Exact selectors never open fzf; omitted selectors require an interactive terminal.
-- Normal stdout remains machine-readable. Warnings and setup output use stderr.
+- Path, JSON, and NUL output remain machine-readable. Human presentation may use terminal-aware color. Warnings and setup output use stderr.
 - Old external worktrees remain supported during migration and are never moved automatically.
