@@ -229,7 +229,7 @@ func (r *Repository) BaseRef(defaultBranch string) (string, error) {
 	if branch == "" {
 		branch = DefaultBranch(r.MainPath)
 	}
-	for _, ref := range []string{"refs/remotes/origin/" + branch, "refs/heads/" + branch} {
+	for _, ref := range []string{"refs/heads/" + branch, "refs/remotes/origin/" + branch} {
 		if r.RefExists(ref) {
 			return ref, nil
 		}

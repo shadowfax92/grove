@@ -88,7 +88,6 @@ func Build(cfg *config.Config, currentDir string) (*Catalog, []Warning) {
 			}
 			kind := strings.TrimSpace(row.Type)
 			if kind != "" && kind != "worktree" {
-				warnings = append(warnings, Warning{Name: name, Path: row.Path, Message: fmt.Sprintf("unsupported type %q", kind)})
 				continue
 			}
 			repo, err := gitx.OpenRepository(row.Path)

@@ -237,6 +237,28 @@ func TestMergedUsesConfiguredDefaultReference(t *testing.T) {
 	}
 }
 
+func TestBaseRefPrefersTheLocalDefaultBranch(t *testing.T) {
+	mainPath := initTestRepo(t)
+	writeCommit(t, mainPath, "base.txt", "base")
+	remotePath := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, mainPath, "init", "--bare", remotePath)
+	runGit(t, mainPath, "remote", "add", "origin", remotePath)
+	runGit(t, mainPath, "push", "-u", "origin", "main")
+	writeCommit(t, mainPath, "local.txt", "local")
+	repo, err := OpenRepository(mainPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.BaseRef("main")
+	if err != nil {
+		t.Fatalf("BaseRef() error = %v", err)
+	}
+	if got != "refs/heads/main" {
+		t.Fatalf("BaseRef() = %q, want local main", got)
+	}
+}
+
 func canonicalTestPath(t *testing.T, path string) string {
 	t.Helper()
 	resolved, err := filepath.EvalSymlinks(path)

@@ -4,143 +4,69 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"grove/internal/picker"
+
 	"github.com/spf13/cobra"
 )
 
 var Version = "dev"
 
-var ErrCancelled = errors.New("")
-
-func helpHeader(s string) string {
-	return lipgloss.NewStyle().Bold(true).Foreground(clrCyan).Render(s)
+type commandDependencies struct {
+	getwd       func() (string, error)
+	interactive func() bool
+	pick        func(string, []picker.Item) (string, error)
 }
 
-func helpCmdCol(s string) string {
-	return lipgloss.NewStyle().Foreground(clrHiGreen).Render(s)
+type application struct {
+	dependencies commandDependencies
+	directory    string
+	noInput      bool
+	jsonOutput   bool
 }
 
-func helpHint(s string) string {
-	return lipgloss.NewStyle().Faint(true).Render(s)
-}
-
-func helpAliases(aliases []string) string {
-	return lipgloss.NewStyle().Foreground(clrYellow).Render(fmt.Sprintf("(aliases: %s)", strings.Join(aliases, ", ")))
-}
-
-var groupOrder = []string{
-	"Workspaces:",
-	"Setup:",
-	"Other:",
-}
-
-func groupedHelp(cmd *cobra.Command) string {
-	groups := map[string][]*cobra.Command{}
-	for _, c := range cmd.Commands() {
-		if !c.IsAvailableCommand() && c.Name() != "help" {
-			continue
-		}
-		g := c.Annotations["group"]
-		if g == "" {
-			g = "Other:"
-		}
-		groups[g] = append(groups[g], c)
+func newRootCommand(dependencies commandDependencies) *cobra.Command {
+	if dependencies.getwd == nil {
+		dependencies.getwd = os.Getwd
 	}
-
-	var b strings.Builder
-	for _, name := range groupOrder {
-		cmds, ok := groups[name]
-		if !ok {
-			continue
-		}
-		b.WriteString("\n" + helpHeader(name) + "\n")
-		for _, c := range cmds {
-			line := "  " + helpCmdCol(fmt.Sprintf("%-12s", c.Name())) + " " + c.Short
-			if len(c.Aliases) > 0 {
-				line += " " + helpAliases(c.Aliases)
-			}
-			b.WriteString(line + "\n")
-		}
+	if dependencies.interactive == nil {
+		dependencies.interactive = picker.Interactive
 	}
-	return b.String()
-}
-
-const usageTemplate = `{{helpHeader "Usage:"}}{{if .Runnable}}
-  {{.UseLine}}{{end}}{{if .HasAvailableSubCommands}}
-  {{.CommandPath}} [command]{{end}}{{if gt (len .Aliases) 0}}
-
-{{helpHeader "Aliases:"}}
-  {{.NameAndAliases}}{{end}}{{if .HasExample}}
-
-{{helpHeader "Examples:"}}
-{{.Example}}{{end}}{{if .HasAvailableSubCommands}}
-{{groupedHelp .}}{{end}}{{if .HasAvailableLocalFlags}}
-
-{{helpHeader "Flags:"}}
-{{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}{{if .HasAvailableInheritedFlags}}
-
-{{helpHeader "Global Flags:"}}
-{{.InheritedFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}{{if .HasAvailableSubCommands}}
-
-{{helpHint (printf "Use \"%s [command] --help\" for more information." .CommandPath)}}{{end}}
-`
-
-var rootCmd = &cobra.Command{
-	Use:           "grove",
-	Short:         "Tmux workspaces powered by git worktrees",
-	Version:       Version,
-	SilenceUsage:  true,
-	SilenceErrors: true,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runRootDefault(args)
-	},
-}
-
-var runRootDefault = func(args []string) error {
-	if err := cdCmd.Args(cdCmd, args); err != nil {
-		return err
+	if dependencies.pick == nil {
+		dependencies.pick = picker.Select
 	}
-	return cdCmd.RunE(cdCmd, args)
-}
-
-func init() {
-	cobra.AddTemplateFunc("helpHeader", helpHeader)
-	cobra.AddTemplateFunc("helpCmdCol", helpCmdCol)
-	cobra.AddTemplateFunc("helpAliases", helpAliases)
-	cobra.AddTemplateFunc("helpHint", helpHint)
-	cobra.AddTemplateFunc("groupedHelp", groupedHelp)
-
-	rootCmd.SetUsageTemplate(usageTemplate)
+	app := &application{dependencies: dependencies}
+	root := &cobra.Command{
+		Use:           "grove [selector]",
+		Short:         "Git worktrees rooted with their repositories",
+		Version:       Version,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Args:          cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return app.runNavigate(cmd, args)
+		},
+	}
+	root.PersistentFlags().StringVarP(&app.directory, "directory", "C", "", "Run as if started in this directory")
+	root.PersistentFlags().BoolVar(&app.noInput, "no-input", false, "Never open an interactive picker")
+	root.PersistentFlags().BoolVar(&app.jsonOutput, "json", false, "Print versioned JSON")
+	root.AddCommand(
+		app.cdCommand(),
+		app.configCommand(),
+		app.listCommand(),
+		app.newCommand(),
+		app.removeCommand(),
+	)
+	return root
 }
 
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		if errors.Is(err, ErrCancelled) {
-			os.Exit(0)
+	root := newRootCommand(commandDependencies{})
+	if err := root.Execute(); err != nil {
+		if errors.Is(err, picker.ErrCancelled) {
+			return
 		}
-		if code, ok := exitCodeForError(err); ok {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(code)
-		}
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(root.ErrOrStderr(), err)
 		os.Exit(1)
-	}
-}
-
-const (
-	exitRemovePathNotFound = 3
-	exitRemoveFailed       = 4
-)
-
-func exitCodeForError(err error) (int, bool) {
-	switch {
-	case errors.Is(err, ErrRemovePathNotFound):
-		return exitRemovePathNotFound, true
-	case errors.Is(err, ErrRemoveFailed):
-		return exitRemoveFailed, true
-	default:
-		return 0, false
 	}
 }

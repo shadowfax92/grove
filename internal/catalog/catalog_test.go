@@ -50,7 +50,7 @@ func TestBuildDeduplicatesRepositoryAndPreservesProfiles(t *testing.T) {
 	}
 }
 
-func TestBuildWarnsAndContinuesPastInvalidEntries(t *testing.T) {
+func TestBuildWarnsPastInvalidEntriesAndSilentlyIgnoresLegacyTypes(t *testing.T) {
 	repoPath := initCatalogRepo(t)
 	cfg := &config.Config{Repos: []config.RepoConfig{
 		{Path: filepath.Join(t.TempDir(), "deleted"), Name: "deleted"},
@@ -62,14 +62,11 @@ func TestBuildWarnsAndContinuesPastInvalidEntries(t *testing.T) {
 	if len(got.Repositories) != 1 || got.Repositories[0].Name != "valid" {
 		t.Fatalf("Repositories = %#v, want valid repo", got.Repositories)
 	}
-	if len(warnings) != 2 {
-		t.Fatalf("warnings = %#v, want 2", warnings)
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %#v, want 1", warnings)
 	}
-	joined := warnings[0].Error() + "\n" + warnings[1].Error()
-	for _, want := range []string{"deleted", "unsupported type \"dir\""} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("warnings = %q, want %q", joined, want)
-		}
+	if !strings.Contains(warnings[0].Error(), "deleted") {
+		t.Fatalf("warnings = %q, want deleted entry", warnings[0].Error())
 	}
 }
 
