@@ -1,27 +1,24 @@
 package git
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 )
 
-// pruneMu serializes `git worktree prune`. Removing distinct worktrees in
-// parallel is safe (each touches its own $GIT_DIR/worktrees/<id>), but prune
-// rewrites the repo-wide worktrees listing, so two firing at once — when several
-// removals hit this fallback concurrently — can race each other.
-var pruneMu sync.Mutex
-
 type WorktreeInfo struct {
-	Path     string
-	Branch   string
-	Head     string
-	Bare     bool
-	Prunable bool
+	Path           string
+	Branch         string
+	Head           string
+	Bare           bool
+	Detached       bool
+	Locked         bool
+	LockReason     string
+	Prunable       bool
+	PrunableReason string
+	Main           bool
 }
 
 func AddWorktree(repoPath, destPath, branch string) error {
@@ -214,56 +211,21 @@ func HeadShortSha(dir string) string {
 }
 
 func RemoveWorktree(repoPath, worktreePath string) error {
-	cmd := exec.Command("git", "worktree", "remove", worktreePath, "--force")
-	cmd.Dir = repoPath
-	if _, err := cmd.CombinedOutput(); err != nil {
-		if err := os.RemoveAll(worktreePath); err != nil {
-			return fmt.Errorf("removing worktree directory: %w", err)
-		}
-		pruneMu.Lock()
-		pruneCmd := exec.Command("git", "worktree", "prune")
-		pruneCmd.Dir = repoPath
-		_ = pruneCmd.Run()
-		pruneMu.Unlock()
+	repo, err := OpenRepository(repoPath)
+	if err != nil {
+		return err
 	}
-	return nil
+	return repo.RemoveWorktree(worktreePath, true)
 }
 
 func ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
-	cmd := exec.Command("git", "worktree", "list", "--porcelain")
+	cmd := exec.Command("git", "worktree", "list", "--porcelain", "-z")
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("git worktree list: %s (%w)", strings.TrimSpace(string(out)), err)
 	}
-
-	var worktrees []WorktreeInfo
-	scanner := bufio.NewScanner(strings.NewReader(string(out)))
-	var current WorktreeInfo
-	for scanner.Scan() {
-		line := scanner.Text()
-		switch {
-		case strings.HasPrefix(line, "worktree "):
-			if current.Path != "" {
-				worktrees = append(worktrees, current)
-			}
-			current = WorktreeInfo{Path: strings.TrimPrefix(line, "worktree ")}
-		case strings.HasPrefix(line, "HEAD "):
-			current.Head = strings.TrimPrefix(line, "HEAD ")
-		case strings.HasPrefix(line, "branch "):
-			ref := strings.TrimPrefix(line, "branch ")
-			current.Branch = strings.TrimPrefix(ref, "refs/heads/")
-		case line == "bare":
-			current.Bare = true
-		case strings.HasPrefix(line, "prunable"):
-			current.Prunable = true
-		}
-	}
-	if current.Path != "" {
-		worktrees = append(worktrees, current)
-	}
-
-	return worktrees, nil
+	return parseWorktreesPorcelain(out), nil
 }
 
 func EnsureGitignore(repoPath string) error {
