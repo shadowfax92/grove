@@ -137,21 +137,21 @@ func AddRepoToFile(path string, repo RepoConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, updated, 0644); err != nil {
+	if err := writeFileAtomic(path, updated); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 	return nil
 }
 
 func Load() (*Config, error) {
-	return load(true)
+	return load()
 }
 
 func LoadFast() (*Config, error) {
-	return load(false)
+	return load()
 }
 
-func load(validate bool) (*Config, error) {
+func load() (*Config, error) {
 	path, err := DefaultConfigPath()
 	if err != nil {
 		return nil, err
@@ -172,12 +172,6 @@ func load(validate bool) (*Config, error) {
 
 	if err := cfg.resolve(); err != nil {
 		return nil, err
-	}
-
-	if validate {
-		if err := cfg.validate(); err != nil {
-			return nil, err
-		}
 	}
 
 	return &cfg, nil
@@ -226,29 +220,6 @@ func (c *Config) EffectiveWorktreeRoot(repo *RepoConfig) string {
 		return ""
 	}
 	return filepath.Join(c.WorktreeRoot, name)
-}
-
-func (c *Config) validate() error {
-	seen := make(map[string]bool)
-	for _, r := range c.Repos {
-		if seen[r.Name] {
-			return fmt.Errorf("duplicate repo name: %s", r.Name)
-		}
-		seen[r.Name] = true
-
-		if r.Type == "plain" {
-			continue
-		}
-
-		info, err := os.Stat(r.Path)
-		if err != nil {
-			return fmt.Errorf("repo %s: path %s does not exist", r.Name, r.Path)
-		}
-		if !info.IsDir() {
-			return fmt.Errorf("repo %s: path %s is not a directory", r.Name, r.Path)
-		}
-	}
-	return nil
 }
 
 func (c *Config) FindRepo(name string) *RepoConfig {
@@ -459,6 +430,31 @@ func yamlScalar(value string) string {
 		return value
 	}
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".grove-config-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0644); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func isPlainYAMLScalar(value string) bool {

@@ -198,6 +198,27 @@ func TestLoadExpandsWorktreeRoots(t *testing.T) {
 	}
 }
 
+func TestLoadKeepsMissingRepositoriesForTolerantCatalog(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	missing := filepath.Join(home, "deleted-repository")
+	configPath := filepath.Join(home, ".config", "grove", "config.yaml")
+	writeConfigFile(t, configPath, strings.Join([]string{
+		"repos:",
+		"  - path: " + missing,
+		"    name: deleted",
+		"",
+	}, "\n"))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want tolerant parse", err)
+	}
+	if len(cfg.Repos) != 1 || cfg.Repos[0].Path != missing {
+		t.Fatalf("Repos = %#v, want missing entry preserved", cfg.Repos)
+	}
+}
+
 func TestEffectiveWorktreeRoot(t *testing.T) {
 	cfg := &Config{WorktreeRoot: "/tmp/worktrees"}
 	repo := &RepoConfig{Name: "project", Path: "/tmp/project"}
