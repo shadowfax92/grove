@@ -214,9 +214,14 @@ func (r *Repository) resolveWorktreePath(branch string) (string, bool, []Worktre
 }
 
 func (r *Repository) RemoveWorktree(path string, discard bool) error {
-	target, err := r.validateWorktreeRemoval(path)
+	target, err := r.validateWorktreeRemoval(path, discard)
 	if err != nil {
 		return err
+	}
+	if discard {
+		if err := r.repairWorktreeGitFileIfNeeded(target); err != nil {
+			return err
+		}
 	}
 	args := []string{"worktree", "remove"}
 	if discard {
@@ -229,17 +234,71 @@ func (r *Repository) RemoveWorktree(path string, discard bool) error {
 	return nil
 }
 
+func (r *Repository) repairWorktreeGitFileIfNeeded(target string) error {
+	gitDirRaw, err := runGitText(target, "rev-parse", "--path-format=absolute", "--git-dir")
+	if err == nil {
+		gitDir, resolveErr := canonicalPath(strings.TrimSpace(gitDirRaw))
+		if resolveErr == nil && r.worktreeAdminTargets(gitDir, target) {
+			return nil
+		}
+	}
+
+	adminRoot := filepath.Join(r.CommonDir, "worktrees")
+	entries, err := os.ReadDir(adminRoot)
+	if err != nil {
+		return fmt.Errorf("repairing worktree registration: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		adminDir := filepath.Join(adminRoot, entry.Name())
+		if !r.worktreeAdminTargets(adminDir, target) {
+			continue
+		}
+		pointer := []byte("gitdir: " + adminDir + "\n")
+		gitFile := filepath.Join(target, ".git")
+		info, err := os.Lstat(gitFile)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("repairing worktree registration: %w", err)
+		}
+		if err == nil && info.Mode()&os.ModeSymlink != 0 {
+			if err := os.Remove(gitFile); err != nil {
+				return fmt.Errorf("repairing worktree registration: %w", err)
+			}
+		}
+		if err := os.WriteFile(gitFile, pointer, 0644); err != nil {
+			return fmt.Errorf("repairing worktree registration: %w", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("repairing worktree registration: no administrative directory found for %s", target)
+}
+
+func (r *Repository) worktreeAdminTargets(adminDir, target string) bool {
+	relative, err := filepath.Rel(filepath.Join(r.CommonDir, "worktrees"), adminDir)
+	if err != nil || relative == "." || filepath.Dir(relative) != "." {
+		return false
+	}
+	gitdir, err := os.ReadFile(filepath.Join(adminDir, "gitdir"))
+	if err != nil {
+		return false
+	}
+	registeredPath, err := canonicalPath(filepath.Dir(strings.TrimSpace(string(gitdir))))
+	return err == nil && samePath(registeredPath, target)
+}
+
 func (r *Repository) PruneWorktrees() error {
 	_, err := runGitText(r.MainPath, "worktree", "prune", "--expire", "now")
 	return err
 }
 
-func (r *Repository) ValidateWorktreeRemoval(path string) error {
-	_, err := r.validateWorktreeRemoval(path)
+func (r *Repository) ValidateWorktreeRemoval(path string, discard bool) error {
+	_, err := r.validateWorktreeRemoval(path, discard)
 	return err
 }
 
-func (r *Repository) validateWorktreeRemoval(path string) (string, error) {
+func (r *Repository) validateWorktreeRemoval(path string, discard bool) (string, error) {
 	target, err := canonicalPath(path)
 	if err != nil {
 		return "", fmt.Errorf("resolving worktree path: %w", err)
@@ -275,12 +334,14 @@ func (r *Repository) validateWorktreeRemoval(path string) (string, error) {
 			return "", fmt.Errorf("refusing to remove %s because it contains registered worktree %s", target, worktree.Path)
 		}
 	}
-	nested, err := nestedGitRepository(target)
-	if err != nil {
-		return "", fmt.Errorf("checking for nested Git repositories: %w", err)
-	}
-	if nested != "" {
-		return "", fmt.Errorf("refusing to remove %s because it contains nested Git repository %s", target, nested)
+	if !discard {
+		nested, err := nestedGitRepository(target)
+		if err != nil {
+			return "", fmt.Errorf("checking for nested Git repositories: %w", err)
+		}
+		if nested != "" {
+			return "", fmt.Errorf("refusing to remove %s because it contains nested Git repository %s", target, nested)
+		}
 	}
 	return target, nil
 }

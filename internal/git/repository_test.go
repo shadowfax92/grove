@@ -338,7 +338,7 @@ func TestRemoveWorktreeRefusesNestedBareRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = repo.RemoveWorktree(parentPath, true)
+	err = repo.RemoveWorktree(parentPath, false)
 	if err == nil || !strings.Contains(err.Error(), "nested Git repository") {
 		t.Fatalf("RemoveWorktree() error = %v, want nested-repository refusal", err)
 	}

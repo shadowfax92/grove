@@ -350,7 +350,7 @@ func TestRemoveMultiplePreflightsEveryTargetBeforeDeleting(t *testing.T) {
 	secondPath := filepath.Join(t.TempDir(), "second")
 	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/first", firstPath)
 	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/second", secondPath)
-	initV2RepoAt(t, filepath.Join(secondPath, "nested"))
+	runV2Git(t, repoPath, "worktree", "lock", "--reason", "active agent", secondPath)
 	writeV2Config(t, repoPath, "")
 
 	root := newRootCommand(commandDependencies{
@@ -362,13 +362,113 @@ func TestRemoveMultiplePreflightsEveryTargetBeforeDeleting(t *testing.T) {
 	})
 
 	_, _, err := executeV2(root, "rm", "--discard")
-	if err == nil || !strings.Contains(err.Error(), "nested Git repository") {
-		t.Fatalf("rm error = %v, want nested-repository refusal", err)
+	if err == nil || !strings.Contains(err.Error(), "locked") {
+		t.Fatalf("rm error = %v, want locked-worktree refusal", err)
 	}
 	for _, path := range []string{firstPath, secondPath} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("worktree was removed before preflight completed: %s: %v", path, err)
 		}
+	}
+}
+
+func TestRemoveDiscardRemovesUnregisteredNestedRepository(t *testing.T) {
+	repoPath := initV2Repo(t)
+	linkedPath := filepath.Join(t.TempDir(), "linked")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/linked", linkedPath)
+	nestedPath := filepath.Join(linkedPath, "nested")
+	initV2RepoAt(t, nestedPath)
+	writeV2Config(t, repoPath, "")
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+
+	_, _, err := executeV2(root, "rm", "--discard", "feat/linked")
+	if err != nil {
+		t.Fatalf("rm --discard error = %v", err)
+	}
+	if _, err := os.Stat(linkedPath); !os.IsNotExist(err) {
+		t.Fatalf("worktree remains: %v", err)
+	}
+	runV2Git(t, repoPath, "show-ref", "--verify", "refs/heads/feat/linked")
+}
+
+func TestRemoveDiscardRemovesWorktreeWithStaleGitPointer(t *testing.T) {
+	repoPath := initV2Repo(t)
+	linkedPath := filepath.Join(t.TempDir(), "linked")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/linked", linkedPath)
+	if err := os.WriteFile(filepath.Join(linkedPath, ".git"), []byte("gitdir: /path/that/no-longer-exists\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	canonicalLinkedPath := canonicalV2Path(t, linkedPath)
+	writeV2Config(t, repoPath, "")
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+
+	_, _, err := executeV2(root, "rm", "--discard", "feat/linked")
+	if err != nil {
+		t.Fatalf("rm --discard error = %v", err)
+	}
+	if _, err := os.Stat(linkedPath); !os.IsNotExist(err) {
+		t.Fatalf("worktree remains: %v", err)
+	}
+	if listing := v2GitOutput(t, repoPath, "worktree", "list", "--porcelain"); strings.Contains(listing, canonicalLinkedPath) {
+		t.Fatalf("worktree registration remains:\n%s", listing)
+	}
+}
+
+func TestRemoveDiscardRepairsMisdirectedGitPointer(t *testing.T) {
+	repoPath := initV2Repo(t)
+	firstPath := filepath.Join(t.TempDir(), "first")
+	secondPath := filepath.Join(t.TempDir(), "second")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/first", firstPath)
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/second", secondPath)
+	secondGitFile, err := os.ReadFile(filepath.Join(secondPath, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(firstPath, ".git"), secondGitFile, 0644); err != nil {
+		t.Fatal(err)
+	}
+	writeV2Config(t, repoPath, "")
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+
+	_, _, err = executeV2(root, "rm", "--discard", "feat/first")
+	if err != nil {
+		t.Fatalf("rm --discard error = %v", err)
+	}
+	if _, err := os.Stat(firstPath); !os.IsNotExist(err) {
+		t.Fatalf("first worktree remains: %v", err)
+	}
+	if _, err := os.Stat(secondPath); err != nil {
+		t.Fatalf("second worktree was removed: %v", err)
+	}
+}
+
+func TestRemoveDiscardDoesNotFollowStaleGitFileSymlink(t *testing.T) {
+	repoPath := initV2Repo(t)
+	linkedPath := filepath.Join(t.TempDir(), "linked")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/linked", linkedPath)
+	externalPath := filepath.Join(t.TempDir(), "external")
+	if err := os.WriteFile(externalPath, []byte("outside"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(linkedPath, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(externalPath, filepath.Join(linkedPath, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	writeV2Config(t, repoPath, "")
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+
+	_, _, err := executeV2(root, "rm", "--discard", "feat/linked")
+	if err != nil {
+		t.Fatalf("rm --discard error = %v", err)
+	}
+	contents, err := os.ReadFile(externalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "outside" {
+		t.Fatalf("external file = %q, want unchanged", contents)
 	}
 }
 
@@ -567,6 +667,60 @@ func TestRemoveOlderThanRequiresDiscardButNeverOverridesLocks(t *testing.T) {
 		t.Fatalf("locked worktree removed: %v", err)
 	}
 	runV2Git(t, repoPath, "show-ref", "--verify", "refs/heads/feat/dirty-old")
+}
+
+func TestRemoveOlderThanDiscardRemovesUnregisteredNestedRepository(t *testing.T) {
+	repoPath := initV2Repo(t)
+	oldPath := filepath.Join(t.TempDir(), "old")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/old", oldPath)
+	initV2RepoAt(t, filepath.Join(oldPath, "nested"))
+	createdAt := time.Now().Add(-15 * 24 * time.Hour)
+	if err := os.Chtimes(filepath.Join(oldPath, ".git"), createdAt, createdAt); err != nil {
+		t.Fatal(err)
+	}
+	writeV2Config(t, repoPath, "")
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+
+	stdout, stderr, err := executeV2(root, "rm", "--older-than", "14d", "--discard")
+	if err != nil {
+		t.Fatalf("rm --older-than --discard error = %v", err)
+	}
+	if !strings.Contains(stdout, "feat/old") || strings.Contains(stderr, "unsafe") {
+		t.Fatalf("stdout = %q, stderr = %q", stdout, stderr)
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("worktree remains: %v", err)
+	}
+}
+
+func TestRemoveOlderThanDiscardRemovesWorktreeWithStaleGitPointer(t *testing.T) {
+	repoPath := initV2Repo(t)
+	oldPath := filepath.Join(t.TempDir(), "old")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/old", oldPath)
+	if err := os.WriteFile(filepath.Join(oldPath, ".git"), []byte("gitdir: /path/that/no-longer-exists\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	createdAt := time.Now().Add(-15 * 24 * time.Hour)
+	if err := os.Chtimes(filepath.Join(oldPath, ".git"), createdAt, createdAt); err != nil {
+		t.Fatal(err)
+	}
+	canonicalOldPath := canonicalV2Path(t, oldPath)
+	writeV2Config(t, repoPath, "")
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+
+	stdout, stderr, err := executeV2(root, "rm", "--older-than", "14d", "--discard")
+	if err != nil {
+		t.Fatalf("rm --older-than --discard error = %v", err)
+	}
+	if !strings.Contains(stdout, "feat/old") || strings.Contains(stderr, "unsafe") {
+		t.Fatalf("stdout = %q, stderr = %q", stdout, stderr)
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("worktree remains: %v", err)
+	}
+	if listing := v2GitOutput(t, repoPath, "worktree", "list", "--porcelain"); strings.Contains(listing, canonicalOldPath) {
+		t.Fatalf("worktree registration remains:\n%s", listing)
+	}
 }
 
 func TestRemoveOlderThanScansEveryConfiguredRepository(t *testing.T) {

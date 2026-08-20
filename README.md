@@ -36,7 +36,7 @@ grove list                    # Git-backed repository/worktree tree
 grove rm .                    # remove the current clean worktree
 grove rm                      # pick one or more worktrees with fzf
 grove rm feat/auth fix/login  # remove several exact worktrees
-grove rm --discard .          # explicitly discard dirty files
+grove rm --discard .          # discard every unprotected worktree file
 grove rm --merged --dry-run   # preview conservative bulk cleanup
 grove rm --merged             # remove clean merged worktrees
 grove rm --older-than 14d     # remove old clean worktrees, merged or not
@@ -160,13 +160,14 @@ Removal refuses:
 - the main worktree;
 - locked worktrees;
 - dirty worktrees unless `--discard` is present;
-- targets that contain another Git repository or worktree, registered or not.
+- targets that contain a registered worktree or configured repository;
+- targets that contain an unregistered Git repository unless `--discard` is present.
 
 With no selector, `grove rm` opens a multi-select picker. Use Tab or Shift-Tab to select worktrees and Enter to confirm. Grove validates the entire selection before deleting any target. Multiple exact selectors use the same all-target preflight.
 
-`--discard` deliberately has no shorthand. Grove keeps the branch after removing its worktree.
+`--discard` deliberately has no shorthand. It authorizes deleting uncommitted files, ignored output, submodules, and unregistered nested repositories. It never overrides main-worktree, lock, current-worktree bulk cleanup, or registered-descendant protections. Grove keeps the branch after removing its worktree.
 
-Bulk removal considers every configured repository and always protects main, locked, current, detached, and nested worktrees:
+Bulk removal considers every configured repository and always protects main, locked, current, detached, and registered nested worktrees:
 
 - `--merged` removes clean worktrees whose branch tip is an ancestor of the configured default branch. It is intentionally conservative: squash-merged branches may remain because Git ancestry cannot prove that merge.
 - `--older-than 14d` removes worktrees by creation age without considering merge state. Supported units are minutes (`m`), hours (`h`), days (`d`), and weeks (`w`). Dirty worktrees are skipped unless `--discard` is present.
@@ -174,7 +175,7 @@ Bulk removal considers every configured repository and always protects main, loc
 
 Use `--dry-run` with any bulk mode to inspect the exact candidates first. Age cleanup shows the same creation ages as `grove list` and summarizes protected worktrees it skipped. All removal modes keep the underlying branches.
 
-Deletion goes through `git worktree remove`. Grove never falls back to recursive filesystem deletion.
+Deletion goes through `git worktree remove`. With `--discard`, Grove repairs stale linked-worktree pointers from Git's administrative records before retrying removal. It never falls back to recursive filesystem deletion.
 
 ### Configure
 
