@@ -76,9 +76,15 @@ func (a *application) runList(cmd *cobra.Command, includeStatus bool) error {
 		}
 		aliases := aliasesSuffix(repository.Name, repository.Aliases)
 		fmt.Fprintf(cmd.OutOrStdout(), "%s%s  %s\n", style.heading(repository.Name), style.muted(aliases), style.muted(repository.Path))
-		for worktreeIndex, worktree := range repository.Worktrees {
+		worktrees := make([]listWorktree, 0, len(repository.Worktrees))
+		for _, worktree := range repository.Worktrees {
+			if !worktree.Main {
+				worktrees = append(worktrees, worktree)
+			}
+		}
+		for worktreeIndex, worktree := range worktrees {
 			connector := "├──"
-			if worktreeIndex == len(repository.Worktrees)-1 {
+			if worktreeIndex == len(worktrees)-1 {
 				connector = "└──"
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s %s%s%s\n", style.muted(connector), styledWorktreeLabel(style, worktree), styledStatusSuffix(style, worktree), style.muted(createdSuffix(worktree, now)))

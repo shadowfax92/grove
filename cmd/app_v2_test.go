@@ -966,6 +966,9 @@ func TestListJSONIsVersionedAndStatusIsOptIn(t *testing.T) {
 	if withoutStatus["version"] != float64(1) {
 		t.Fatalf("version = %#v", withoutStatus["version"])
 	}
+	if !strings.Contains(stdout, `"main": true`) {
+		t.Fatalf("JSON omitted main worktree: %s", stdout)
+	}
 	if strings.Contains(stdout, "\"dirty\"") {
 		t.Fatalf("default JSON unexpectedly contains status: %s", stdout)
 	}
@@ -996,6 +999,25 @@ func TestListOmitsWorktreePaths(t *testing.T) {
 	}
 	if canonicalPath := canonicalV2Path(t, linkedPath); strings.Contains(stdout, canonicalPath) {
 		t.Fatalf("stdout = %q, contains worktree path %q", stdout, canonicalPath)
+	}
+}
+
+func TestListHidesMainWorktree(t *testing.T) {
+	repoPath := initV2Repo(t)
+	linkedPath := filepath.Join(t.TempDir(), "linked")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/visible", linkedPath)
+	writeV2Config(t, repoPath, "")
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+
+	stdout, _, err := executeV2(root, "list")
+	if err != nil {
+		t.Fatalf("list error = %v", err)
+	}
+	if strings.Contains(stdout, "[main]") || strings.Contains(stdout, "── main") {
+		t.Fatalf("stdout = %q, contains redundant main worktree", stdout)
+	}
+	if !strings.Contains(stdout, "└── feat/visible") {
+		t.Fatalf("stdout = %q, want linked worktree", stdout)
 	}
 }
 
