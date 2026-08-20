@@ -1084,6 +1084,37 @@ func TestListShowsLinkedWorktreeCreationAge(t *testing.T) {
 	}
 }
 
+func TestListSortsLinkedWorktreesNewestFirst(t *testing.T) {
+	repoPath := initV2Repo(t)
+	worktreeRoot := t.TempDir()
+	olderPath := filepath.Join(worktreeRoot, "a-older")
+	newerPath := filepath.Join(worktreeRoot, "z-newer")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/older", olderPath)
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/newer", newerPath)
+
+	now := time.Now()
+	for path, createdAt := range map[string]time.Time{
+		olderPath: now.Add(-3 * time.Hour),
+		newerPath: now.Add(-30 * time.Minute),
+	} {
+		if err := os.Chtimes(filepath.Join(path, ".git"), createdAt, createdAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeV2Config(t, repoPath, "")
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+
+	stdout, _, err := executeV2(root, "list")
+	if err != nil {
+		t.Fatalf("list error = %v", err)
+	}
+	newerIndex := strings.Index(stdout, "feat/newer")
+	olderIndex := strings.Index(stdout, "feat/older")
+	if newerIndex == -1 || olderIndex == -1 || newerIndex > olderIndex {
+		t.Fatalf("stdout = %q, want newer worktree before older worktree", stdout)
+	}
+}
+
 func TestListColorsOnlyHumanOutput(t *testing.T) {
 	repoPath := initV2Repo(t)
 	linkedPath := filepath.Join(t.TempDir(), "linked")

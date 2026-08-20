@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -81,6 +82,7 @@ func (a *application) runList(cmd *cobra.Command, includeStatus bool) error {
 		if len(worktrees) == 0 {
 			continue
 		}
+		sortWorktreesNewestFirst(worktrees)
 		if shownRepositories > 0 {
 			fmt.Fprintln(cmd.OutOrStdout())
 		}
@@ -99,6 +101,29 @@ func (a *application) runList(cmd *cobra.Command, includeStatus bool) error {
 		fmt.Fprintln(cmd.OutOrStdout(), "No linked worktrees.")
 	}
 	return nil
+}
+
+func sortWorktreesNewestFirst(worktrees []listWorktree) {
+	// Git has no worktree creation field. Grove uses the linked worktree's .git
+	// mtime for age labels and cleanup, so the human list must use that same proxy.
+	// Entries without readable metadata stay in Git's order after dated entries.
+	createdAt := make(map[string]time.Time, len(worktrees))
+	for _, worktree := range worktrees {
+		if timestamp, ok := worktreeCreatedAt(worktree.Path); ok {
+			createdAt[worktree.Path] = timestamp
+		}
+	}
+	sort.SliceStable(worktrees, func(left, right int) bool {
+		leftCreatedAt, leftKnown := createdAt[worktrees[left].Path]
+		rightCreatedAt, rightKnown := createdAt[worktrees[right].Path]
+		if leftKnown != rightKnown {
+			return leftKnown
+		}
+		if !leftKnown {
+			return false
+		}
+		return leftCreatedAt.After(rightCreatedAt)
+	})
 }
 
 func styledWorktreeLabel(style outputStyle, worktree listWorktree) string {
