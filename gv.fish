@@ -12,6 +12,16 @@ function __gv_flag_enabled
     test "$enabled" = true
 end
 
+function __gv_option_present
+    set -l name $argv[1]
+    for argument in $argv[2..]
+        if test "$argument" = "$name"; or string match -q -- "$name=*" "$argument"
+            return 0
+        end
+    end
+    return 1
+end
+
 function gv
     if test (count $argv) -eq 0
         set -l path (grove --null | string split0)
@@ -47,7 +57,7 @@ function gv
             test -n "$path"
             and builtin cd -- $path
         case rm
-            if __gv_flag_enabled --merged $rest; or __gv_flag_enabled --dry-run $rest
+            if __gv_flag_enabled --merged $rest; or __gv_flag_enabled --missing $rest; or __gv_option_present --older-than $rest; or __gv_flag_enabled --dry-run $rest
                 grove rm $rest
                 return $status
             end

@@ -31,6 +31,8 @@ Git metadata is the only worktree source of truth. Grove has no state file and n
 - Repository identity comes from the canonical Git common directory, including when invoked inside a linked worktree.
 - Main and locked worktrees are never removable.
 - Dirty removal requires the explicit `--discard` flag.
+- Age-based cleanup ignores merge state, keeps branches, and preserves the same main, lock, current-worktree, and nesting protections as exact removal.
+- Missing cleanup prunes stale Git registrations and keeps branches.
 - Worktree removal never falls back to `os.RemoveAll`.
 - Exact selectors never open fzf; omitted selectors require an interactive terminal.
 - Path, JSON, and NUL output remain machine-readable. Human presentation may use terminal-aware color. Warnings and setup output use stderr.

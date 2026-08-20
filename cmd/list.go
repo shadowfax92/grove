@@ -140,15 +140,23 @@ func createdSuffix(worktree listWorktree, now time.Time) string {
 }
 
 func worktreeCreationLabel(path string, now time.Time) string {
-	info, err := os.Stat(filepath.Join(path, ".git"))
-	if err != nil {
+	createdAt, ok := worktreeCreatedAt(path)
+	if !ok {
 		return ""
 	}
-	age := now.Sub(info.ModTime())
+	age := now.Sub(createdAt)
 	if age < time.Minute {
 		return "created just now"
 	}
 	return "created " + relativeAge(age) + " ago"
+}
+
+func worktreeCreatedAt(path string) (time.Time, bool) {
+	info, err := os.Stat(filepath.Join(path, ".git"))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return info.ModTime(), true
 }
 
 func relativeAge(age time.Duration) string {

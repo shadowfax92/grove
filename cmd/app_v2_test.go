@@ -475,6 +475,229 @@ func TestRemoveMergedBulkIsConservative(t *testing.T) {
 	}
 }
 
+func TestRemoveOlderThanIgnoresMergeStateAndKeepsBranches(t *testing.T) {
+	repoPath := initV2Repo(t)
+	oldPath := filepath.Join(t.TempDir(), "old")
+	recentPath := filepath.Join(t.TempDir(), "recent")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/old", oldPath)
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/recent", recentPath)
+	if err := os.WriteFile(filepath.Join(oldPath, "unmerged.txt"), []byte("keep the commit"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runV2Git(t, oldPath, "add", "unmerged.txt")
+	runV2Git(t, oldPath, "commit", "-m", "unmerged work")
+	oldCreatedAt := time.Now().Add(-15 * 24 * time.Hour)
+	recentCreatedAt := time.Now().Add(-24 * time.Hour)
+	if err := os.Chtimes(filepath.Join(oldPath, ".git"), oldCreatedAt, oldCreatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(recentPath, ".git"), recentCreatedAt, recentCreatedAt); err != nil {
+		t.Fatal(err)
+	}
+	writeV2Config(t, repoPath, "")
+
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+	stdout, _, err := executeV2(root, "rm", "--older-than", "14d", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run error = %v", err)
+	}
+	if !strings.Contains(stdout, "feat/old") || !strings.Contains(stdout, "older than 14d") || !strings.Contains(stdout, "branches kept") || strings.Contains(stdout, "feat/recent") {
+		t.Fatalf("dry-run stdout = %q", stdout)
+	}
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("dry-run removed old worktree: %v", err)
+	}
+
+	root = newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+	stdout, _, err = executeV2(root, "rm", "--older-than", "14d")
+	if err != nil {
+		t.Fatalf("remove old error = %v", err)
+	}
+	if !strings.Contains(stdout, "feat/old") || !strings.Contains(stdout, "branches kept") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("old worktree remains: %v", err)
+	}
+	if _, err := os.Stat(recentPath); err != nil {
+		t.Fatalf("recent worktree removed: %v", err)
+	}
+	runV2Git(t, repoPath, "show-ref", "--verify", "refs/heads/feat/old")
+}
+
+func TestRemoveOlderThanRequiresDiscardButNeverOverridesLocks(t *testing.T) {
+	repoPath := initV2Repo(t)
+	dirtyPath := filepath.Join(t.TempDir(), "dirty")
+	lockedPath := filepath.Join(t.TempDir(), "locked")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/dirty-old", dirtyPath)
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/locked-old", lockedPath)
+	if err := os.WriteFile(filepath.Join(dirtyPath, "uncommitted.txt"), []byte("discard me"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runV2Git(t, repoPath, "worktree", "lock", "--reason", "active agent", lockedPath)
+	createdAt := time.Now().Add(-15 * 24 * time.Hour)
+	for _, path := range []string{dirtyPath, lockedPath} {
+		if err := os.Chtimes(filepath.Join(path, ".git"), createdAt, createdAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeV2Config(t, repoPath, "")
+
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+	stdout, stderr, err := executeV2(root, "rm", "--older-than", "14d", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run error = %v", err)
+	}
+	if strings.Contains(stdout, "feat/dirty-old") || !strings.Contains(stderr, "Skipped 1 dirty") || !strings.Contains(stderr, "1 locked") || !strings.Contains(stderr, "--discard") {
+		t.Fatalf("stdout = %q, stderr = %q", stdout, stderr)
+	}
+
+	root = newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+	stdout, _, err = executeV2(root, "rm", "--older-than", "14d", "--discard")
+	if err != nil {
+		t.Fatalf("discard error = %v", err)
+	}
+	if !strings.Contains(stdout, "feat/dirty-old") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if _, err := os.Stat(dirtyPath); !os.IsNotExist(err) {
+		t.Fatalf("dirty worktree remains: %v", err)
+	}
+	if _, err := os.Stat(lockedPath); err != nil {
+		t.Fatalf("locked worktree removed: %v", err)
+	}
+	runV2Git(t, repoPath, "show-ref", "--verify", "refs/heads/feat/dirty-old")
+}
+
+func TestRemoveOlderThanScansEveryConfiguredRepository(t *testing.T) {
+	currentRepo := initV2Repo(t)
+	otherRepo := initV2Repo(t)
+	oldPath := filepath.Join(t.TempDir(), "other-old")
+	runV2Git(t, otherRepo, "worktree", "add", "-b", "feat/fleet-old", oldPath)
+	createdAt := time.Now().Add(-15 * 24 * time.Hour)
+	if err := os.Chtimes(filepath.Join(oldPath, ".git"), createdAt, createdAt); err != nil {
+		t.Fatal(err)
+	}
+	writeV2Config(t, currentRepo, strings.Join([]string{
+		"  - path: " + otherRepo,
+		"    name: other",
+		"    default_branch: main",
+		"",
+	}, "\n"))
+
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return currentRepo, nil }, interactive: func() bool { return false }})
+	stdout, _, err := executeV2(root, "rm", "--older-than", "14d")
+	if err != nil {
+		t.Fatalf("fleet cleanup error = %v", err)
+	}
+	if !strings.Contains(stdout, "other:feat/fleet-old") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("old worktree in other repository remains: %v", err)
+	}
+	runV2Git(t, otherRepo, "show-ref", "--verify", "refs/heads/feat/fleet-old")
+}
+
+func TestRemoveOlderThanNeverRemovesNestedWorktrees(t *testing.T) {
+	repoPath := initV2Repo(t)
+	parentPath := filepath.Join(t.TempDir(), "parent")
+	childPath := filepath.Join(parentPath, "nested")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/parent", parentPath)
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/child", childPath)
+	oldCreatedAt := time.Now().Add(-15 * 24 * time.Hour)
+	if err := os.Chtimes(filepath.Join(parentPath, ".git"), oldCreatedAt, oldCreatedAt); err != nil {
+		t.Fatal(err)
+	}
+	writeV2Config(t, repoPath, "")
+
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+	stdout, stderr, err := executeV2(root, "rm", "--older-than", "14d", "--discard")
+	if err != nil {
+		t.Fatalf("cleanup error = %v", err)
+	}
+	if !strings.Contains(stdout, "No worktrees") || !strings.Contains(stderr, "contains registered worktree") || !strings.Contains(stderr, "1 unsafe") {
+		t.Fatalf("stdout = %q, stderr = %q", stdout, stderr)
+	}
+	for _, path := range []string{parentPath, childPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("nested cleanup removed %s: %v", path, err)
+		}
+	}
+}
+
+func TestRemoveMissingPrunesRegistrationsAndKeepsBranches(t *testing.T) {
+	repoPath := initV2Repo(t)
+	missingPath := filepath.Join(t.TempDir(), "missing")
+	lockedPath := filepath.Join(t.TempDir(), "locked-missing")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/gone", missingPath)
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/locked-gone", lockedPath)
+	runV2Git(t, repoPath, "worktree", "lock", "--reason", "keep registration", lockedPath)
+	canonicalMissingPath := canonicalV2Path(t, missingPath)
+	canonicalLockedPath := canonicalV2Path(t, lockedPath)
+	if err := os.RemoveAll(missingPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(lockedPath); err != nil {
+		t.Fatal(err)
+	}
+	writeV2Config(t, repoPath, "")
+
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+	stdout, _, err := executeV2(root, "rm", "--missing", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run error = %v", err)
+	}
+	if !strings.Contains(stdout, "feat/gone") || strings.Contains(stdout, "feat/locked-gone") || !strings.Contains(stdout, "branches kept") {
+		t.Fatalf("dry-run stdout = %q", stdout)
+	}
+	if listing := v2GitOutput(t, repoPath, "worktree", "list", "--porcelain"); !strings.Contains(listing, canonicalMissingPath) {
+		t.Fatalf("dry-run pruned registration:\n%s", listing)
+	}
+
+	root = newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+	stdout, _, err = executeV2(root, "rm", "--missing")
+	if err != nil {
+		t.Fatalf("remove missing error = %v", err)
+	}
+	if !strings.Contains(stdout, "feat/gone") || !strings.Contains(stdout, "branches kept") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if listing := v2GitOutput(t, repoPath, "worktree", "list", "--porcelain"); strings.Contains(listing, canonicalMissingPath) {
+		t.Fatalf("registration remains:\n%s", listing)
+	}
+	if listing := v2GitOutput(t, repoPath, "worktree", "list", "--porcelain"); !strings.Contains(listing, canonicalLockedPath) {
+		t.Fatalf("locked registration was pruned:\n%s", listing)
+	}
+	runV2Git(t, repoPath, "show-ref", "--verify", "refs/heads/feat/gone")
+	runV2Git(t, repoPath, "show-ref", "--verify", "refs/heads/feat/locked-gone")
+}
+
+func TestRemoveBulkCleanupRejectsAmbiguousFlags(t *testing.T) {
+	repoPath := initV2Repo(t)
+	writeV2Config(t, repoPath, "")
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"rm", "--older-than", "later"}, want: "invalid --older-than"},
+		{args: []string{"rm", "--older-than", "0d"}, want: "positive duration"},
+		{args: []string{"rm", "--merged", "--older-than", "14d"}, want: "cannot be used together"},
+		{args: []string{"rm", "--missing", "--older-than", "14d"}, want: "cannot be used together"},
+		{args: []string{"rm", "--missing", "--discard"}, want: "--discard"},
+		{args: []string{"rm", "--dry-run"}, want: "requires"},
+		{args: []string{"rm", "--missing", "feat/anything"}, want: "does not accept selectors"},
+		{args: []string{"--null", "rm", "--missing"}, want: "single-worktree"},
+	}
+	for _, test := range tests {
+		root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+		_, _, err := executeV2(root, test.args...)
+		if err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Fatalf("grove %s error = %v, want %q", strings.Join(test.args, " "), err, test.want)
+		}
+	}
+}
+
 func TestRemoveMergedIgnoresUnregisteredCurrentRepository(t *testing.T) {
 	repoPath := initV2Repo(t)
 	linkedPath := filepath.Join(t.TempDir(), "merged")

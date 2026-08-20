@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestFishWrapperRoutesBooleanFlagValues(t *testing.T) {
+func TestFishWrapperRoutesFlags(t *testing.T) {
 	fish, err := exec.LookPath("fish")
 	if err != nil {
 		t.Skip("fish is not installed")
@@ -22,6 +22,10 @@ func TestFishWrapperRoutesBooleanFlagValues(t *testing.T) {
 		{name: "json false", args: "new --json=false", direct: false},
 		{name: "merged true", args: "rm --merged=true --dry-run=true", direct: true},
 		{name: "merged false", args: "rm --merged=false .", direct: false},
+		{name: "older than", args: "rm --older-than 14d", direct: true},
+		{name: "older than equals", args: "rm --older-than=14d", direct: true},
+		{name: "missing true", args: "rm --missing=true", direct: true},
+		{name: "missing false", args: "rm --missing=false .", direct: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			target := filepath.Join(t.TempDir(), "line\nbreak")

@@ -229,6 +229,11 @@ func (r *Repository) RemoveWorktree(path string, discard bool) error {
 	return nil
 }
 
+func (r *Repository) PruneWorktrees() error {
+	_, err := runGitText(r.MainPath, "worktree", "prune", "--expire", "now")
+	return err
+}
+
 func (r *Repository) ValidateWorktreeRemoval(path string) error {
 	_, err := r.validateWorktreeRemoval(path)
 	return err
