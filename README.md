@@ -202,7 +202,7 @@ repos:
       - bun run codegen:agent
 ```
 
-Rows that resolve to the same Git common directory are one repository with multiple aliases/setup profiles. A root-level row without `workdir` becomes the default profile. This keeps existing multi-profile configs working without pretending they are separate repositories.
+Rows that resolve to the same Git common directory are one repository with multiple aliases/setup profiles. A multi-profile repository uses its checkout directory name as the canonical display name and selector; every configured profile name remains a valid alias. A root-level row without `workdir` becomes the default setup profile. This keeps existing multi-profile configs working without pretending they are separate repositories.
 
 Missing, deleted, non-directory, and non-Git paths produce warnings on stderr and are skipped; they do not break valid repositories. Legacy `dir` and `plain` entries are ignored.
 

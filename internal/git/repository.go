@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 type Repository struct {
@@ -470,36 +470,118 @@ func pathStrictlyContains(parent, child string) bool {
 	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
+type nestedRepositoryScan struct {
+	children []string
+	nested   string
+	err      error
+}
+
 func nestedGitRepository(root string) (string, error) {
-	rootMarker := filepath.Join(root, ".git")
-	var nested string
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if path == rootMarker {
-			if entry.IsDir() {
-				return fs.SkipDir
+	const workerCount = 8
+	jobs := make(chan string)
+	results := make(chan nestedRepositoryScan, workerCount)
+	cancelled := make(chan struct{})
+	var workers sync.WaitGroup
+	for range workerCount {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for directory := range jobs {
+				result := scanDirectoryForNestedRepository(root, directory)
+				select {
+				case results <- result:
+				case <-cancelled:
+					return
+				}
 			}
-			return nil
+		}()
+	}
+
+	queue := []string{root}
+	active := 0
+	stop := func() {
+		close(cancelled)
+		close(jobs)
+		workers.Wait()
+	}
+	for len(queue) != 0 || active != 0 {
+		var next chan<- string
+		var directory string
+		if len(queue) != 0 {
+			next = jobs
+			directory = queue[0]
 		}
-		if entry.Name() == ".git" {
-			nested = filepath.Dir(path)
-			return fs.SkipAll
+		select {
+		case next <- directory:
+			queue = queue[1:]
+			active++
+		case result := <-results:
+			active--
+			if result.err != nil {
+				stop()
+				return "", result.err
+			}
+			if result.nested != "" {
+				stop()
+				return result.nested, nil
+			}
+			queue = append(queue, result.children...)
 		}
-		if entry.Name() != "HEAD" || entry.IsDir() || filepath.Dir(path) == root {
-			return nil
+	}
+	stop()
+	return "", nil
+}
+
+func scanDirectoryForNestedRepository(root, directory string) nestedRepositoryScan {
+	stream, err := os.Open(directory)
+	if err != nil {
+		return nestedRepositoryScan{err: err}
+	}
+	// File.ReadDir avoids sorting every cache directory during the safety scan.
+	entries, err := stream.ReadDir(-1)
+	closeErr := stream.Close()
+	if err != nil {
+		return nestedRepositoryScan{err: err}
+	}
+	if closeErr != nil {
+		return nestedRepositoryScan{err: closeErr}
+	}
+
+	result := nestedRepositoryScan{}
+	hasHead := false
+	hasObjects := false
+	hasRefs := false
+	for _, entry := range entries {
+		name := entry.Name()
+		path := filepath.Join(directory, name)
+		if name == ".git" {
+			if directory != root {
+				return nestedRepositoryScan{nested: directory}
+			}
+			continue
 		}
-		parent := filepath.Dir(path)
-		objects, objectsErr := os.Stat(filepath.Join(parent, "objects"))
-		refs, refsErr := os.Stat(filepath.Join(parent, "refs"))
-		if objectsErr == nil && refsErr == nil && objects.IsDir() && refs.IsDir() {
-			nested = parent
-			return fs.SkipAll
+		if name == "HEAD" && !entry.IsDir() {
+			hasHead = true
 		}
-		return nil
-	})
-	return nested, err
+		switch name {
+		case "objects", "refs":
+			info, statErr := os.Stat(path)
+			if statErr == nil && info.IsDir() {
+				if name == "objects" {
+					hasObjects = true
+				} else {
+					hasRefs = true
+				}
+			}
+		}
+		if entry.IsDir() && entry.Type()&os.ModeSymlink == 0 {
+			result.children = append(result.children, path)
+		}
+	}
+	if directory != root && hasHead && hasObjects && hasRefs {
+		result.nested = directory
+	}
+	return result
 }
 
 func runGitText(dir string, args ...string) (string, error) {

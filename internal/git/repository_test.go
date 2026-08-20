@@ -326,6 +326,49 @@ func TestRemoveWorktreeRefusesUnregisteredNestedRepository(t *testing.T) {
 	}
 }
 
+func TestRemoveWorktreeRefusesNestedBareRepository(t *testing.T) {
+	mainPath := initTestRepo(t)
+	writeCommit(t, mainPath, "base.txt", "base")
+	parentPath := filepath.Join(t.TempDir(), "parent")
+	runGit(t, mainPath, "worktree", "add", "-b", "feat/parent", parentPath)
+	barePath := filepath.Join(parentPath, "archive.git")
+	runGit(t, parentPath, "init", "--bare", barePath)
+	repo, err := OpenRepository(mainPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = repo.RemoveWorktree(parentPath, true)
+	if err == nil || !strings.Contains(err.Error(), "nested Git repository") {
+		t.Fatalf("RemoveWorktree() error = %v, want nested-repository refusal", err)
+	}
+	if _, err := os.Stat(filepath.Join(barePath, "HEAD")); err != nil {
+		t.Fatalf("nested bare repository was removed: %v", err)
+	}
+}
+
+func TestRemoveWorktreeDoesNotFollowRepositorySymlink(t *testing.T) {
+	mainPath := initTestRepo(t)
+	writeCommit(t, mainPath, "base.txt", "base")
+	parentPath := filepath.Join(t.TempDir(), "parent")
+	runGit(t, mainPath, "worktree", "add", "-b", "feat/parent", parentPath)
+	externalPath := initTestRepo(t)
+	if err := os.Symlink(externalPath, filepath.Join(parentPath, "external")); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := OpenRepository(mainPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.RemoveWorktree(parentPath, true); err != nil {
+		t.Fatalf("RemoveWorktree() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(externalPath, ".git")); err != nil {
+		t.Fatalf("external repository was removed: %v", err)
+	}
+}
+
 func TestParseWorktreesDoesNotPromoteLinkedTreeOfBareRepository(t *testing.T) {
 	data := []byte("worktree /tmp/repo.git\x00bare\x00\x00worktree /tmp/linked\x00HEAD abc\x00branch refs/heads/main\x00\x00")
 	worktrees := parseWorktreesPorcelain(data)

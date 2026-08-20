@@ -612,7 +612,16 @@ func TestRemoveOlderThanNeverRemovesNestedWorktrees(t *testing.T) {
 	writeV2Config(t, repoPath, "")
 
 	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
-	stdout, stderr, err := executeV2(root, "rm", "--older-than", "14d", "--discard")
+	stdout, stderr, err := executeV2(root, "rm", "--older-than", "14d", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run error = %v", err)
+	}
+	if !strings.Contains(stdout, "No worktrees") || !strings.Contains(stderr, "Skipped 1 dirty") || strings.Contains(stderr, "contains registered worktree") {
+		t.Fatalf("stdout = %q, stderr = %q", stdout, stderr)
+	}
+
+	root = newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+	stdout, stderr, err = executeV2(root, "rm", "--older-than", "14d", "--discard")
 	if err != nil {
 		t.Fatalf("cleanup error = %v", err)
 	}
@@ -833,6 +842,39 @@ func TestListOmitsWorktreePaths(t *testing.T) {
 	}
 	if canonicalPath := canonicalV2Path(t, linkedPath); strings.Contains(stdout, canonicalPath) {
 		t.Fatalf("stdout = %q, contains worktree path %q", stdout, canonicalPath)
+	}
+}
+
+func TestListSeparatesMultiProfileRepositoryAndProfileNames(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "browseros")
+	initV2RepoAt(t, repoPath)
+	writeV2Config(t, "", strings.Join([]string{
+		"  - path: " + repoPath,
+		"    name: agent",
+		"    default_branch: main",
+		"    workdir: packages/agent",
+		"  - path: " + repoPath,
+		"    name: main",
+		"    default_branch: main",
+		"",
+	}, "\n"))
+
+	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+	stdout, _, err := executeV2(root, "list")
+	if err != nil {
+		t.Fatalf("list error = %v", err)
+	}
+	if !strings.Contains(stdout, "browseros (agent, main)") || strings.Contains(stdout, "main (agent)") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+
+	root = newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
+	stdout, _, err = executeV2(root, "cd", "browseros:")
+	if err != nil {
+		t.Fatalf("canonical selector error = %v", err)
+	}
+	if stdout != canonicalV2Path(t, repoPath)+"\n" {
+		t.Fatalf("stdout = %q", stdout)
 	}
 }
 

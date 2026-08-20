@@ -140,6 +140,7 @@ func Build(cfg *config.Config, currentDir string) (*Catalog, []Warning) {
 			}
 		}
 	}
+	catalog.finalizeRepositoryNames()
 
 	if currentDir != "" {
 		if current, err := gitx.OpenRepository(currentDir); err == nil {
@@ -165,6 +166,52 @@ func Build(cfg *config.Config, currentDir string) (*Catalog, []Warning) {
 		}
 	}
 	return catalog, warnings
+}
+
+func (c *Catalog) finalizeRepositoryNames() {
+	for _, repository := range c.Repositories {
+		if len(repository.Profiles) < 2 {
+			continue
+		}
+		base := filepath.Base(repository.Git.MainPath)
+		for _, profile := range repository.Profiles {
+			if profile.Name == base {
+				base += "-repo"
+				break
+			}
+		}
+		name := c.uniqueCanonicalName(base, repository)
+		repository.Name = name
+		c.reservedNames[name] = true
+		c.bind(name, repository, repository.defaultProfile)
+	}
+}
+
+func (c *Catalog) uniqueCanonicalName(base string, self *Repository) string {
+	for suffix := 1; ; suffix++ {
+		candidate := base
+		if suffix > 1 {
+			candidate = fmt.Sprintf("%s-%d", base, suffix)
+		}
+		available := true
+		for _, existing := range c.bindings[candidate] {
+			if existing.repository != self {
+				available = false
+				break
+			}
+		}
+		if available {
+			for _, repository := range c.Repositories {
+				if repository != self && repository.Name == candidate {
+					available = false
+					break
+				}
+			}
+		}
+		if available {
+			return candidate
+		}
+	}
 }
 
 func (c *Catalog) FindRepository(name string) (*Repository, *Profile, error) {

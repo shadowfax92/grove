@@ -29,6 +29,7 @@ Git metadata is the only worktree source of truth. Grove has no state file and n
 - New worktrees are `<main-worktree>/.wt/<branch>` and preserve branch slashes.
 - `/.wt/` is written to the common `.git/info/exclude`, never tracked `.gitignore`.
 - Repository identity comes from the canonical Git common directory, including when invoked inside a linked worktree.
+- Multi-profile repositories use the checkout directory name as their canonical name; profile names remain aliases for setup selection.
 - Main and locked worktrees are never removable.
 - Dirty removal requires the explicit `--discard` flag.
 - Age-based cleanup ignores merge state, keeps branches, and preserves the same main, lock, current-worktree, and nesting protections as exact removal.

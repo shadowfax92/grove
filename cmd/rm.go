@@ -402,16 +402,6 @@ func (a *application) removeOlderThan(cmd *cobra.Command, context *commandContex
 			skips.current++
 			continue
 		}
-		if descendants := context.inventory.Descendants(entry.Worktree.Path); len(descendants) != 0 {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: contains registered worktree %s\n", entry.Selector(), descendants[0].Worktree.Path)
-			skips.unsafe++
-			continue
-		}
-		if err := entry.Repository.Git.ValidateWorktreeRemoval(entry.Worktree.Path); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: %v\n", entry.Selector(), err)
-			skips.unsafe++
-			continue
-		}
 		dirty, err := entry.Repository.Git.Dirty(entry.Worktree.Path)
 		if err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: %v\n", entry.Selector(), err)
@@ -420,6 +410,16 @@ func (a *application) removeOlderThan(cmd *cobra.Command, context *commandContex
 		}
 		if dirty && !discard {
 			skips.dirty++
+			continue
+		}
+		if descendants := context.inventory.Descendants(entry.Worktree.Path); len(descendants) != 0 {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: contains registered worktree %s\n", entry.Selector(), descendants[0].Worktree.Path)
+			skips.unsafe++
+			continue
+		}
+		if err := entry.Repository.Git.ValidateWorktreeRemoval(entry.Worktree.Path); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: %v\n", entry.Selector(), err)
+			skips.unsafe++
 			continue
 		}
 		candidates = append(candidates, removeCandidate{entry: entry, age: age})

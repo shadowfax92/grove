@@ -31,8 +31,8 @@ func TestBuildDeduplicatesRepositoryAndPreservesProfiles(t *testing.T) {
 		t.Fatalf("len(Repositories) = %d, want 1", len(got.Repositories))
 	}
 	repo := got.Repositories[0]
-	if repo.Name != "main" {
-		t.Fatalf("repository Name = %q, want primary profile main", repo.Name)
+	if repo.Name != filepath.Base(repoPath) {
+		t.Fatalf("repository Name = %q, want checkout name %q", repo.Name, filepath.Base(repoPath))
 	}
 	if got.Current != repo || !got.CurrentRegistered {
 		t.Fatalf("current = %#v registered=%v, want configured repository", got.Current, got.CurrentRegistered)
@@ -45,6 +45,10 @@ func TestBuildDeduplicatesRepositoryAndPreservesProfiles(t *testing.T) {
 		if resolved != repo || profile.Name != name {
 			t.Fatalf("FindRepository(%q) = %#v %#v", name, resolved, profile)
 		}
+	}
+	resolved, profile, err := got.FindRepository(repo.Name)
+	if err != nil || resolved != repo || profile.Name != "main" {
+		t.Fatalf("FindRepository(%q) = %#v %#v, %v", repo.Name, resolved, profile, err)
 	}
 	if profile := repo.DefaultProfile(); profile == nil || profile.Name != "main" {
 		t.Fatalf("DefaultProfile() = %#v, want main", profile)
