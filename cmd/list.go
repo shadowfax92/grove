@@ -70,18 +70,23 @@ func (a *application) runList(cmd *cobra.Command, includeStatus bool) error {
 	}
 	style := a.style(cmd.OutOrStdout())
 	now := time.Now()
-	for index, repository := range document.Repositories {
-		if index > 0 {
-			fmt.Fprintln(cmd.OutOrStdout())
-		}
-		aliases := aliasesSuffix(repository.Name, repository.Aliases)
-		fmt.Fprintf(cmd.OutOrStdout(), "%s%s  %s\n", style.heading(repository.Name), style.muted(aliases), style.muted(repository.Path))
+	shownRepositories := 0
+	for _, repository := range document.Repositories {
 		worktrees := make([]listWorktree, 0, len(repository.Worktrees))
 		for _, worktree := range repository.Worktrees {
 			if !worktree.Main {
 				worktrees = append(worktrees, worktree)
 			}
 		}
+		if len(worktrees) == 0 {
+			continue
+		}
+		if shownRepositories > 0 {
+			fmt.Fprintln(cmd.OutOrStdout())
+		}
+		shownRepositories++
+		aliases := aliasesSuffix(repository.Name, repository.Aliases)
+		fmt.Fprintf(cmd.OutOrStdout(), "%s%s  %s\n", style.heading(repository.Name), style.muted(aliases), style.muted(repository.Path))
 		for worktreeIndex, worktree := range worktrees {
 			connector := "├──"
 			if worktreeIndex == len(worktrees)-1 {
@@ -89,6 +94,9 @@ func (a *application) runList(cmd *cobra.Command, includeStatus bool) error {
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s %s%s%s\n", style.muted(connector), styledWorktreeLabel(style, worktree), styledStatusSuffix(style, worktree), style.muted(createdSuffix(worktree, now)))
 		}
+	}
+	if shownRepositories == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "No linked worktrees.")
 	}
 	return nil
 }

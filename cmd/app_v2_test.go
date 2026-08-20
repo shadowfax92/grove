@@ -1002,11 +1002,17 @@ func TestListOmitsWorktreePaths(t *testing.T) {
 	}
 }
 
-func TestListHidesMainWorktree(t *testing.T) {
+func TestListShowsOnlyRepositoriesWithLinkedWorktrees(t *testing.T) {
 	repoPath := initV2Repo(t)
+	emptyRepoPath := initV2Repo(t)
 	linkedPath := filepath.Join(t.TempDir(), "linked")
 	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/visible", linkedPath)
-	writeV2Config(t, repoPath, "")
+	writeV2Config(t, repoPath, strings.Join([]string{
+		"  - path: " + emptyRepoPath,
+		"    name: empty",
+		"    default_branch: main",
+		"",
+	}, "\n"))
 	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
 
 	stdout, _, err := executeV2(root, "list")
@@ -1019,11 +1025,15 @@ func TestListHidesMainWorktree(t *testing.T) {
 	if !strings.Contains(stdout, "└── feat/visible") {
 		t.Fatalf("stdout = %q, want linked worktree", stdout)
 	}
+	if strings.Contains(stdout, canonicalV2Path(t, emptyRepoPath)) {
+		t.Fatalf("stdout = %q, contains repository without linked worktrees", stdout)
+	}
 }
 
 func TestListSeparatesMultiProfileRepositoryAndProfileNames(t *testing.T) {
 	repoPath := filepath.Join(t.TempDir(), "browseros")
 	initV2RepoAt(t, repoPath)
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/visible", filepath.Join(t.TempDir(), "linked"))
 	writeV2Config(t, "", strings.Join([]string{
 		"  - path: " + repoPath,
 		"    name: agent",
