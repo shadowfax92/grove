@@ -91,8 +91,7 @@ func (a *application) navigationPickerItems(inv *inventory.Inventory) []picker.I
 		candidate := navigationCandidate{entry: entry}
 		if visitedAt, ok := a.dependencies.lastVisited(entry.Worktree.Path); ok {
 			candidate.rankedAt, candidate.ranked = visitedAt, true
-		}
-		if createdAt, ok := worktreeCreatedAt(entry.Worktree.Path); ok && (!candidate.ranked || createdAt.After(candidate.rankedAt)) {
+		} else if createdAt, ok := worktreeCreatedAt(entry.Worktree.Path); ok {
 			candidate.rankedAt, candidate.ranked = createdAt, true
 		}
 		candidates = append(candidates, candidate)

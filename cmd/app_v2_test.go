@@ -145,6 +145,50 @@ func TestRootPickerFallsBackToNewestWorktreeCreation(t *testing.T) {
 	}
 }
 
+func TestRootPickerVisitOrderWinsOverCreationMetadata(t *testing.T) {
+	repoPath := initV2Repo(t)
+	linkedPath := filepath.Join(t.TempDir(), "linked")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/linked", linkedPath)
+	base := time.Now().Add(-24 * time.Hour)
+	for path, timestamp := range map[string]time.Time{
+		filepath.Join(linkedPath, ".git"): base.Add(1 * time.Hour),
+		filepath.Join(repoPath, ".git"):   base.Add(4 * time.Hour),
+	} {
+		if err := os.Chtimes(path, timestamp, timestamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeV2Config(t, repoPath, "")
+	mainPath := canonicalV2Path(t, repoPath)
+	linkedPath = canonicalV2Path(t, linkedPath)
+
+	root := newRootCommand(commandDependencies{
+		getwd:       func() (string, error) { return repoPath, nil },
+		interactive: func() bool { return true },
+		lastVisited: func(path string) (time.Time, bool) {
+			switch path {
+			case linkedPath:
+				return base.Add(3 * time.Hour), true
+			case mainPath:
+				return base.Add(2 * time.Hour), true
+			default:
+				return time.Time{}, false
+			}
+		},
+		markVisited: func(string) error { return nil },
+		pick: func(_ string, items []picker.Item) (string, error) {
+			if items[0].Key != linkedPath {
+				t.Fatalf("first picker item = %#v, want most recently visited worktree", items[0])
+			}
+			return linkedPath, nil
+		},
+	})
+
+	if _, _, err := executeV2(root); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
 func TestNavigationRecencyFailureDoesNotBlockPath(t *testing.T) {
 	repoPath := initV2Repo(t)
 	writeV2Config(t, repoPath, "")
