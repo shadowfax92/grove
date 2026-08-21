@@ -3,6 +3,7 @@
 package recency
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -17,6 +18,11 @@ import (
 type Tracker struct {
 	directory string
 }
+
+const (
+	lockTimeout = 100 * time.Millisecond
+	lockRetry   = 2 * time.Millisecond
+)
 
 func Default() (*Tracker, error) {
 	stateRoot := os.Getenv("XDG_STATE_HOME")
@@ -62,9 +68,17 @@ func (t *Tracker) markVisitedAt(path string, visitedAt time.Time) error {
 	// Calls capture their visit time before taking the process-shared lock. The
 	// comparison prevents a delayed older caller from publishing after a newer
 	// visit, while the same-directory rename prevents partial marker contents.
+	// Acquisition is bounded because optional UI state must never stall the
+	// command substitution that hands a path back to the parent shell.
 	lock := flock.New(filepath.Join(t.directory, ".lock"))
-	if err := lock.Lock(); err != nil {
+	lockContext, cancelLock := context.WithTimeout(context.Background(), lockTimeout)
+	defer cancelLock()
+	locked, err := lock.TryLockContext(lockContext, lockRetry)
+	if err != nil {
 		return fmt.Errorf("locking recency markers: %w", err)
+	}
+	if !locked {
+		return fmt.Errorf("locking recency markers: lock unavailable")
 	}
 	defer lock.Close()
 	if current, ok := t.LastVisited(path); ok && !visitedAt.After(current) {

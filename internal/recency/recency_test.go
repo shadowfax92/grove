@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gofrs/flock"
 )
 
 func TestTrackerMarksAndReadsLastVisit(t *testing.T) {
@@ -87,6 +89,27 @@ func TestTrackerConcurrentMarksKeepNewestVisit(t *testing.T) {
 	}
 	if visitedAt, _ := tracker.LastVisited(worktreePath); !visitedAt.Equal(want) {
 		t.Fatalf("delayed older visit regressed marker to %v, want %v", visitedAt, want)
+	}
+}
+
+func TestTrackerLockContentionIsBounded(t *testing.T) {
+	tracker := New(t.TempDir())
+	if err := os.MkdirAll(tracker.directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	lock := flock.New(filepath.Join(tracker.directory, ".lock"))
+	if err := lock.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+
+	startedAt := time.Now()
+	err := tracker.MarkVisited(filepath.Join(t.TempDir(), "worktree"))
+	if err == nil || !strings.Contains(err.Error(), "locking recency markers") {
+		t.Fatalf("MarkVisited() error = %v, want bounded lock error", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > 500*time.Millisecond {
+		t.Fatalf("MarkVisited() blocked for %v, want bounded optional state update", elapsed)
 	}
 }
 
