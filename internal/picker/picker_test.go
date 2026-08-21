@@ -2,6 +2,7 @@ package picker
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -42,5 +43,14 @@ func TestDecodeSelectionsReturnsEveryFZFSelection(t *testing.T) {
 	}
 	if strings.Join(got, ",") != "third,first" {
 		t.Fatalf("decodeSelections() = %#v", got)
+	}
+}
+
+func TestSingleSelectionPreservesCallerOrder(t *testing.T) {
+	if args := selectionArgs("worktree > ", false); !slices.Contains(args, "--no-sort") {
+		t.Fatalf("single-selection args = %#v, want --no-sort", args)
+	}
+	if args := selectionArgs("remove > ", true); slices.Contains(args, "--no-sort") {
+		t.Fatalf("multi-selection args = %#v, do not want --no-sort", args)
 	}
 }

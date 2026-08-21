@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"grove/internal/picker"
+	"grove/internal/recency"
 
 	"github.com/spf13/cobra"
 )
@@ -17,6 +19,8 @@ type commandDependencies struct {
 	interactive func() bool
 	pick        func(string, []picker.Item) (string, error)
 	pickMany    func(string, []picker.Item) ([]string, error)
+	lastVisited func(string) (time.Time, bool)
+	markVisited func(string) error
 }
 
 type application struct {
@@ -40,6 +44,28 @@ func newRootCommand(dependencies commandDependencies) *cobra.Command {
 	}
 	if dependencies.pickMany == nil {
 		dependencies.pickMany = picker.SelectMany
+	}
+	if dependencies.lastVisited == nil || dependencies.markVisited == nil {
+		// Resolve the state root once per command tree. Reads degrade to an
+		// unranked item, while writes surface through the non-fatal warning at the
+		// navigation handoff; optional history never blocks unrelated commands.
+		tracker, trackerErr := recency.Default()
+		if dependencies.lastVisited == nil {
+			dependencies.lastVisited = func(path string) (time.Time, bool) {
+				if trackerErr != nil {
+					return time.Time{}, false
+				}
+				return tracker.LastVisited(path)
+			}
+		}
+		if dependencies.markVisited == nil {
+			dependencies.markVisited = func(path string) error {
+				if trackerErr != nil {
+					return trackerErr
+				}
+				return tracker.MarkVisited(path)
+			}
+		}
 	}
 	app := &application{dependencies: dependencies}
 	root := &cobra.Command{

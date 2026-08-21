@@ -20,9 +20,10 @@ The module name is `grove`.
 - `internal/catalog/` turns valid config rows into physical repositories and alias/setup profiles. Common Git directory is repository identity.
 - `internal/inventory/` joins catalog repositories to live Git worktrees and resolves exact selectors.
 - `internal/picker/` is the NUL-safe fzf boundary.
+- `internal/recency/` stores disposable, hashed navigation markers used only to rank known inventory entries in the picker.
 - `internal/names/` generates readable default branch names.
 
-Git metadata is the only worktree source of truth. Grove has no state file and no tmux or repository-sync lifecycle.
+Git metadata is the only worktree source of truth. Grove has no inventory state file and no tmux or repository-sync lifecycle; optional recency markers under the user state directory affect presentation only.
 
 ## Invariants
 
@@ -36,5 +37,6 @@ Git metadata is the only worktree source of truth. Grove has no state file and n
 - Missing cleanup prunes stale Git registrations and keeps branches.
 - Worktree removal never falls back to `os.RemoveAll`.
 - Exact selectors never open fzf; omitted selectors require an interactive terminal.
+- Navigation recency may reorder only live Git inventory; missing, corrupt, or deleted markers never block navigation or preserve worktrees.
 - Path, JSON, and NUL output remain machine-readable. Human presentation may use terminal-aware color. Warnings and setup output use stderr.
 - Old external worktrees remain supported during migration and are never moved automatically.

@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,6 +44,231 @@ func TestRootPickerPrintsSelectedWorktreePath(t *testing.T) {
 	}
 	if got, want := stdout, canonicalV2Path(t, linkedPath)+"\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestRootPickerShowsCompactWorktreesInRecentOrder(t *testing.T) {
+	repoPath := initV2Repo(t)
+	olderPath := filepath.Join(t.TempDir(), "older")
+	recentPath := filepath.Join(t.TempDir(), "recent")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/older", olderPath)
+	runV2Git(t, repoPath, "worktree", "add", "-b", "fix/recent", recentPath)
+	writeV2Config(t, repoPath, "")
+	recentPath = canonicalV2Path(t, recentPath)
+
+	markedPath := ""
+	root := newRootCommand(commandDependencies{
+		getwd:       func() (string, error) { return repoPath, nil },
+		interactive: func() bool { return true },
+		lastVisited: func(path string) (time.Time, bool) {
+			if path == recentPath {
+				return time.Date(2100, time.January, 1, 0, 0, 0, 0, time.UTC), true
+			}
+			return time.Time{}, false
+		},
+		markVisited: func(path string) error {
+			markedPath = path
+			return nil
+		},
+		pick: func(prompt string, items []picker.Item) (string, error) {
+			if prompt != "worktree > " || len(items) != 3 {
+				t.Fatalf("picker = %q %#v", prompt, items)
+			}
+			if items[0].Key != recentPath || items[0].Label != "app  fix/recent" {
+				t.Fatalf("first picker item = %#v, want compact recent worktree", items[0])
+			}
+			for _, item := range items {
+				if strings.Contains(item.Label, item.Key) {
+					t.Fatalf("picker label exposes path: %#v", item)
+				}
+				if !strings.HasPrefix(item.Label, "app  ") {
+					t.Fatalf("picker label = %q, want repository column", item.Label)
+				}
+			}
+			return recentPath, nil
+		},
+	})
+
+	stdout, _, err := executeV2(root)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if stdout != recentPath+"\n" || markedPath != recentPath {
+		t.Fatalf("stdout = %q, marked = %q, want %q", stdout, markedPath, recentPath)
+	}
+}
+
+func TestRootPickerFallsBackToNewestWorktreeCreation(t *testing.T) {
+	repoPath := initV2Repo(t)
+	worktreeRoot := t.TempDir()
+	olderPath := filepath.Join(worktreeRoot, "a-older")
+	newerPath := filepath.Join(worktreeRoot, "z-newer")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/older", olderPath)
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/newer", newerPath)
+	createdAt := time.Now()
+	for path, timestamp := range map[string]time.Time{
+		olderPath: createdAt.Add(-4 * time.Hour),
+		newerPath: createdAt.Add(-1 * time.Hour),
+	} {
+		if err := os.Chtimes(filepath.Join(path, ".git"), timestamp, timestamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeV2Config(t, repoPath, "")
+	olderPath = canonicalV2Path(t, olderPath)
+	newerPath = canonicalV2Path(t, newerPath)
+
+	root := newRootCommand(commandDependencies{
+		getwd:       func() (string, error) { return repoPath, nil },
+		interactive: func() bool { return true },
+		lastVisited: func(string) (time.Time, bool) { return time.Time{}, false },
+		markVisited: func(string) error { return nil },
+		pick: func(_ string, items []picker.Item) (string, error) {
+			olderIndex, newerIndex := -1, -1
+			for index, item := range items {
+				switch item.Key {
+				case olderPath:
+					olderIndex = index
+				case newerPath:
+					newerIndex = index
+				}
+			}
+			if newerIndex == -1 || olderIndex == -1 || newerIndex > olderIndex {
+				t.Fatalf("picker items = %#v, want newer creation before older", items)
+			}
+			return newerPath, nil
+		},
+	})
+
+	if _, _, err := executeV2(root); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
+func TestRootPickerVisitOrderWinsOverCreationMetadata(t *testing.T) {
+	repoPath := initV2Repo(t)
+	linkedPath := filepath.Join(t.TempDir(), "linked")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/linked", linkedPath)
+	base := time.Now().Add(-24 * time.Hour)
+	for path, timestamp := range map[string]time.Time{
+		filepath.Join(linkedPath, ".git"): base.Add(1 * time.Hour),
+		filepath.Join(repoPath, ".git"):   base.Add(4 * time.Hour),
+	} {
+		if err := os.Chtimes(path, timestamp, timestamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeV2Config(t, repoPath, "")
+	mainPath := canonicalV2Path(t, repoPath)
+	linkedPath = canonicalV2Path(t, linkedPath)
+
+	root := newRootCommand(commandDependencies{
+		getwd:       func() (string, error) { return repoPath, nil },
+		interactive: func() bool { return true },
+		lastVisited: func(path string) (time.Time, bool) {
+			switch path {
+			case linkedPath:
+				return base.Add(3 * time.Hour), true
+			case mainPath:
+				return base.Add(2 * time.Hour), true
+			default:
+				return time.Time{}, false
+			}
+		},
+		markVisited: func(string) error { return nil },
+		pick: func(_ string, items []picker.Item) (string, error) {
+			if items[0].Key != linkedPath {
+				t.Fatalf("first picker item = %#v, want most recently visited worktree", items[0])
+			}
+			return linkedPath, nil
+		},
+	})
+
+	if _, _, err := executeV2(root); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
+func TestRootPickerDoesNotTreatMainGitMtimeAsCreation(t *testing.T) {
+	repoPath := initV2Repo(t)
+	linkedPath := filepath.Join(t.TempDir(), "linked")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/linked", linkedPath)
+	base := time.Now().Add(-24 * time.Hour)
+	for path, timestamp := range map[string]time.Time{
+		filepath.Join(linkedPath, ".git"): base.Add(1 * time.Hour),
+		filepath.Join(repoPath, ".git"):   base.Add(4 * time.Hour),
+	} {
+		if err := os.Chtimes(path, timestamp, timestamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeV2Config(t, repoPath, "")
+	mainPath := canonicalV2Path(t, repoPath)
+	linkedPath = canonicalV2Path(t, linkedPath)
+
+	root := newRootCommand(commandDependencies{
+		getwd:       func() (string, error) { return repoPath, nil },
+		interactive: func() bool { return true },
+		lastVisited: func(string) (time.Time, bool) { return time.Time{}, false },
+		markVisited: func(string) error { return nil },
+		pick: func(_ string, items []picker.Item) (string, error) {
+			mainIndex, linkedIndex := -1, -1
+			for index, item := range items {
+				switch item.Key {
+				case mainPath:
+					mainIndex = index
+				case linkedPath:
+					linkedIndex = index
+				}
+			}
+			if linkedIndex == -1 || mainIndex == -1 || linkedIndex > mainIndex {
+				t.Fatalf("picker items = %#v, want dated linked worktree before unranked main", items)
+			}
+			return linkedPath, nil
+		},
+	})
+
+	if _, _, err := executeV2(root); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
+func TestNavigationRecencyFailureDoesNotBlockPath(t *testing.T) {
+	repoPath := initV2Repo(t)
+	writeV2Config(t, repoPath, "")
+	root := newRootCommand(commandDependencies{
+		getwd:       func() (string, error) { return repoPath, nil },
+		interactive: func() bool { return false },
+		markVisited: func(string) error { return errors.New("state is read-only") },
+	})
+
+	stdout, stderr, err := executeV2(root, "cd", "app:")
+	if err != nil {
+		t.Fatalf("cd error = %v", err)
+	}
+	if stdout != canonicalV2Path(t, repoPath)+"\n" || !strings.Contains(stderr, "warning: recording navigation recency") {
+		t.Fatalf("stdout = %q, stderr = %q", stdout, stderr)
+	}
+}
+
+func TestJSONNavigationDoesNotChangeRecency(t *testing.T) {
+	repoPath := initV2Repo(t)
+	writeV2Config(t, repoPath, "")
+	marked := false
+	root := newRootCommand(commandDependencies{
+		getwd:       func() (string, error) { return repoPath, nil },
+		interactive: func() bool { return false },
+		markVisited: func(string) error {
+			marked = true
+			return nil
+		},
+	})
+
+	if _, _, err := executeV2(root, "--json", "cd", "app:"); err != nil {
+		t.Fatalf("cd --json error = %v", err)
+	}
+	if marked {
+		t.Fatal("JSON navigation changed recency")
 	}
 }
 
@@ -1234,6 +1460,7 @@ func writeV2Config(t *testing.T, repoPath, extraEntries string) {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
 	path := filepath.Join(home, ".config", "grove", "config.yaml")
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
