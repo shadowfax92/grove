@@ -119,25 +119,6 @@ func TestResolveBareBranchRequiresCurrentRepository(t *testing.T) {
 	}
 }
 
-func TestPickerItemsIncludeStableSelectorsAndPaths(t *testing.T) {
-	repoPath := initInventoryRepo(t)
-	linkedPath := filepath.Join(t.TempDir(), "linked")
-	runInventoryGit(t, repoPath, "worktree", "add", "-b", "chore/deps", linkedPath)
-	cat, _ := catalog.Build(&config.Config{Repos: []config.RepoConfig{{Path: repoPath, Name: "app"}}}, "")
-	inv, _ := Build(cat)
-
-	items := inv.PickerItems()
-	if len(items) != 2 {
-		t.Fatalf("len(PickerItems) = %d, want 2", len(items))
-	}
-	if items[0].Selector != "app:" || items[1].Selector != "app:chore/deps" {
-		t.Fatalf("PickerItems = %#v", items)
-	}
-	if items[1].Path != canonicalInventoryPath(t, linkedPath) {
-		t.Fatalf("linked picker path = %q", items[1].Path)
-	}
-}
-
 func initInventoryRepo(t *testing.T) string {
 	t.Helper()
 	path := t.TempDir()

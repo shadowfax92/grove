@@ -34,12 +34,6 @@ func (e *Entry) Selector() string {
 	return e.Repository.Name + ":@" + shortHead(e.Worktree.Head)
 }
 
-type PickerItem struct {
-	Selector string
-	Path     string
-	Label    string
-}
-
 type Inventory struct {
 	Catalog *catalog.Catalog
 	Entries []*Entry
@@ -86,22 +80,6 @@ func (i *Inventory) Resolve(selector, baseDir string) (*Entry, error) {
 		return nil, fmt.Errorf("not inside a configured Git repository; use repo:branch")
 	}
 	return i.resolveInRepository(i.Catalog.Current, selector)
-}
-
-func (i *Inventory) PickerItems() []PickerItem {
-	items := make([]PickerItem, 0, len(i.Entries))
-	for _, entry := range i.Entries {
-		if entry.Worktree.Prunable {
-			continue
-		}
-		selector := entry.Selector()
-		label := fmt.Sprintf("%-32s %s", selector, entry.Worktree.Path)
-		if entry.Worktree.Locked {
-			label += "  [locked]"
-		}
-		items = append(items, PickerItem{Selector: selector, Path: entry.Worktree.Path, Label: label})
-	}
-	return items
 }
 
 func (i *Inventory) Descendants(path string) []*Entry {

@@ -10,7 +10,7 @@
 
 Grove is a small, path-first wrapper around `git worktree`. It gives humans an fzf picker and gives agents exact selectors, stable JSON, and stdout that is safe to capture.
 
-There is no Grove state database. Git owns the worktree inventory.
+There is no Grove inventory database. Git owns the worktree inventory. Grove stores only disposable navigation-recency markers to rank the interactive picker.
 
 ## Install
 
@@ -80,6 +80,16 @@ Existing worktrees outside `.wt` remain visible and removable. Grove does not mo
 ### Pick and navigate
 
 `grove` and `grove cd` open the same fzf picker and print one absolute path. An exact selector bypasses fzf.
+
+The picker shows only repository and worktree names, never paths:
+
+```text
+codex-fork      fix/provider-switch-atomic
+browseros-main  feat/08-20-sunny-shrew
+grove           main
+```
+
+Most recently visited worktrees appear first. New worktrees without visit history fall back to creation order, and typing a repository or branch filters the list without changing its recency ranking. Grove records this optional history under `$XDG_STATE_HOME/grove/recent` or `~/.local/state/grove/recent`; deleting it simply resets picker order.
 
 ```sh
 grove

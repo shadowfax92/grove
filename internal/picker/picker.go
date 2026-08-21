@@ -33,10 +33,7 @@ func selectItems(prompt string, items []Item, multi bool) ([]string, error) {
 	if len(items) == 0 {
 		return nil, fmt.Errorf("no worktrees")
 	}
-	args := []string{"--read0", "--print0", "--delimiter=\t", "--with-nth=2..", "--prompt", prompt}
-	if multi {
-		args = append(args, "--multi", "--header", "tab/shift-tab select · enter confirm")
-	}
+	args := selectionArgs(prompt, multi)
 	cmd := exec.Command("fzf", args...)
 	cmd.Stdin = bytes.NewReader(encodeItems(items))
 	cmd.Stderr = os.Stderr
@@ -52,6 +49,18 @@ func selectItems(prompt string, items []Item, multi bool) ([]string, error) {
 		return nil, fmt.Errorf("fzf: %w", err)
 	}
 	return decodeSelections(out, items)
+}
+
+func selectionArgs(prompt string, multi bool) []string {
+	args := []string{"--read0", "--print0", "--delimiter=\t", "--with-nth=2..", "--prompt", prompt}
+	if multi {
+		args = append(args, "--multi", "--header", "tab/shift-tab select · enter confirm")
+	} else {
+		// Navigation candidates arrive in MRU order. Filtering should narrow that
+		// ranking, not replace it with fzf's match-score ordering.
+		args = append(args, "--no-sort")
+	}
+	return args
 }
 
 func Interactive() bool {
