@@ -189,6 +189,50 @@ func TestRootPickerVisitOrderWinsOverCreationMetadata(t *testing.T) {
 	}
 }
 
+func TestRootPickerDoesNotTreatMainGitMtimeAsCreation(t *testing.T) {
+	repoPath := initV2Repo(t)
+	linkedPath := filepath.Join(t.TempDir(), "linked")
+	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/linked", linkedPath)
+	base := time.Now().Add(-24 * time.Hour)
+	for path, timestamp := range map[string]time.Time{
+		filepath.Join(linkedPath, ".git"): base.Add(1 * time.Hour),
+		filepath.Join(repoPath, ".git"):   base.Add(4 * time.Hour),
+	} {
+		if err := os.Chtimes(path, timestamp, timestamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeV2Config(t, repoPath, "")
+	mainPath := canonicalV2Path(t, repoPath)
+	linkedPath = canonicalV2Path(t, linkedPath)
+
+	root := newRootCommand(commandDependencies{
+		getwd:       func() (string, error) { return repoPath, nil },
+		interactive: func() bool { return true },
+		lastVisited: func(string) (time.Time, bool) { return time.Time{}, false },
+		markVisited: func(string) error { return nil },
+		pick: func(_ string, items []picker.Item) (string, error) {
+			mainIndex, linkedIndex := -1, -1
+			for index, item := range items {
+				switch item.Key {
+				case mainPath:
+					mainIndex = index
+				case linkedPath:
+					linkedIndex = index
+				}
+			}
+			if linkedIndex == -1 || mainIndex == -1 || linkedIndex > mainIndex {
+				t.Fatalf("picker items = %#v, want dated linked worktree before unranked main", items)
+			}
+			return linkedPath, nil
+		},
+	})
+
+	if _, _, err := executeV2(root); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
 func TestNavigationRecencyFailureDoesNotBlockPath(t *testing.T) {
 	repoPath := initV2Repo(t)
 	writeV2Config(t, repoPath, "")

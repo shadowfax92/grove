@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -45,6 +46,47 @@ func TestTrackerRefreshesExistingMarker(t *testing.T) {
 	visitedAt, ok := tracker.LastVisited(worktreePath)
 	if !ok || !visitedAt.After(old) {
 		t.Fatalf("LastVisited() = %v, %v, want after %v", visitedAt, ok, old)
+	}
+}
+
+func TestTrackerConcurrentMarksKeepNewestVisit(t *testing.T) {
+	tracker := New(t.TempDir())
+	worktreePath := filepath.Join(t.TempDir(), "worktree")
+	base := time.Now().Add(-time.Hour).Truncate(time.Second)
+	const writers = 32
+
+	start := make(chan struct{})
+	errors := make(chan error, writers)
+	var group sync.WaitGroup
+	for index := 1; index <= writers; index++ {
+		visitedAt := base.Add(time.Duration(index) * time.Second)
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			errors <- tracker.markVisitedAt(worktreePath, visitedAt)
+		}()
+	}
+	close(start)
+	group.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatalf("markVisitedAt() error = %v", err)
+		}
+	}
+
+	want := base.Add(writers * time.Second)
+	visitedAt, ok := tracker.LastVisited(worktreePath)
+	if !ok || !visitedAt.Equal(want) {
+		t.Fatalf("LastVisited() = %v, %v, want newest concurrent visit %v", visitedAt, ok, want)
+	}
+	older := base.Add(-time.Hour)
+	if err := tracker.markVisitedAt(worktreePath, older); err != nil {
+		t.Fatal(err)
+	}
+	if visitedAt, _ := tracker.LastVisited(worktreePath); !visitedAt.Equal(want) {
+		t.Fatalf("delayed older visit regressed marker to %v, want %v", visitedAt, want)
 	}
 }
 

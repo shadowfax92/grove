@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/gofrs/flock"
 )
 
 // Tracker records one independent marker per canonical worktree path. Independent
@@ -46,6 +48,10 @@ func (t *Tracker) LastVisited(path string) (time.Time, bool) {
 }
 
 func (t *Tracker) MarkVisited(path string) error {
+	return t.markVisitedAt(path, time.Now())
+}
+
+func (t *Tracker) markVisitedAt(path string, visitedAt time.Time) error {
 	if path == "" {
 		return fmt.Errorf("worktree path is required")
 	}
@@ -53,8 +59,18 @@ func (t *Tracker) MarkVisited(path string) error {
 		return fmt.Errorf("creating recency directory: %w", err)
 	}
 
-	// The temporary file and destination share a directory, so rename is atomic.
-	// Concurrent navigations to one worktree therefore leave one complete marker.
+	// Calls capture their visit time before taking the process-shared lock. The
+	// comparison prevents a delayed older caller from publishing after a newer
+	// visit, while the same-directory rename prevents partial marker contents.
+	lock := flock.New(filepath.Join(t.directory, ".lock"))
+	if err := lock.Lock(); err != nil {
+		return fmt.Errorf("locking recency markers: %w", err)
+	}
+	defer lock.Close()
+	if current, ok := t.LastVisited(path); ok && !visitedAt.After(current) {
+		return nil
+	}
+
 	temporary, err := os.CreateTemp(t.directory, ".recent-*")
 	if err != nil {
 		return fmt.Errorf("creating recency marker: %w", err)
@@ -72,6 +88,9 @@ func (t *Tracker) MarkVisited(path string) error {
 	}
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("closing recency marker: %w", err)
+	}
+	if err := os.Chtimes(temporaryPath, visitedAt, visitedAt); err != nil {
+		return fmt.Errorf("timestamping recency marker: %w", err)
 	}
 	if err := os.Rename(temporaryPath, t.markerPath(path)); err != nil {
 		return fmt.Errorf("publishing recency marker: %w", err)

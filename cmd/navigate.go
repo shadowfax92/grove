@@ -91,8 +91,11 @@ func (a *application) navigationPickerItems(inv *inventory.Inventory) []picker.I
 		candidate := navigationCandidate{entry: entry}
 		if visitedAt, ok := a.dependencies.lastVisited(entry.Worktree.Path); ok {
 			candidate.rankedAt, candidate.ranked = visitedAt, true
-		} else if createdAt, ok := worktreeCreatedAt(entry.Worktree.Path); ok {
-			candidate.rankedAt, candidate.ranked = createdAt, true
+		} else if !entry.Worktree.Main {
+			createdAt, ok := worktreeCreatedAt(entry.Worktree.Path)
+			if ok {
+				candidate.rankedAt, candidate.ranked = createdAt, true
+			}
 		}
 		candidates = append(candidates, candidate)
 		if width := len(entry.Repository.Name); width > repositoryWidth {
