@@ -55,10 +55,11 @@ func TestBuildDeduplicatesRepositoryAndPreservesProfiles(t *testing.T) {
 	}
 }
 
-func TestBuildWarnsPastInvalidEntriesAndSilentlyIgnoresLegacyTypes(t *testing.T) {
+func TestBuildSkipsMissingPathsButWarnsForExistingNonGitPaths(t *testing.T) {
 	repoPath := initCatalogRepo(t)
 	cfg := &config.Config{Repos: []config.RepoConfig{
 		{Path: filepath.Join(t.TempDir(), "deleted"), Name: "deleted"},
+		{Path: t.TempDir(), Name: "not-git"},
 		{Path: t.TempDir(), Name: "notes", Type: "dir"},
 		{Path: repoPath, Name: "valid", DefaultBranch: "main"},
 	}}
@@ -70,8 +71,8 @@ func TestBuildWarnsPastInvalidEntriesAndSilentlyIgnoresLegacyTypes(t *testing.T)
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %#v, want 1", warnings)
 	}
-	if !strings.Contains(warnings[0].Error(), "deleted") {
-		t.Fatalf("warnings = %q, want deleted entry", warnings[0].Error())
+	if !strings.Contains(warnings[0].Error(), "not-git") {
+		t.Fatalf("warnings = %q, want existing non-Git entry", warnings[0].Error())
 	}
 }
 
