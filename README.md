@@ -175,6 +175,8 @@ Removal refuses:
 
 With no selector, `grove rm` opens a multi-select picker. Use Tab or Shift-Tab to select worktrees and Enter to confirm. Grove validates the entire selection before deleting any target. Multiple exact selectors use the same all-target preflight.
 
+Every successful `grove rm` also removes config entries for repository directories that no longer exist, including when a bulk mode finds no worktrees to remove. `--dry-run` previews those entries without changing config. Cleanup is reported on stderr; canceled or failed removals leave config untouched. Existing paths with permission or Git errors and legacy `dir`/`plain` entries are retained.
+
 `--discard` deliberately has no shorthand. It authorizes deleting uncommitted files, ignored output, submodules, and unregistered nested repositories. It never overrides main-worktree, lock, current-worktree bulk cleanup, or registered-descendant protections. Grove keeps the branch after removing its worktree.
 
 Bulk removal considers every configured repository and always protects main, locked, current, detached, and registered nested worktrees:
@@ -215,7 +217,7 @@ repos:
 
 Rows that resolve to the same Git common directory are one repository with multiple aliases/setup profiles. A multi-profile repository uses its checkout directory name as the canonical display name and selector; every configured profile name remains a valid alias. A root-level row without `workdir` becomes the default setup profile. This keeps existing multi-profile configs working without pretending they are separate repositories.
 
-Missing, deleted, non-directory, and non-Git paths produce warnings on stderr and are skipped; they do not break valid repositories. Legacy `dir` and `plain` entries are ignored.
+Missing repository directories are silently skipped; normal commands leave their config entries in place until a successful `grove rm` cleans them up. Non-directory, non-Git, and inaccessible paths still produce warnings on stderr and are skipped; they do not break valid repositories. Legacy `dir` and `plain` entries are ignored.
 
 Legacy top-level `worktree_root`, `reap`, and row-level `prepare` fields may remain during migration but no longer control Grove.
 

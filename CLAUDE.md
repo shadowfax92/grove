@@ -35,6 +35,7 @@ Git metadata is the only worktree source of truth. Grove has no inventory state 
 - Dirty removal requires the explicit `--discard` flag.
 - Age-based cleanup ignores merge state, keeps branches, and preserves the same main, lock, current-worktree, and nesting protections as exact removal.
 - Missing cleanup prunes stale Git registrations and keeps branches.
+- Missing repository directories are silently skipped on reads. Every successful removal also prunes their config rows under the registration lock; dry runs only preview, and cancellation/failure never changes config.
 - Worktree removal never falls back to `os.RemoveAll`.
 - Exact selectors never open fzf; omitted selectors require an interactive terminal.
 - Navigation recency may reorder only live Git inventory; missing, corrupt, or deleted markers never block navigation or preserve worktrees.

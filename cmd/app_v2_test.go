@@ -309,7 +309,7 @@ func TestCdExactSelectorNeverCallsPicker(t *testing.T) {
 	}
 }
 
-func TestDeletedConfigRepositoryWarnsWithoutBlockingCommand(t *testing.T) {
+func TestDeletedConfigRepositoryIsSilentlySkippedWithoutChangingConfig(t *testing.T) {
 	repoPath := initV2Repo(t)
 	writeV2Config(t, repoPath, "  - path: /definitely/deleted/grove-repo\n    name: deleted\n")
 	root := newRootCommand(commandDependencies{
@@ -324,8 +324,12 @@ func TestDeletedConfigRepositoryWarnsWithoutBlockingCommand(t *testing.T) {
 	if stdout != canonicalV2Path(t, repoPath)+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
-	if !strings.Contains(stderr, "warning:") || !strings.Contains(stderr, "deleted") {
-		t.Fatalf("stderr = %q, want deleted-repo warning", stderr)
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want no deleted-repo warning", stderr)
+	}
+	cfg, err := config.Load()
+	if err != nil || len(cfg.Repos) != 2 {
+		t.Fatalf("navigation changed config: %#v, %v", cfg, err)
 	}
 }
 

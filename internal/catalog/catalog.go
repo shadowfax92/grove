@@ -102,6 +102,11 @@ func Build(cfg *config.Config, currentDir string) (*Catalog, []Warning) {
 				warnings = append(warnings, Warning{Name: name, Path: row.Path, Message: "repository path must be absolute or start with ~/"})
 				continue
 			}
+			// Reads tolerate vanished checkouts without changing saved profiles.
+			// Successful rm commands own persistent cleanup of these rows.
+			if row.Missing() {
+				continue
+			}
 			repo, err := gitx.OpenRepository(row.Path)
 			if err != nil {
 				warnings = append(warnings, Warning{Name: name, Path: row.Path, Message: err.Error()})

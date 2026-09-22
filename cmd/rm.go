@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"grove/internal/config"
 	"grove/internal/inventory"
 	"grove/internal/picker"
 
@@ -60,6 +61,7 @@ func (a *application) removeCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "rm [selector...]",
 		Short: "Remove worktrees",
+		Long:  "Remove worktrees and clean up config entries for missing repository directories after successful removal. Bulk dry runs preview both kinds of cleanup.",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			olderThan, err := parseOlderThan(olderThanValue)
@@ -108,11 +110,19 @@ func (a *application) removeCommand() *cobra.Command {
 	return command
 }
 
-func (a *application) runRemove(cmd *cobra.Command, args []string, options removeOptions) error {
+func (a *application) runRemove(cmd *cobra.Command, args []string, options removeOptions) (resultErr error) {
 	context, err := a.loadContext(cmd)
 	if err != nil {
 		return err
 	}
+	// Cleanup runs after every successful mode, including an empty bulk pass.
+	// Cancellation and removal failures leave config untouched; checking after
+	// removal also catches profiles pointing into the worktree just deleted.
+	defer func() {
+		if resultErr == nil {
+			a.pruneMissingRepos(cmd, options.dryRun)
+		}
+	}()
 	if options.merged {
 		return a.removeMerged(cmd, context, options.dryRun)
 	}
@@ -165,6 +175,31 @@ func (a *application) runRemove(cmd *cobra.Command, args []string, options remov
 		})
 	}
 	return a.writePath(cmd, returnPath)
+}
+
+func (a *application) pruneMissingRepos(cmd *cobra.Command, dryRun bool) {
+	path, err := config.DefaultConfigPath()
+	var removed []config.RepoConfig
+	if err == nil {
+		removed, err = config.PruneMissingRepos(path, dryRun)
+	}
+	// Config housekeeping must not turn a completed Git removal into a failure.
+	// Use stderr so path/NUL output remains usable by gv and JSON stays valid.
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: cleaning stale repository entries: %v\n", err)
+		return
+	}
+	if len(removed) == 0 {
+		return
+	}
+	action := "Pruned"
+	if dryRun {
+		action = "Would prune"
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "%s %s from config:\n", action, worktreeCount(len(removed), "stale repository entry", "stale repository entries"))
+	for _, repo := range removed {
+		fmt.Fprintf(cmd.ErrOrStderr(), "  %s (%s)\n", repo.Name, repo.Path)
+	}
 }
 
 func parseOlderThan(value string) (cleanupAge, error) {
