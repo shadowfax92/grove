@@ -208,6 +208,45 @@ func TestAddRepoSerializesConcurrentUpdates(t *testing.T) {
 	}
 }
 
+func TestAddRepoTreatsConcurrentRegistrationOfOneRepoAsSuccess(t *testing.T) {
+	// Two first-time `grove new` runs in one repository both see it as
+	// unregistered and both register it. The loser must not fail.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeConfigFile(t, path, "repos: []\n")
+	repo := NewWorktreeRepo(t.TempDir(), "focus", "main")
+	const count = 8
+	start := make(chan struct{})
+	errors := make(chan error, count)
+	var group sync.WaitGroup
+	for range count {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			errors <- AddRepoToFile(path, repo)
+		}()
+	}
+	close(start)
+	group.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatalf("AddRepoToFile() error = %v", err)
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("updated config is invalid YAML: %v\n%s", err, data)
+	}
+	if len(cfg.Repos) != 1 {
+		t.Fatalf("repo count = %d, want 1:\n%s", len(cfg.Repos), data)
+	}
+}
+
 func TestAddRepoPreservesEmbeddedNewlines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	writeConfigFile(t, path, "repos: []\n")

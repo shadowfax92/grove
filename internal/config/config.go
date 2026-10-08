@@ -77,6 +77,13 @@ func addRepoToFileLocked(path string, repo RepoConfig) error {
 	if err := cfg.resolve(); err != nil {
 		return err
 	}
+	registered, err := hasIdenticalRepo(&cfg, repo)
+	if err != nil {
+		return err
+	}
+	if registered {
+		return nil
+	}
 	if err := rejectDuplicateRepo(&cfg, repo); err != nil {
 		return err
 	}
@@ -169,6 +176,23 @@ func expandTilde(path, home string) string {
 		return filepath.Join(home, path[2:])
 	}
 	return path
+}
+
+// hasIdenticalRepo reports an entry with the same name and path. Concurrent
+// first runs of `grove new` in one repository each decide it is unregistered
+// before taking the lock, so the later ones must find the work done, not fail.
+func hasIdenticalRepo(cfg *Config, repo RepoConfig) (bool, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false, err
+	}
+	repoPath := normalizeRepoPath(repo.Path, home)
+	for _, existing := range cfg.Repos {
+		if existing.Name == repo.Name && normalizeRepoPath(existing.Path, home) == repoPath {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func rejectDuplicateRepo(cfg *Config, repo RepoConfig) error {
