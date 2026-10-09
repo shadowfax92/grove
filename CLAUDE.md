@@ -21,6 +21,7 @@ The module name is `grove`.
 - `internal/inventory/` joins catalog repositories to live Git worktrees and resolves exact selectors.
 - `internal/picker/` is the NUL-safe fzf boundary.
 - `internal/recency/` stores disposable, hashed navigation markers used only to rank known inventory entries in the picker.
+- `internal/panereport/` atomically stores durable worktree-root handles before silently publishing their SHA-256 tokens to the calling Herdr pane. These files are a consumer contract and are independent of recency markers.
 - `internal/names/` generates readable default branch names.
 
 Git metadata is the only worktree source of truth. Grove has no inventory state file and no tmux or repository-sync lifecycle; optional recency markers under the user state directory affect presentation only.

@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,9 +64,14 @@ func TestWorktreeCommandsReportCallingPane(t *testing.T) {
 			if err != nil {
 				t.Fatalf("worktree was printed but not reported: %v", err)
 			}
-			want := "pane\x00report-metadata\x00w1:p1\x00--source\x00grove\x00--token\x00grove_worktree=" + path + "\x00"
+			handle := fmt.Sprintf("%x", sha256.Sum256([]byte(path)))
+			want := "pane\x00report-metadata\x00w1:p1\x00--source\x00grove\x00--token\x00grove_worktree=" + handle + "\x00"
 			if string(got) != want {
 				t.Fatalf("report args = %q, want %q", got, want)
+			}
+			content, err := os.ReadFile(filepath.Join(os.Getenv("XDG_STATE_HOME"), "grove", "worktrees", handle))
+			if err != nil || string(content) != path+"\n" {
+				t.Fatalf("handle contains %q, error = %v", content, err)
 			}
 		})
 	}
@@ -132,6 +139,28 @@ type failedPaneOutput struct{}
 
 func (failedPaneOutput) Write([]byte) (int, error) {
 	return 0, errors.New("output unavailable")
+}
+
+func TestHandleStoreFailurePreservesNavigationOutput(t *testing.T) {
+	repo := initV2Repo(t)
+	writeV2Config(t, repo, "")
+	report := fakePaneReporter(t)
+	blockedState := filepath.Join(t.TempDir(), "state-is-a-file")
+	if err := os.WriteFile(blockedState, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_STATE_HOME", blockedState)
+	dependencies := commandDependencies{getwd: func() (string, error) { return repo, nil }}
+	t.Setenv("HERDR_ENV", "0")
+	wantOut, wantErr, wantResult := executeV2(newRootCommand(dependencies), "cd", ".")
+	t.Setenv("HERDR_ENV", "1")
+	gotOut, gotErr, gotResult := executeV2(newRootCommand(dependencies), "cd", ".")
+	if gotOut != wantOut || gotErr != wantErr || gotResult != wantResult {
+		t.Fatalf("handle failure changed command output: (%q, %q, %v), want (%q, %q, %v)", gotOut, gotErr, gotResult, wantOut, wantErr, wantResult)
+	}
+	if _, err := os.Stat(report); !os.IsNotExist(err) {
+		t.Fatalf("unresolvable handle was published: %v", err)
+	}
 }
 
 func fakePaneReporter(t *testing.T) string {

@@ -242,8 +242,11 @@ grove --json list
 - warnings and setup progress go to stderr.
 
 Inside a Herdr pane, successful navigation and creation also publish the absolute
-worktree root as the pane's `grove_worktree` token so Scratch can follow it. This
-best-effort report is silent and times out after one second. Set
+worktree root through a SHA-256 handle in the pane's `grove_worktree` token so Scratch
+can follow it even when the path is long. Grove first atomically stores the full root
+in `$XDG_STATE_HOME/grove/worktrees/<handle>` (default: `~/.local/state/grove/worktrees`).
+These durable files are separate from disposable navigation-recency markers. Reporting
+is silent and times out after one second; a failed handle write skips it. Set
 `GROVE_PANE_REPORT=0` when creating or selecting worktrees on behalf of another pane.
 
 ## Safety note
