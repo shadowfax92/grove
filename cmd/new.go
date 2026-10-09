@@ -11,6 +11,7 @@ import (
 	"grove/internal/config"
 	gitx "grove/internal/git"
 	"grove/internal/names"
+	"grove/internal/panereport"
 
 	"github.com/spf13/cobra"
 )
@@ -81,9 +82,17 @@ func (a *application) runNew(cmd *cobra.Command, args []string) error {
 		runSetup(cmd, path, profile)
 	}
 	if a.jsonOutput {
-		return writeJSON(cmd, newOutput{Version: 1, Repository: repository.Name, Branch: branch, Path: path, Created: created})
+		err = writeJSON(cmd, newOutput{Version: 1, Repository: repository.Name, Branch: branch, Path: path, Created: created})
+	} else {
+		err = a.writePath(cmd, path)
 	}
-	return a.writePath(cmd, path)
+	if err != nil {
+		return err
+	}
+	// Reused worktrees publish too: the printed root is the caller's new context
+	// regardless of whether this command created any Git state.
+	panereport.Worktree(cmd.Context(), path)
+	return nil
 }
 
 func resolveNewTarget(cat *catalog.Catalog, raw string) (*catalog.Repository, *catalog.Profile, string, error) {
