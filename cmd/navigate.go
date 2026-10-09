@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"grove/internal/inventory"
+	"grove/internal/panereport"
 	"grove/internal/picker"
 
 	"github.com/spf13/cobra"
@@ -49,6 +50,9 @@ func (a *application) runNavigate(cmd *cobra.Command, args []string) error {
 	if err := a.writeWorktree(cmd, entry); err != nil {
 		return err
 	}
+	// Only navigation publishes pane context: writePath is also used by config
+	// and removal, whose output must not change what Scratch considers active.
+	panereport.Worktree(cmd.Context(), entry.Worktree.Path)
 	if !a.jsonOutput {
 		// Grove exits before the Fish wrapper changes its parent shell directory.
 		// Successfully emitting the target is therefore the last reliable handoff

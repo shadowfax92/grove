@@ -241,6 +241,11 @@ grove --json list
 - stdout contains the requested path or data.
 - warnings and setup progress go to stderr.
 
+Inside a Herdr pane, successful navigation and creation also publish the absolute
+worktree root as the pane's `grove_worktree` token so Scratch can follow it. This
+best-effort report is silent and times out after one second. Set
+`GROVE_PANE_REPORT=0` when creating or selecting worktrees on behalf of another pane.
+
 ## Safety note
 
 Because `.wt` contains nested Git repositories, this command can destroy the entire worktree tree:
