@@ -22,6 +22,7 @@ type newOutput struct {
 	Branch     string `json:"branch"`
 	Path       string `json:"path"`
 	Created    bool   `json:"created"`
+	LLM        string `json:"llm,omitempty"`
 }
 
 func (a *application) newCommand() *cobra.Command {
@@ -78,11 +79,13 @@ func (a *application) runNew(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("creating worktree: %w", err)
 	}
+	// Link before setup so setup commands and the agent both find .llm.
+	llmPath := a.attachLLM(cmd, context.config, repository, path)
 	if created {
 		runSetup(cmd, path, profile)
 	}
 	if a.jsonOutput {
-		err = writeJSON(cmd, newOutput{Version: 1, Repository: repository.Name, Branch: branch, Path: path, Created: created})
+		err = writeJSON(cmd, newOutput{Version: 1, Repository: repository.Name, Branch: branch, Path: path, Created: created, LLM: llmPath})
 	} else {
 		err = a.writePath(cmd, path)
 	}

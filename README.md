@@ -189,6 +189,54 @@ Use `--dry-run` with any bulk mode to inspect the exact candidates first. Age cl
 
 Deletion goes through `git worktree remove`. With `--discard`, Grove repairs stale linked-worktree pointers from Git's administrative records before retrying removal. It never falls back to recursive filesystem deletion.
 
+### LLM context stores
+
+Agents keep plans, notes and run state in `.llm/`. Deleting a worktree would delete
+that folder, so Grove keeps one store per repository outside every checkout and
+links it into each worktree:
+
+```text
+~/code/app/.llm             →  ~/llm/code/app/
+~/code/app/.wt/feat/x/.llm  →  ~/llm/code/app/   (shared)
+```
+
+Turn it on with a top-level `llm` block:
+
+```yaml
+llm:
+  root: ~/llm          # required; stores live at <root>/<key>
+  dir: .llm            # link name in each worktree (default .llm)
+  aliases: [.scratch]  # extra link names for the same store (default none)
+  archive_after: 30d   # idle age before archiving; 0 turns it off (default 30d)
+  keep: [runs, AGENTS.md, CLAUDE.md, README.md]   # never archived (this is the default)
+```
+
+```sh
+grove llm                      # link this worktree; print its store path
+gv llm                         # cd into the store
+grove llm sync --dry-run       # preview linking every worktree of every repository
+grove llm sync
+grove llm archive --dry-run    # preview what is idle past llm.archive_after
+grove llm archive app --older-than 2w
+```
+
+- The store key is the main checkout's path relative to `$HOME`, so every worktree of
+  a repository shares it. Set `llm: <key>` on config rows to make separate clones share
+  one store, or `llm: false` to opt a repository out.
+- `grove new` links the new or reused worktree and the main checkout before setup runs,
+  reports the store as `llm` in `--json` output, and archives idle entries.
+- Each alias is its own symlink to the store, not a link to `.llm`, so either can be
+  removed without breaking the other.
+- A missing, dangling or foreign symlink is repointed, because only the link changes.
+  A real directory or file is never touched; Grove tells you how to move it aside, and
+  the other links are still made. Grove refuses to link over a tracked path.
+- `/.llm` and each alias are written to the common `.git/info/exclude`.
+- Archiving moves top-level store entries whose newest change is older than the cutoff
+  into `<store>/archive/`. It skips dotfiles, `keep` names and entries that hold another
+  store, adds a date suffix instead of overwriting, and never deletes anything:
+  `mv archive/<name> .` restores an entry. Reading a file does not count as a change.
+- Removing a worktree deletes only its `.llm` symlink; the store stays.
+
 ### Configure
 
 ```sh

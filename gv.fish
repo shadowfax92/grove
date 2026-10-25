@@ -67,6 +67,17 @@ function gv
             or return $grove_status
             test -n "$path"
             and builtin cd -- $path
+        case llm
+            if test (count $rest) -gt 0
+                grove llm $rest
+                return $status
+            end
+            set -l path (grove --null llm | string split0)
+            set -l grove_status $pipestatus[1]
+            test $grove_status -eq 0
+            or return $grove_status
+            test -n "$path"
+            and builtin cd -- $path
         case l ls list
             grove list $rest
         case cfg config
