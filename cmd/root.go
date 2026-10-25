@@ -100,6 +100,7 @@ func newRootCommand(dependencies commandDependencies) *cobra.Command {
 		app.cdCommand(),
 		app.configCommand(),
 		app.listCommand(),
+		app.llmCommand(),
 		app.newCommand(),
 		app.removeCommand(),
 	)

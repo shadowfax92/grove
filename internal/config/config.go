@@ -12,7 +12,18 @@ import (
 )
 
 type Config struct {
+	LLM   LLMConfig    `yaml:"llm"`
 	Repos []RepoConfig `yaml:"repos"`
+}
+
+// LLMConfig holds the raw llm store settings. Values stay unparsed here so a bad
+// value disables only llm stores (with a warning) instead of failing every command.
+type LLMConfig struct {
+	Root         string   `yaml:"root"`
+	Dir          string   `yaml:"dir"`
+	Aliases      []string `yaml:"aliases"`
+	ArchiveAfter string   `yaml:"archive_after"`
+	Keep         []string `yaml:"keep"`
 }
 
 type RepoConfig struct {
@@ -22,6 +33,34 @@ type RepoConfig struct {
 	DefaultBranch string   `yaml:"default_branch"`
 	Workdir       string   `yaml:"workdir"`
 	Setup         []string `yaml:"setup"`
+	LLM           RepoLLM  `yaml:"llm"`
+}
+
+// RepoLLM is a row's llm store override. A key makes separate clones share one
+// store; false opts the repository out. The zero value derives the key from its path.
+type RepoLLM struct {
+	Key      string
+	Disabled bool
+}
+
+func (r *RepoLLM) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode && node.Tag == "!!bool" {
+		var enabled bool
+		if err := node.Decode(&enabled); err != nil {
+			return err
+		}
+		if enabled {
+			return fmt.Errorf("line %d: llm: true is not valid; use a store key or false", node.Line)
+		}
+		*r = RepoLLM{Disabled: true}
+		return nil
+	}
+	var key string
+	if err := node.Decode(&key); err != nil {
+		return fmt.Errorf("line %d: llm must be a store key or false", node.Line)
+	}
+	*r = RepoLLM{Key: strings.TrimSpace(key)}
+	return nil
 }
 
 func DefaultConfigPath() (string, error) {
@@ -133,6 +172,7 @@ func (c *Config) resolve() error {
 	if err != nil {
 		return err
 	}
+	c.LLM.Root = expandTilde(strings.TrimSpace(c.LLM.Root), home)
 	for index := range c.Repos {
 		c.Repos[index].Path = expandTilde(c.Repos[index].Path, home)
 		if c.Repos[index].Name == "" {

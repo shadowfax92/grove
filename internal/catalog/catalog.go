@@ -33,9 +33,12 @@ type Profile struct {
 }
 
 type Repository struct {
-	Name           string
-	Git            *gitx.Repository
-	DefaultBranch  string
+	Name          string
+	Git           *gitx.Repository
+	DefaultBranch string
+	// LLM is the repository's llm store override. Profile rows share one store,
+	// so the first row that sets it wins and a disagreeing row only warns.
+	LLM            config.RepoLLM
 	Profiles       []*Profile
 	defaultProfile *Profile
 	defaultScore   int
@@ -133,6 +136,13 @@ func Build(cfg *config.Config, currentDir string) (*Catalog, []Warning) {
 				catalog.Repositories = append(catalog.Repositories, entry)
 			}
 			entry.Profiles = append(entry.Profiles, profile)
+			if row.LLM != (config.RepoLLM{}) {
+				if entry.LLM == (config.RepoLLM{}) {
+					entry.LLM = row.LLM
+				} else if entry.LLM != row.LLM {
+					warnings = append(warnings, Warning{Name: name, Path: row.Path, Message: "llm differs from another row of the same repository; using the first"})
+				}
+			}
 			score := profileScore(repo.MainPath, row.Path, profile.Workdir)
 			if entry.defaultProfile == nil || score > entry.defaultScore {
 				entry.defaultProfile = profile

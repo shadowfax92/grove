@@ -26,6 +26,8 @@ func TestFishWrapperRoutesFlags(t *testing.T) {
 		{name: "older than equals", args: "rm --older-than=14d", direct: true},
 		{name: "missing true", args: "rm --missing=true", direct: true},
 		{name: "missing false", args: "rm --missing=false .", direct: false},
+		{name: "llm store", args: "llm", direct: false},
+		{name: "llm sync", args: "llm sync", direct: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			target := filepath.Join(t.TempDir(), "line\nbreak")

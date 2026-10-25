@@ -86,7 +86,7 @@ func (r *Repository) EnsureManagedRoot() (string, error) {
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return "", fmt.Errorf("creating worktree root: %w", err)
 	}
-	if err := r.ensureSharedExclude(); err != nil {
+	if err := r.EnsureExcluded("/.wt/"); err != nil {
 		return "", err
 	}
 	return root, nil
@@ -413,14 +413,16 @@ func (r *Repository) AheadBehind(path, defaultBranch string) (int, int, error) {
 	return ahead, behind, nil
 }
 
-func (r *Repository) ensureSharedExclude() error {
+// EnsureExcluded appends pattern to the common info/exclude, which every linked
+// worktree shares. Grove never edits tracked .gitignore files.
+func (r *Repository) EnsureExcluded(pattern string) error {
 	path := filepath.Join(r.CommonDir, "info", "exclude")
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("reading shared exclude: %w", err)
 	}
 	for _, line := range strings.Split(string(data), "\n") {
-		if strings.TrimSpace(line) == "/.wt/" {
+		if strings.TrimSpace(line) == pattern {
 			return nil
 		}
 	}
@@ -436,10 +438,20 @@ func (r *Repository) ensureSharedExclude() error {
 	if len(data) != 0 && data[len(data)-1] != '\n' {
 		prefix = "\n"
 	}
-	if _, err := f.WriteString(prefix + "/.wt/\n"); err != nil {
+	if _, err := f.WriteString(prefix + pattern + "\n"); err != nil {
 		return fmt.Errorf("writing shared exclude: %w", err)
 	}
 	return nil
+}
+
+// Tracked reports whether the checkout at worktree tracks anything at path.
+// Tracked content differs per branch, so this asks the worktree, not the main checkout.
+func Tracked(worktree, path string) (bool, error) {
+	out, err := runGitBytes(worktree, "ls-files", "-z", "--", path)
+	if err != nil {
+		return false, err
+	}
+	return len(out) != 0, nil
 }
 
 func parseWorktreesPorcelain(data []byte) []WorktreeInfo {

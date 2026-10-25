@@ -256,3 +256,27 @@ func writeConfigFile(t *testing.T, path, data string) {
 		t.Fatal(err)
 	}
 }
+
+func TestParseConfigReadsLLMSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg, err := parseConfig([]byte("llm:\n  root: ~/llm\n  archive_after: 0\nrepos:\n" +
+		"  - path: /a\n    llm: shared/key\n" +
+		"  - path: /b\n    llm: false\n" +
+		"  - path: /c\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LLM.Root != filepath.Join(home, "llm") || cfg.LLM.ArchiveAfter != "0" {
+		t.Fatalf("llm block = %+v", cfg.LLM)
+	}
+	want := []RepoLLM{{Key: "shared/key"}, {Disabled: true}, {}}
+	for index, repo := range cfg.Repos {
+		if repo.LLM != want[index] {
+			t.Errorf("repo %s llm = %+v, want %+v", repo.Path, repo.LLM, want[index])
+		}
+	}
+	if _, err := parseConfig([]byte("repos:\n  - path: /a\n    llm: true\n")); err == nil || !strings.Contains(err.Error(), "store key or false") {
+		t.Fatalf("llm: true error = %v", err)
+	}
+}
