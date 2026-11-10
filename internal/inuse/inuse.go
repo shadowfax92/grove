@@ -23,6 +23,7 @@ type Process struct {
 	Command string `json:"command"`
 }
 
+// Result separates a proven empty match from unavailable process visibility.
 type Result struct {
 	State     State     `json:"state"`
 	Processes []Process `json:"processes,omitempty"`

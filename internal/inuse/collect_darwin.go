@@ -34,8 +34,7 @@ func parseLSOF(out []byte) ([]processCWD, error) {
 	var process Process
 	seen := false
 	// NUL fields preserve framing; filename contents still use lsof escaping.
-	// lsof inserts a newline
-	// between process/file sets, before the next field tag, not inside the field.
+	// lsof inserts newlines between process/file sets, before the next field tag.
 	for _, raw := range bytes.Split(out, []byte{0}) {
 		field := bytes.TrimLeft(raw, "\n")
 		if len(field) == 0 {
@@ -76,7 +75,6 @@ func parseLSOF(out []byte) ([]processCWD, error) {
 					seenPaths[path] = true
 				}
 			}
-
 		}
 	}
 	if !seen || len(result) == 0 {

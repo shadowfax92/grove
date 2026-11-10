@@ -28,6 +28,8 @@ func collect(ctx context.Context) ([]processCWD, error) {
 		if os.IsNotExist(err) {
 			continue
 		} // exited process or kernel thread
+		// An inaccessible PID invalidates the snapshot; a partial map must never
+		// turn lack of permission into apparent permission to remove a worktree.
 		if err != nil {
 			return nil, fmt.Errorf("reading process %d cwd: %w", pid, err)
 		}

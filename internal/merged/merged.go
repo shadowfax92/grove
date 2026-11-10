@@ -6,13 +6,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	gitx "grove/internal/git"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	gitx "grove/internal/git"
 )
 
 // Branch pins the commit being classified, independently of later ref movement.
