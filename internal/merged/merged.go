@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	gitx "grove/internal/git"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,11 +15,14 @@ import (
 	"time"
 )
 
+// Branch pins the commit being classified, independently of later ref movement.
 type Branch struct {
 	Name string
 	Tip  string
 }
 
+// Result contains positive evidence for this tip, or an explicit negative/unknown
+// reason. Skipped tiers are incomplete checks, never evidence that a tip merged.
 type Result struct {
 	Merged  bool     `json:"merged"`
 	Tier    string   `json:"tier"`
@@ -57,6 +61,9 @@ func Check(ctx context.Context, path, defaultBranch string, branches []Branch, o
 		options.Timeout = 5 * time.Second
 	}
 	c := checker{path: path, options: options}
+	if defaultBranch == "" {
+		defaultBranch = gitx.DefaultBranch(path)
+	}
 	results := make(map[string]Result, len(branches))
 	base, err := c.base(ctx, defaultBranch)
 	if err != nil {
@@ -104,6 +111,11 @@ func Check(ctx context.Context, path, defaultBranch string, branches []Branch, o
 			result.Error = err.Error()
 			results[branch.Name] = result
 			continue
+		}
+		if objectDir == "" && objectErr == "" {
+			if safetyErr := c.trialMergeSafe(ctx); safetyErr != nil {
+				objectErr = safetyErr.Error()
+			}
 		}
 		if objectDir == "" && objectErr == "" {
 			objectDir, err = os.MkdirTemp("", "grove-merge-objects-*")
@@ -159,9 +171,6 @@ func Check(ctx context.Context, path, defaultBranch string, branches []Branch, o
 func defaultName(branch string) string {
 	for _, prefix := range []string{"refs/heads/", "refs/remotes/origin/", "origin/"} {
 		branch = strings.TrimPrefix(branch, prefix)
-	}
-	if branch == "" {
-		branch = "main"
 	}
 	return branch
 }
@@ -226,6 +235,8 @@ func (c checker) git(ctx context.Context, extra []string, args ...string) ([]byt
 	defer cancel()
 	cmd := exec.CommandContext(bounded, "git", args...)
 	cmd.Dir = c.path
+	// Bound pipe draining too: a killed helper can leave a child holding stdout.
+	cmd.WaitDelay = 100 * time.Millisecond
 	cmd.Env = append(append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_NO_LAZY_FETCH=1"), extra...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -248,4 +259,25 @@ func validOID(s string) bool {
 		}
 	}
 	return true
+}
+
+// Trial merges honor attributes and may otherwise execute a configured external
+// driver in the real checkout. Skip that tier when commands could run; isolated
+// object storage alone is not an isolation boundary for user-provided programs.
+func (c checker) trialMergeSafe(ctx context.Context) error {
+	names, err := c.git(ctx, nil, "config", "--name-only", "--get-regexp", `^merge\..*\.driver$`)
+	if err != nil && !exitCode(err, 1) {
+		return err
+	}
+	if len(bytes.TrimSpace(names)) != 0 {
+		return fmt.Errorf("external merge drivers configured")
+	}
+	value, err := c.git(ctx, nil, "config", "--bool", "--get", "merge.renormalize")
+	if err != nil && !exitCode(err, 1) {
+		return err
+	}
+	if strings.TrimSpace(string(value)) == "true" {
+		return fmt.Errorf("merge renormalization may execute external filters")
+	}
+	return nil
 }

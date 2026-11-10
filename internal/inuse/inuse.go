@@ -63,11 +63,15 @@ func (s Snapshot) Lookup(path string) Result {
 		return Result{State: Unknown, Error: fmt.Sprintf("resolving worktree: %v", err)}
 	}
 	result := Result{State: Free}
+	seen := make(map[int]bool)
 	for _, process := range s.processes {
 		relative, err := filepath.Rel(root, process.path)
 		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			result.State = InUse
-			result.Processes = append(result.Processes, process.Process)
+			if !seen[process.PID] {
+				result.Processes = append(result.Processes, process.Process)
+				seen[process.PID] = true
+			}
 		}
 	}
 	sort.Slice(result.Processes, func(i, j int) bool { return result.Processes[i].PID < result.Processes[j].PID })

@@ -170,7 +170,7 @@ func TestForgeUnavailable(t *testing.T) {
 				}
 				t.Setenv("PATH", bin)
 			case "timeout":
-				fakeGH(t, "exec sleep 30")
+				fakeGH(t, "sleep 8")
 			case "invalid":
 				fakeGH(t, "echo malformed")
 			case "failure":
@@ -223,5 +223,40 @@ func TestMissingBaseAndInvalidTip(t *testing.T) {
 	got = check(t, path, topic, Options{})
 	if got.Merged || got.Error == "" {
 		t.Fatalf("invalid tip %+v", got)
+	}
+}
+
+func TestOmittedDefaultBranchUsesRepositoryDefault(t *testing.T) {
+	path := fixture(t)
+	git(t, path, "branch", "-m", "master")
+	tip := git(t, path, "rev-parse", "HEAD")
+	git(t, path, "branch", "topic")
+	got := Check(context.Background(), path, "", []Branch{{Name: "topic", Tip: tip}}, Options{})["topic"]
+	if !got.Merged || got.Tier != "ancestor" || got.Base != "refs/heads/master" {
+		t.Fatalf("%+v", got)
+	}
+}
+func TestTrialMergeDoesNotExecuteExternalCommands(t *testing.T) {
+	for _, mode := range []string{"driver", "renormalize"} {
+		t.Run(mode, func(t *testing.T) {
+			path := fixture(t)
+			topic := branch(t, path, "topic")
+			marker := filepath.Join(path, "unexpected-write")
+			if mode == "driver" {
+				git(t, path, "config", "merge.external.driver", "echo bad > "+shellQuote(marker)+"; cp %B %A")
+				write(t, filepath.Join(path, ".gitattributes"), "* merge=external\n")
+			} else {
+				git(t, path, "config", "merge.renormalize", "true")
+				git(t, path, "config", "filter.external.clean", "echo bad > "+shellQuote(marker)+"; cat")
+				write(t, filepath.Join(path, ".gitattributes"), "* filter=external\n")
+			}
+			got := check(t, path, topic, Options{})
+			if got.Merged || len(got.Skipped) < 2 {
+				t.Fatalf("unsafe trial not skipped: %+v", got)
+			}
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Fatalf("external command ran: %v", err)
+			}
+		})
 	}
 }

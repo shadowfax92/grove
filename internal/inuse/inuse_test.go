@@ -15,7 +15,7 @@ func TestSnapshotFindsChildProcess(t *testing.T) {
 		t.Skip("cwd snapshots unsupported")
 	}
 	root := t.TempDir()
-	nested := filepath.Join(root, "nested")
+	nested := filepath.Join(root, "nested\nline\tpart\\n literal^A")
 	if err := os.Mkdir(nested, 0700); err != nil {
 		t.Fatal(err)
 	}

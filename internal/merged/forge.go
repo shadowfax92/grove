@@ -80,6 +80,7 @@ func (c checker) forge(ctx context.Context, base string, branches []Branch, resu
 	const limit = 10000
 	cmd := exec.CommandContext(bounded, gh, "pr", "list", "--state", "merged", "--base", base, "--limit", fmt.Sprint(limit), "--json", "number,headRefName,headRefOid")
 	cmd.Dir = c.path
+	configureForgeProcess(cmd)
 	cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1", "GIT_OPTIONAL_LOCKS=0")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

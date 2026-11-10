@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+// Result retains partial timestamps on failure. Consumers must check Error
+// before applying an inactivity threshold.
 type Result struct {
 	LastActive time.Time `json:"last_active"`
 	Source     string    `json:"source,omitempty"`
@@ -46,6 +48,8 @@ func Measure(ctx context.Context, path string) Result {
 	}
 	cmd := exec.CommandContext(ctx, "git", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
 	cmd.Dir = path
+	// Bound pipe draining too: a killed helper can leave a child holding stdout.
+	cmd.WaitDelay = 100 * time.Millisecond
 	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

@@ -3,6 +3,7 @@ package inuse
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -25,5 +26,35 @@ func TestLSOFNULFields(t *testing.T) {
 		if _, err := parseLSOF([]byte(bad)); err == nil {
 			t.Fatalf("accepted %q", bad)
 		}
+	}
+}
+
+func TestLSOFAmbiguousEscapingProtectsBothPaths(t *testing.T) {
+	root := t.TempDir()
+	literal := filepath.Join(root, `literal\nline`)
+	newline := filepath.Join(root, "literal\nline")
+	for _, path := range []string{literal, newline} {
+		if err := os.Mkdir(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data := []byte("p123\x00cworker\x00\nfcwd\x00n" + literal + "\x00\n")
+	processes, err := parseLSOF(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := Snapshot{known: true, processes: processes}
+	for _, path := range []string{literal, newline, root} {
+		got := snapshot.Lookup(path)
+		if got.State != InUse || len(got.Processes) != 1 {
+			t.Fatalf("%q: %+v", path, got)
+		}
+	}
+	candidates, err := lsofPaths(`/tmp/hex\x01caret^Atab\t`)
+	if err != nil || len(candidates) != 8 {
+		t.Fatalf("escape variants %q %v", candidates, err)
+	}
+	if _, err := lsofPaths(`/tmp/` + strings.Repeat(`\n`, 8)); err == nil {
+		t.Fatal("unbounded escaping accepted")
 	}
 }

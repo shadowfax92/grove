@@ -292,7 +292,7 @@ func populateListStatus(ctx context.Context, document *listDocument, cat *catalo
 	}
 	jobs := make(chan job)
 	var workers sync.WaitGroup
-	for range 12 {
+	for range 32 {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
