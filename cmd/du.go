@@ -243,7 +243,7 @@ func (a *application) runDU(cmd *cobra.Command, names []string, options duOption
 			signalEntries = append(signalEntries, entry)
 		}
 	}
-	facts := cleanup.Collect(ctx, data.inventory, signalEntries, options.forge, a.dependencies.inUse)
+	facts := cleanup.Collect(ctx, data.inventory, signalEntries, options.forge, a.dependencies.inUse, nil)
 	byPath := map[string]cleanup.Row{}
 	for _, r := range facts {
 		byPath[r.Entry.Worktree.Path] = r

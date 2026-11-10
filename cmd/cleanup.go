@@ -66,9 +66,16 @@ func (a *application) runCleanup(cmd *cobra.Command, o cleanupOptions) (resultEr
 	if o.dryRun && o.wait {
 		return fmt.Errorf("--wait cannot be used with --dry-run")
 	}
+	discoveryStarted := time.Now()
+	if !o.automatic {
+		fmt.Fprintln(cmd.ErrOrStderr(), "Discovering worktrees for cleanup...")
+	}
 	data, err := a.loadContext(cmd)
 	if err != nil {
 		return err
+	}
+	if !o.automatic {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Discovered %d worktrees in %s.\n", len(data.inventory.Entries), time.Since(discoveryStarted).Round(time.Millisecond))
 	}
 	if o.automatic {
 		return a.runAutomaticSweep(cmd, data, o)
@@ -100,7 +107,7 @@ func (a *application) cleanupWithContext(cmd *cobra.Command, data *commandContex
 			entries = kept
 		}
 	}
-	rows := cleanup.Collect(cmd.Context(), data.inventory, entries, o.forge, a.dependencies.inUse)
+	rows := a.collectCleanupSignals(cmd, data.inventory, entries, o.forge, !o.automatic)
 	if err := cmd.Context().Err(); err != nil {
 		return err
 	}
@@ -122,7 +129,11 @@ func (a *application) cleanupWithContext(cmd *cobra.Command, data *commandContex
 				return err
 			}
 		}
-		rows, err = a.pickCleanupRows(data, rows, idle, len(o.repos) == 0)
+		grace, err := cleanupGrace(data.config.Cleanup)
+		if err != nil {
+			return err
+		}
+		rows, err = a.pickCleanupRows(data, rows, idle, grace, len(o.repos) == 0)
 		if err != nil {
 			return err
 		}
@@ -173,13 +184,15 @@ func cleanupSelection(data *commandContext, o cleanupOptions) (cleanup.Selection
 		if o.discard || o.allowUnknown {
 			return s, fmt.Errorf("--sweep never allows --discard or --allow-unknown-in-use")
 		}
-		settings, err := cleanupSettings(data.config.Cleanup)
+		s.Merged = true
+	}
+	if s.Merged {
+		grace, err := cleanupGrace(data.config.Cleanup)
 		if err != nil {
 			return s, err
 		}
-		s.Merged = true
-		if s.InactiveFor < settings.grace {
-			s.InactiveFor = settings.grace
+		if s.InactiveFor < grace {
+			s.InactiveFor = grace
 		}
 	}
 	return s, nil
@@ -239,7 +252,7 @@ func (a *application) refreshCleanupSizes(cmd *cobra.Command, data *commandConte
 		fmt.Fprintln(cmd.ErrOrStderr(), "Missing/stale sizes are refreshing in the background; cached sizes are estimates.")
 	}
 }
-func (a *application) pickCleanupRows(data *commandContext, rows []cleanup.Row, idle time.Duration, projects bool) ([]cleanup.Row, error) {
+func (a *application) pickCleanupRows(data *commandContext, rows []cleanup.Row, idle, grace time.Duration, projects bool) ([]cleanup.Row, error) {
 	if projects {
 		type project struct {
 			name, key              string
@@ -298,7 +311,7 @@ func (a *application) pickCleanupRows(data *commandContext, rows []cleanup.Row, 
 	}
 	items := []picker.Item{}
 	for _, r := range rows {
-		items = append(items, picker.Item{Key: r.Entry.Worktree.Path, Label: cleanupLabel(r, time.Now()), Selected: r.Preselected(time.Now(), idle, current, data.inventory)})
+		items = append(items, picker.Item{Key: r.Entry.Worktree.Path, Label: cleanupLabel(r, time.Now()), Selected: r.Preselected(time.Now(), idle, grace, current, data.inventory)})
 	}
 	paths, err := a.dependencies.pickMany("worktrees > ", items)
 	if err != nil {
@@ -457,6 +470,10 @@ func (a *application) confirmCleanup(cmd *cobra.Command, rows []cleanup.Row, dir
 	return nil
 }
 func (a *application) removeCleanupRows(cmd *cobra.Command, data *commandContext, rows []cleanup.Row, o cleanupOptions, guided bool) error {
+	selection, err := cleanupSelection(data, o)
+	if err != nil {
+		return err
+	}
 	checks := prepareCleanup(cmd, data, rows, o.discard)
 	dirty := 0
 	ready := []preparedCleanup{}
@@ -532,13 +549,9 @@ func (a *application) removeCleanupRows(cmd *cobra.Command, data *commandContext
 		if guided && usage.State != inuse.Free {
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: deliberately selected %s: in-use state %s %s\n", p.row.Entry.Selector(), usage.State, cleanup.Processes(usage))
 		}
-		if o.sweep {
-			settings, err := cleanupSettings(data.config.Cleanup)
-			if err != nil {
-				return err
-			}
+		if selection.Merged {
 			active := activity.Measure(cmd.Context(), p.row.Entry.Worktree.Path)
-			if active.Error != "" || active.LastActive.IsZero() || active.LastActive.After(time.Now().Add(-settings.grace)) {
+			if active.Error != "" || active.LastActive.IsZero() || active.LastActive.After(time.Now().Add(-selection.InactiveFor)) {
 				continue
 			}
 		}
@@ -575,14 +588,10 @@ func (a *application) removeCleanupRows(cmd *cobra.Command, data *commandContext
 					return err
 				}
 			}
-			if o.sweep {
-				settings, err := cleanupSettings(data.config.Cleanup)
-				if err != nil {
-					return err
-				}
+			if selection.Merged {
 				active := activity.Measure(cmd.Context(), row.Entry.Worktree.Path)
-				if active.Error != "" || active.LastActive.IsZero() || active.LastActive.After(time.Now().Add(-settings.grace)) {
-					return fmt.Errorf("worktree is no longer idle past the grace period")
+				if active.Error != "" || active.LastActive.IsZero() || active.LastActive.After(time.Now().Add(-selection.InactiveFor)) {
+					return fmt.Errorf("worktree is no longer idle past the merged cleanup threshold")
 				}
 			}
 			return cmd.Context().Err()

@@ -285,15 +285,19 @@ func (a *application) pickWorktreesForRemoval(context *commandContext) ([]*inven
 			entries = append(entries, entry)
 		}
 	}
-	rows := cleanup.Collect(contextpkg.Background(), context.inventory, entries, true, a.dependencies.inUse)
+	rows := cleanup.Collect(contextpkg.Background(), context.inventory, entries, true, a.dependencies.inUse, nil)
 	cleanup.SortByActivity(rows)
 	current := ""
 	if e, err := context.inventory.Resolve(".", context.directory); err == nil {
 		current = e.Worktree.Path
 	}
+	grace, err := cleanupGrace(context.config.Cleanup)
+	if err != nil {
+		return nil, err
+	}
 	items := []picker.Item{}
 	for _, r := range rows {
-		items = append(items, picker.Item{Key: r.Entry.Worktree.Path, Label: cleanupLabel(r, time.Now()), Selected: r.Preselected(time.Now(), 72*time.Hour, current, context.inventory)})
+		items = append(items, picker.Item{Key: r.Entry.Worktree.Path, Label: cleanupLabel(r, time.Now()), Selected: r.Preselected(time.Now(), 72*time.Hour, grace, current, context.inventory)})
 	}
 	paths, err := a.dependencies.pickMany("remove > ", items)
 	if err != nil {

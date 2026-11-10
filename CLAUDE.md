@@ -40,6 +40,8 @@ Git metadata is the only worktree source of truth. Grove has no inventory state 
 - Main and locked worktrees are never removable.
 - Dirty removal requires explicit `--discard` or a yes at the guided cleanup summary after selected-tree checks.
 - Bulk selectors combine repository scope, creation age, inactivity and exact-tip merge evidence with AND. They always skip known live processes; unknown process visibility blocks them unless explicitly overridden. Exact selectors warn with process names.
+- Guided/rm picker defaults and headless `--merged` require known source/index inactivity past `cleanup.grace_period` (default 1d); trivial merge evidence never overrides recent activity. Merged removal rechecks that threshold under the detach lock.
+- Cleanup prints discovery/signal progress on stderr. Activity/cache reads and per-repository merge checks overlap; rows are published only after both worker groups finish.
 - Previews use cached sizes and cheap facts only, mark dirty/nested checks pending, and never wait for scans. `du --refresh` is the explicit scan gate.
 - Automatic cleanup is opt-in, keeps branches, requires a clean merged idle tip and proven process freedom, and protects the launching/current tree. Detached sweeps are interval-limited, serialized, logged, and never prune config.
 - Age-based cleanup ignores merge state, keeps branches, and preserves the same main, lock, current-worktree, and nesting protections as exact removal.

@@ -779,6 +779,8 @@ func TestRemoveMergedBulkIsConservative(t *testing.T) {
 	runV2Git(t, openPath, "add", "open.txt")
 	runV2Git(t, openPath, "commit", "-m", "open")
 	writeV2Config(t, repoPath, "")
+	ageCleanupFixture(t, mergedPath)
+	ageCleanupFixture(t, openPath)
 
 	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
 	stdout, _, err := executeV2(root, "rm", "--merged", "--dry-run")
@@ -1115,6 +1117,7 @@ func TestRemoveMergedJSONDryRunReportsWouldRemove(t *testing.T) {
 	linkedPath := filepath.Join(t.TempDir(), "merged")
 	runV2Git(t, repoPath, "worktree", "add", "-b", "feat/merged", linkedPath)
 	writeV2Config(t, repoPath, "")
+	ageCleanupFixture(t, linkedPath)
 	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repoPath, nil }, interactive: func() bool { return false }})
 
 	stdout, _, err := executeV2(root, "--json", "rm", "--merged", "--dry-run")

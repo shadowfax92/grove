@@ -195,8 +195,12 @@ The guided flow shows projects largest first, with counts, cached bytes, idle
 bytes and merged counts. Then it shows their worktrees least recently active
 first with size/measurement age, activity, creation age, process command names,
 merge reasons, lock status and pending safety checks. Idle or merged worktrees
-start selected only when process visibility proves they are free and no protection
-applies. Tab toggles; Ctrl-A selects all; Ctrl-D clears. Main, locked, current,
+start selected only when process visibility proves they are free, no protection
+applies, and source/index activity is older than `cleanup.grace_period` (default
+`1d`). Unknown or recent activity stays unselected even for trivially merged
+empty branches. Discovery and signal collection report progress on stderr;
+activity/cache reads overlap merge checks, and the completion line gives their
+individual durations (which overlap rather than add). Tab toggles; Ctrl-A selects all; Ctrl-D clears. Main, locked, current,
 detached and registered-descendant protections still apply when confirming.
 The final summary gives count, cached size and uncommitted-file count. An explicit
 yes here can authorize discarding dirty files. `--idle-after 3d` overrides
@@ -260,7 +264,7 @@ Every successful `grove rm` also removes config entries for repository directori
 
 Bulk removal considers every configured repository and always protects main, locked, current, detached, and registered nested worktrees:
 
-- `--merged` uses ancestry against the newer local/remote default, an isolated no-change trial merge, then GitHub PR evidence at the exact current tip. Every result shows its reason. `--forge=false` disables the forge tier. A branch with new commits since its PR merged is retained. Forge queries have a twenty-second default timeout and search no earlier than the oldest pending worktree's creation date (unknown dates leave history unbounded). Complete results cache for five minutes by repository/default-tip/branch-tip; positive forge evidence also persists per immutable tip.
+- `--merged` requires source/index inactivity past `cleanup.grace_period` (default `1d`), including with `--discard`; unknown activity is retained. A longer `--inactive-for` adds a stricter threshold. The activity threshold is checked again at detach. Merge evidence uses ancestry against the newer local/remote default, an isolated no-change trial merge, then GitHub PR evidence at the exact current tip. Every result shows its reason. `--forge=false` disables the forge tier. A branch with new commits since its PR merged is retained. Forge queries have a twenty-second default timeout and search no earlier than the oldest pending worktree's creation date (unknown dates leave history unbounded). Complete results cache for five minutes by repository/default-tip/branch-tip; positive forge evidence also persists per immutable tip.
 - `--older-than 14d` removes worktrees by creation age without considering merge state. Supported units are minutes (`m`), hours (`h`), days (`d`), and weeks (`w`). Dirty worktrees are skipped unless `--discard` is present.
 - `--missing` prunes stale Git registrations for worktree directories that no longer exist. It does not delete directories.
 
