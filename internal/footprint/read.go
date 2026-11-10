@@ -25,7 +25,7 @@ func readEntriesPortable(ctx context.Context, directory *os.File, visit entryVis
 			}
 			var st unix.Stat_t
 			if statErr := unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW); statErr != nil {
-				// A zero mode tells the visitor to report an unreadable entry, retaining
+				// Nil metadata tells the visitor to report an unreadable entry, retaining
 				// its name instead of turning one failed lstat into a failed worktree.
 				visit(name, nil, nil)
 				continue
