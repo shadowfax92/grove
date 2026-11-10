@@ -144,7 +144,7 @@ grove --json list
 grove --json list --status
 ```
 
-The default list uses only `git worktree list --porcelain -z`. `--status` opts into the more expensive dirty and ahead/behind checks.
+The default list uses only `git worktree list --porcelain -z`. `--status` opts into the more expensive dirty and ahead/behind checks. It also shows last source/index activity, live processes, and merge evidence. `grove list --forge` adds an optional, bounded GitHub PR lookup (and implies `--status`); local checks never fetch. A moved branch is not merged just because an older tip has a merged PR. JSON status adds `last_active`, `activity_error`, `in_use` (including unknown), and `merged` (tier, reason, PR, and skipped checks), keeping version 1. Ignored build output and reflog timestamps do not count as source activity.
 
 Human output shows each repository path once, then a compact branch tree with creation ages and optional status. Worktree paths are omitted because selectors are enough for navigation. Color is automatic on a terminal; use `--color=always`, `--color=never`, or the `NO_COLOR` environment variable to control it. Paths, `--json`, and `--null` output are never colored.
 

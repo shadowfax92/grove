@@ -1,11 +1,16 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"grove/internal/activity"
+	"grove/internal/inuse"
+	"grove/internal/merged"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"grove/internal/catalog"
@@ -28,40 +33,45 @@ type listRepository struct {
 }
 
 type listWorktree struct {
-	Branch      string `json:"branch,omitempty"`
-	Head        string `json:"head"`
-	Path        string `json:"path"`
-	Main        bool   `json:"main"`
-	Detached    bool   `json:"detached"`
-	Locked      bool   `json:"locked"`
-	LockReason  string `json:"lock_reason,omitempty"`
-	Prunable    bool   `json:"prunable"`
-	Dirty       *bool  `json:"dirty,omitempty"`
-	Ahead       *int   `json:"ahead,omitempty"`
-	Behind      *int   `json:"behind,omitempty"`
-	StatusError string `json:"status_error,omitempty"`
+	Branch        string         `json:"branch,omitempty"`
+	Head          string         `json:"head"`
+	Path          string         `json:"path"`
+	Main          bool           `json:"main"`
+	Detached      bool           `json:"detached"`
+	Locked        bool           `json:"locked"`
+	LockReason    string         `json:"lock_reason,omitempty"`
+	Prunable      bool           `json:"prunable"`
+	Dirty         *bool          `json:"dirty,omitempty"`
+	Ahead         *int           `json:"ahead,omitempty"`
+	Behind        *int           `json:"behind,omitempty"`
+	StatusError   string         `json:"status_error,omitempty"`
+	LastActive    *time.Time     `json:"last_active,omitempty"`
+	ActivityError string         `json:"activity_error,omitempty"`
+	InUse         *inuse.Result  `json:"in_use,omitempty"`
+	Merged        *merged.Result `json:"merged,omitempty"`
 }
 
 func (a *application) listCommand() *cobra.Command {
-	var status bool
+	var status, forge bool
 	command := &cobra.Command{
 		Use:   "list",
 		Short: "List repositories and worktrees",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.runList(cmd, status)
+			return a.runList(cmd, status || forge, forge)
 		},
 	}
-	command.Flags().BoolVar(&status, "status", false, "Check dirty and ahead/behind status")
+	command.Flags().BoolVar(&status, "status", false, "Check dirty, ahead/behind, activity, processes, and local merge status")
+	command.Flags().BoolVar(&forge, "forge", false, "Include optional forge merge checks (implies --status)")
 	return command
 }
 
-func (a *application) runList(cmd *cobra.Command, includeStatus bool) error {
-	context, err := a.loadContext(cmd)
+func (a *application) runList(cmd *cobra.Command, includeStatus, forge bool) error {
+	loaded, err := a.loadContext(cmd)
 	if err != nil {
 		return err
 	}
-	document := buildListDocument(context.catalog, context.inventory, includeStatus)
+	document := buildListDocument(cmd.Context(), loaded.catalog, loaded.inventory, includeStatus, forge)
 	if a.jsonOutput {
 		return writeJSON(cmd, document)
 	}
@@ -94,7 +104,7 @@ func (a *application) runList(cmd *cobra.Command, includeStatus bool) error {
 			if worktreeIndex == len(worktrees)-1 {
 				connector = "└──"
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s %s%s%s\n", style.muted(connector), styledWorktreeLabel(style, worktree), styledStatusSuffix(style, worktree), style.muted(createdSuffix(worktree, now)))
+			fmt.Fprintf(cmd.OutOrStdout(), "%s %s%s%s\n", style.muted(connector), styledWorktreeLabel(style, worktree), styledStatusSuffix(style, worktree)+signalSuffix(worktree, now), style.muted(createdSuffix(worktree, now)))
 		}
 	}
 	if shownRepositories == 0 {
@@ -214,7 +224,7 @@ func relativeAge(age time.Duration) string {
 	}
 }
 
-func buildListDocument(cat *catalog.Catalog, inv *inventory.Inventory, includeStatus bool) listDocument {
+func buildListDocument(ctx context.Context, cat *catalog.Catalog, inv *inventory.Inventory, includeStatus, forge bool) listDocument {
 	document := listDocument{Version: 1, Repositories: make([]listRepository, 0, len(cat.Repositories))}
 	byRepository := make(map[*catalog.Repository][]*inventory.Entry)
 	for _, entry := range inv.Entries {
@@ -239,24 +249,12 @@ func buildListDocument(cat *catalog.Catalog, inv *inventory.Inventory, includeSt
 				LockReason: entry.Worktree.LockReason,
 				Prunable:   entry.Worktree.Prunable,
 			}
-			if includeStatus && !worktree.Prunable {
-				dirty, err := repository.Git.Dirty(worktree.Path)
-				if err != nil {
-					worktree.StatusError = err.Error()
-				} else {
-					worktree.Dirty = &dirty
-					ahead, behind, err := repository.Git.AheadBehind(worktree.Path, repository.DefaultBranch)
-					if err != nil {
-						worktree.StatusError = err.Error()
-					} else {
-						worktree.Ahead = &ahead
-						worktree.Behind = &behind
-					}
-				}
-			}
 			item.Worktrees = append(item.Worktrees, worktree)
 		}
 		document.Repositories = append(document.Repositories, item)
+	}
+	if includeStatus {
+		populateListStatus(ctx, &document, cat, forge)
 	}
 	return document
 }
@@ -279,4 +277,136 @@ func shortSHA(head string) string {
 		return head[:8]
 	}
 	return head
+}
+
+// The ordinary list only joins existing inventory fields. All subprocesses and
+// source scans live behind --status; one immutable cwd snapshot serves every tree.
+// Workers own disjoint slice elements, preserving Git/catalog output order.
+func populateListStatus(ctx context.Context, document *listDocument, cat *catalog.Catalog, forge bool) {
+	snapshotContext, cancel := context.WithTimeout(ctx, 3*time.Second)
+	snapshot := inuse.Take(snapshotContext)
+	cancel()
+	type job struct {
+		worktree   *listWorktree
+		repository *catalog.Repository
+	}
+	jobs := make(chan job)
+	var workers sync.WaitGroup
+	for range 12 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for task := range jobs {
+				worktree, repository := task.worktree, task.repository
+				usage := snapshot.Lookup(worktree.Path)
+				worktree.InUse = &usage
+				if worktree.Prunable {
+					worktree.ActivityError = "worktree unavailable"
+					continue
+				}
+				activityContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+				active := activity.Measure(activityContext, worktree.Path)
+				cancel()
+				if !active.LastActive.IsZero() {
+					worktree.LastActive = &active.LastActive
+				}
+				worktree.ActivityError = active.Error
+				dirty, err := repository.Git.Dirty(worktree.Path)
+				if err != nil {
+					worktree.StatusError = err.Error()
+					continue
+				}
+				worktree.Dirty = &dirty
+				ahead, behind, err := repository.Git.AheadBehind(worktree.Path, repository.DefaultBranch)
+				if err != nil {
+					worktree.StatusError = err.Error()
+					continue
+				}
+				worktree.Ahead, worktree.Behind = &ahead, &behind
+			}
+		}()
+	}
+	for i, repository := range cat.Repositories {
+		for j := range document.Repositories[i].Worktrees {
+			jobs <- job{&document.Repositories[i].Worktrees[j], repository}
+		}
+	}
+	close(jobs)
+	workers.Wait()
+	// A repository owns a single forge request and isolated trial-merge object
+	// store. Repository concurrency is bounded separately from per-tree scans.
+	repositories := make(chan int)
+	cacheDir, cacheErr := merged.DefaultCacheDir()
+	for range 8 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for i := range repositories {
+				repository := cat.Repositories[i]
+				var branches []merged.Branch
+				for _, worktree := range document.Repositories[i].Worktrees {
+					if !worktree.Main && !worktree.Detached && !worktree.Prunable {
+						branches = append(branches, merged.Branch{Name: worktree.Branch, Tip: worktree.Head})
+					}
+				}
+				results := map[string]merged.Result{}
+				if len(branches) > 0 {
+					results = merged.Check(ctx, repository.Git.MainPath, repository.DefaultBranch, branches, merged.Options{Forge: forge, CacheDir: cacheDir})
+				}
+				for j := range document.Repositories[i].Worktrees {
+					worktree := &document.Repositories[i].Worktrees[j]
+					result, ok := results[worktree.Branch]
+					if !ok {
+						result = merged.Result{Tier: "not_applicable", Reason: "main, detached, or unavailable worktree"}
+					}
+					if forge && cacheErr != nil {
+						result.Skipped = append(result.Skipped, "cache: "+cacheErr.Error())
+					}
+					worktree.Merged = &result
+				}
+			}
+		}()
+	}
+	for i := range cat.Repositories {
+		repositories <- i
+	}
+	close(repositories)
+	workers.Wait()
+}
+
+func signalSuffix(worktree listWorktree, now time.Time) string {
+	if worktree.InUse == nil {
+		return ""
+	}
+	var labels []string
+	if worktree.ActivityError != "" {
+		labels = append(labels, "last active unknown")
+	} else if worktree.LastActive != nil {
+		labels = append(labels, "last active "+relativeAge(now.Sub(*worktree.LastActive))+" ago")
+	}
+	switch worktree.InUse.State {
+	case inuse.InUse:
+		labels = append(labels, fmt.Sprintf("in use (%d processes)", len(worktree.InUse.Processes)))
+	case inuse.Free:
+		labels = append(labels, "not in use")
+	default:
+		labels = append(labels, "in use unknown")
+	}
+	if result := worktree.Merged; result != nil && result.Tier != "not_applicable" {
+		label := result.Reason
+		if result.Error != "" {
+			label = "merge status unknown"
+		}
+		if result.Merged {
+			label = "merged: " + result.Tier
+		}
+		if result.PR != 0 {
+			label += fmt.Sprintf(" PR #%d", result.PR)
+		}
+		if len(result.Skipped) > 0 {
+			label += "; " + strings.Join(result.Skipped, "; ")
+		}
+		labels = append(labels, label)
+	}
+	return "  [" + strings.Join(labels, ", ") + "]"
 }

@@ -25,6 +25,7 @@ The module name is `grove`.
 - `internal/recency/` stores disposable, hashed navigation markers used only to rank known inventory entries in the picker.
 - `internal/panereport/` atomically stores durable worktree-root handles before silently publishing their SHA-256 tokens to the calling Herdr pane. These files are a consumer contract and are independent of recency markers.
 - `internal/names/` generates readable default branch names.
+- `internal/activity/` measures non-ignored working-file/index activity; `internal/inuse/` snapshots process working directories once and preserves unknown results; `internal/merged/` checks pinned tips through ancestry, isolated trial merges, and optional cached forge evidence.
 - `internal/llmstore/` owns per-repository context stores under `llm.root`: key resolution, the `.llm` and alias symlinks in each worktree, their Git exclusions, and move-only archiving. `cmd` decides when to link and archive; the module never prints.
 
 Git metadata is the only worktree source of truth. Grove has no inventory state file and no tmux or repository-sync lifecycle; optional recency markers and footprint measurements under the user state directory affect presentation only.
@@ -43,6 +44,7 @@ Git metadata is the only worktree source of truth. Grove has no inventory state 
 - Recursive worktree deletion happens only inside Grove's trash, on recognized directories Grove moved there after validation; symlinks are never followed. Failed renames fall back to Git removal.
 - Exact selectors never open fzf; omitted selectors require an interactive terminal.
 - Navigation recency may reorder only live Git inventory; missing, corrupt, or deleted markers never block navigation or preserve worktrees.
+- Read-only Git checks use `GIT_OPTIONAL_LOCKS=0` so Grove does not refresh index activity timestamps. Merge detection never fetches; trial-merge objects stay in temporary storage.
 - Path, JSON, and NUL output remain machine-readable. Human presentation may use terminal-aware color. Warnings and setup output use stderr.
 - Old external worktrees remain supported during migration and are never relocated except into same-filesystem trash during explicitly requested removal.
 - LLM stores are opt-in through `llm.root`. Store problems warn during `grove new`; they never fail worktree creation.
