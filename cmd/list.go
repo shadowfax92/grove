@@ -346,7 +346,8 @@ func populateListStatus(ctx context.Context, document *listDocument, cat *catalo
 				var branches []merged.Branch
 				for _, worktree := range document.Repositories[i].Worktrees {
 					if !worktree.Main && !worktree.Detached && !worktree.Prunable {
-						branches = append(branches, merged.Branch{Name: worktree.Branch, Tip: worktree.Head})
+						created, _ := worktreeCreatedAt(worktree.Path)
+						branches = append(branches, merged.Branch{Name: worktree.Branch, Tip: worktree.Head, CreatedAt: created})
 					}
 				}
 				results := map[string]merged.Result{}

@@ -12,8 +12,18 @@ import (
 )
 
 type Config struct {
-	LLM   LLMConfig    `yaml:"llm"`
-	Repos []RepoConfig `yaml:"repos"`
+	Cleanup CleanupConfig `yaml:"cleanup,omitempty"`
+	LLM     LLMConfig     `yaml:"llm"`
+	Repos   []RepoConfig  `yaml:"repos"`
+}
+
+// CleanupConfig is opt-in. Raw durations are validated by the cleanup consumer,
+// so a bad automation setting cannot break navigation or worktree creation.
+type CleanupConfig struct {
+	Enabled     bool   `yaml:"enabled"`
+	IdleAfter   string `yaml:"idle_after,omitempty"`
+	GracePeriod string `yaml:"grace_period,omitempty"`
+	Interval    string `yaml:"interval,omitempty"`
 }
 
 // LLMConfig holds the raw llm store settings. Values stay unparsed here so a bad

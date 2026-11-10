@@ -260,3 +260,75 @@ func TestTrialMergeDoesNotExecuteExternalCommands(t *testing.T) {
 		})
 	}
 }
+
+func TestForgeQueryBoundAndCompleteResultCache(t *testing.T) {
+	path := fixture(t)
+	topic := branch(t, path, "topic")
+	topic.CreatedAt = time.Date(2026, 10, 11, 23, 59, 0, 0, time.FixedZone("offset", -7*3600))
+	calls := filepath.Join(t.TempDir(), "calls")
+	fakeGH(t, "printf '%s\\n' \"$*\" >> "+shellQuote(calls)+"\necho '[]'")
+	options := Options{Forge: true, CacheDir: t.TempDir()}
+	first := check(t, path, topic, options)
+	if first.Merged || len(first.Skipped) > 0 || first.Error != "" {
+		t.Fatal(first)
+	}
+	data, _ := os.ReadFile(calls)
+	if !strings.Contains(string(data), "--search merged:>=2026-10-12") {
+		t.Fatal(string(data))
+	}
+	fakeGH(t, "exit 1")
+	second := check(t, path, topic, options)
+	if len(second.Skipped) > 0 {
+		t.Fatal("complete result was not reused", second)
+	}
+	git(t, path, "checkout", "main")
+	write(t, filepath.Join(path, "new-base"), "base")
+	git(t, path, "add", ".")
+	git(t, path, "commit", "-m", "new base")
+	third := check(t, path, topic, options)
+	if len(third.Skipped) == 0 {
+		t.Fatal("cache survived changed base", third)
+	}
+	if got := oldestCreation([]Branch{topic, {Name: "unknown"}}); !got.IsZero() {
+		t.Fatal("unknown date lost history", got)
+	}
+}
+
+func TestCompleteCacheReadsDoNotRenewNegativeEvidence(t *testing.T) {
+	path := fixture(t)
+	topic := branch(t, path, "topic")
+	options := Options{Forge: true, CacheDir: t.TempDir()}
+	fakeGH(t, "echo '[]'")
+	if got := check(t, path, topic, options); got.Merged {
+		t.Fatal(got)
+	}
+	files, err := filepath.Glob(filepath.Join(options.CacheDir, "check-*.json"))
+	if err != nil || len(files) != 1 {
+		t.Fatal(files, err)
+	}
+	var entry checkedTip
+	data, _ := os.ReadFile(files[0])
+	if err := json.Unmarshal(data, &entry); err != nil {
+		t.Fatal(err)
+	}
+	entry.At = time.Now().Add(-290 * time.Second)
+	data, _ = json.Marshal(entry)
+	write(t, files[0], string(data))
+	response, _ := json.Marshal([]pullRequest{{Number: 42, HeadRefName: "topic", HeadRefOID: topic.Tip}})
+	fakeGH(t, "echo "+shellQuote(string(response)))
+	if got := check(t, path, topic, options); got.Merged {
+		t.Fatal("cache expired early", got)
+	}
+	var after checkedTip
+	data, _ = os.ReadFile(files[0])
+	_ = json.Unmarshal(data, &after)
+	if !after.At.Equal(entry.At) {
+		t.Fatal("reading cache renewed negative evidence")
+	}
+	entry.At = time.Now().Add(-301 * time.Second)
+	data, _ = json.Marshal(entry)
+	write(t, files[0], string(data))
+	if got := check(t, path, topic, options); !got.Merged || got.PR != 42 {
+		t.Fatal("expired negative did not refresh", got)
+	}
+}

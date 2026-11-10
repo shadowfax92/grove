@@ -54,3 +54,15 @@ func TestSingleSelectionPreservesCallerOrder(t *testing.T) {
 		t.Fatalf("multi-selection args = %#v, do not want --no-sort", args)
 	}
 }
+
+func TestPreselectionForHundredRows(t *testing.T) {
+	items := make([]Item, 120)
+	for i := range items {
+		items[i] = Item{Key: strings.Repeat("x", 100), Label: "arbitrary\nrow", Selected: i%3 == 1}
+	}
+	args := preselectionArgs(items)
+	bindings := args[len(args)-1]
+	if strings.Count(bindings, "+select") != 40 || !strings.Contains(bindings, "pos(119)+select") || strings.Contains(bindings, "arbitrary") || !strings.Contains(bindings, "ctrl-a:select-all,ctrl-d:deselect-all,load:") {
+		t.Fatal(args)
+	}
+}

@@ -14,7 +14,8 @@ The module name is `grove`.
 
 ## Architecture
 
-- `cmd/` builds the Cobra tree and owns output contracts for `cd`, `new`, `list`, `du`, `rm`, `trash`, `llm`, and `config`.
+- `cmd/` builds the Cobra tree and owns output contracts for `cd`, `new`, `list`, `du`, `cleanup`, `rm`, `trash`, `llm`, and `config`.
+- `internal/cleanup/` joins cheap activity/merge/process facts and cached sizes to inventory, applies shared selection protections, and coordinates opt-in detached sweep intervals/logs. Selected trees alone get authoritative dirty/nesting checks.
 - `internal/trash/` journals validated detach operations and owns resumable, symlink-safe physical deletion; its state index discovers pending roots without replacing Git inventory.
 - `internal/git/` is the Git boundary. It discovers canonical common directories, parses NUL-delimited worktree records, checks status and ancestry, creates `.wt/<branch>`, and removes through Git.
 - `internal/config/` parses and appends to `~/.config/grove/config.yaml` without making every configured path a load-time invariant.
@@ -37,7 +38,10 @@ Git metadata is the only worktree source of truth. Grove has no inventory state 
 - Repository identity comes from the canonical Git common directory, including when invoked inside a linked worktree.
 - Multi-profile repositories use the checkout directory name as their canonical name; profile names remain aliases for setup selection.
 - Main and locked worktrees are never removable.
-- Dirty removal requires the explicit `--discard` flag.
+- Dirty removal requires explicit `--discard` or a yes at the guided cleanup summary after selected-tree checks.
+- Bulk selectors combine repository scope, creation age, inactivity and exact-tip merge evidence with AND. They always skip known live processes; unknown process visibility blocks them unless explicitly overridden. Exact selectors warn with process names.
+- Previews use cached sizes and cheap facts only, mark dirty/nested checks pending, and never wait for scans. `du --refresh` is the explicit scan gate.
+- Automatic cleanup is opt-in, keeps branches, requires a clean merged idle tip and proven process freedom, and protects the launching/current tree. Detached sweeps are interval-limited, serialized, logged, and never prune config.
 - Age-based cleanup ignores merge state, keeps branches, and preserves the same main, lock, current-worktree, and nesting protections as exact removal.
 - Missing cleanup prunes stale Git registrations and keeps branches.
 - Missing repository directories are silently skipped on reads. Every successful removal also prunes their config rows under the registration lock; dry runs only preview, and cancellation/failure never changes config.
