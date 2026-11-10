@@ -15,12 +15,13 @@ import (
 var Version = "dev"
 
 type commandDependencies struct {
-	getwd       func() (string, error)
-	interactive func() bool
-	pick        func(string, []picker.Item) (string, error)
-	pickMany    func(string, []picker.Item) ([]string, error)
-	lastVisited func(string) (time.Time, bool)
-	markVisited func(string) error
+	getwd                 func() (string, error)
+	interactive           func() bool
+	pick                  func(string, []picker.Item) (string, error)
+	pickMany              func(string, []picker.Item) ([]string, error)
+	lastVisited           func(string) (time.Time, bool)
+	markVisited           func(string) error
+	startFootprintRefresh func([]string) error
 }
 
 type application struct {
@@ -99,6 +100,7 @@ func newRootCommand(dependencies commandDependencies) *cobra.Command {
 	root.AddCommand(
 		app.cdCommand(),
 		app.configCommand(),
+		app.duCommand(),
 		app.listCommand(),
 		app.llmCommand(),
 		app.newCommand(),
