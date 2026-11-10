@@ -5,6 +5,7 @@ FISH_FUNCTIONS ?= $(HOME)/.config/fish/functions
 build:
 	go build -ldflags "-X grove/cmd.Version=$(VERSION)" -o grove .
 
+# Replacing the inode lets an executing reaper keep its old signed binary.
 install: build fish
 	@set -eu; temporary=$$(mktemp "$(PREFIX)/.grove-install.XXXXXX"); \
 	trap 'rm -f "$$temporary"' EXIT; \

@@ -10,7 +10,7 @@
 
 Grove is a small, path-first wrapper around `git worktree`. It gives humans an fzf picker and gives agents exact selectors, stable JSON, and stdout that is safe to capture.
 
-There is no Grove inventory database. Git owns the worktree inventory. Grove stores only disposable navigation-recency markers to rank the interactive picker.
+There is no Grove inventory database. Git owns the worktree inventory. Grove stores disposable navigation-recency markers and disk-usage measurements; neither changes the Git inventory.
 
 ## Install
 
@@ -33,6 +33,7 @@ grove new fix/login           # preserve an explicit branch name
 grove cd feat/auth            # current repo
 grove cd browseros:feat/auth  # configured repo alias
 grove list                    # Git-backed repository/worktree tree
+grove du                      # cached disk usage, largest repositories first
 grove rm .                    # remove the current clean worktree
 grove rm                      # pick one or more worktrees with fzf
 grove rm feat/auth fix/login  # remove several exact worktrees
@@ -148,6 +149,34 @@ The default list uses only `git worktree list --porcelain -z`. `--status` opts i
 Human output shows each repository path once, then a compact branch tree with creation ages and optional status. Worktree paths are omitted because selectors are enough for navigation. Color is automatic on a terminal; use `--color=always`, `--color=never`, or the `NO_COLOR` environment variable to control it. Paths, `--json`, and `--null` output are never colored.
 
 `--json` emits a versioned document. The same global flag also gives structured output for `cd`, `new`, and `rm`.
+
+### Disk usage
+
+```sh
+grove du                        # all repositories, largest first
+grove du app another            # exact repository names or aliases
+grove du --refresh              # wait for a fresh scan
+grove --json du --include-main  # versioned measurements, including main
+```
+
+The walk counts allocated blocks, counts each hardlinked file once per worktree,
+and never enters symlink targets. Nested registered worktrees are excluded from
+parent scans. Human totals always exclude main worktrees. Rows show creation
+age, measurement age, and the largest subdirectory; partial reads are labeled.
+
+Measurements live under `$XDG_STATE_HOME/grove/footprint` (or
+`~/.local/state/grove/footprint`). Missing or corrupt entries are rescanned with
+progress on stderr. Cached measurements expire after 15 minutes; `--max-age`
+changes that interval. A changed or replaced root invalidates its entry at once,
+but edits deeper in the tree are detected by the next scan. Stale cached results
+print immediately and refresh in a detached process. `--refresh` waits instead.
+Deleting the cache is safe. `--jobs` bounds simultaneous worktree scans.
+
+On macOS builds with cgo, opt-in `--private-size` also queries unshared file data.
+It is disabled by default because these extra attributes make a full scan slower.
+The number is an estimate: APFS snapshots, filesystem metadata, and concurrent changes mean
+it cannot guarantee the space deletion will reclaim. Other builds omit it. Use
+`--private-size=false` to skip the extra metadata read.
 
 ### Remove
 

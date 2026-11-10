@@ -14,19 +14,20 @@ The module name is `grove`.
 
 ## Architecture
 
-- `cmd/` builds the Cobra tree and owns output contracts for `cd`, `new`, `list`, `rm`, `llm`, and `config`.
+- `cmd/` builds the Cobra tree and owns output contracts for `cd`, `new`, `list`, `du`, `rm`, `trash`, `llm`, and `config`.
 - `internal/trash/` journals validated detach operations and owns resumable, symlink-safe physical deletion; its state index discovers pending roots without replacing Git inventory.
 - `internal/git/` is the Git boundary. It discovers canonical common directories, parses NUL-delimited worktree records, checks status and ancestry, creates `.wt/<branch>`, and removes through Git.
 - `internal/config/` parses and appends to `~/.config/grove/config.yaml` without making every configured path a load-time invariant.
 - `internal/catalog/` turns valid config rows into physical repositories and alias/setup profiles. Common Git directory is repository identity.
 - `internal/inventory/` joins catalog repositories to live Git worktrees and resolves exact selectors.
 - `internal/picker/` is the NUL-safe fzf boundary.
+- `internal/footprint/` measures allocated worktree space without following symlinks and caches per-root results for `grove du`. Main roots never contribute to displayed totals; nested registered roots are excluded from parent scans.
 - `internal/recency/` stores disposable, hashed navigation markers used only to rank known inventory entries in the picker.
 - `internal/panereport/` atomically stores durable worktree-root handles before silently publishing their SHA-256 tokens to the calling Herdr pane. These files are a consumer contract and are independent of recency markers.
 - `internal/names/` generates readable default branch names.
 - `internal/llmstore/` owns per-repository context stores under `llm.root`: key resolution, the `.llm` and alias symlinks in each worktree, their Git exclusions, and move-only archiving. `cmd` decides when to link and archive; the module never prints.
 
-Git metadata is the only worktree source of truth. Grove has no inventory state file and no tmux or repository-sync lifecycle; optional recency markers under the user state directory affect presentation only.
+Git metadata is the only worktree source of truth. Grove has no inventory state file and no tmux or repository-sync lifecycle; optional recency markers and footprint measurements under the user state directory affect presentation only.
 
 ## Invariants
 

@@ -725,6 +725,8 @@ func runGitText(dir string, args ...string) (string, error) {
 func runGitBytes(dir string, args ...string) ([]byte, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
+	// Observational Git calls must not refresh activity timestamps in the index.
+	// Required write locks still apply to commands that mutate Git metadata.
 	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {

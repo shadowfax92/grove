@@ -120,6 +120,22 @@ func TestNextCommandRestartsInterruptedReaper(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("reaper processes: %d", count)
 	}
+	// Add a second trash root after the first pass took its root snapshot.
+	// Its wakeup must be serviced by this same child, rather than being lost at
+	// the scan/exit boundary or requiring an unrelated future command.
+	secondRepo := initV2Repo(t)
+	secondLinked := filepath.Join(secondRepo, ".wt", "second")
+	runV2Git(t, secondRepo, "worktree", "add", "-b", "second", secondLinked)
+	second, err := git.OpenRepository(secondRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = second.RemoveWorktree(secondLinked, true); err != nil {
+		t.Fatal(err)
+	}
+	if err = manager.Resume(); err != nil {
+		t.Fatal(err)
+	}
 	if err = gate.Close(); err != nil {
 		t.Fatal(err)
 	}
