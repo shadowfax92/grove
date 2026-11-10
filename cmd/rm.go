@@ -8,8 +8,14 @@ import (
 	"sync"
 	"time"
 
+	contextpkg "context"
+	"grove/internal/cleanup"
 	"grove/internal/config"
+	"grove/internal/footprint"
+	gitx "grove/internal/git"
+	"grove/internal/inuse"
 	"grove/internal/inventory"
+	"grove/internal/merged"
 	"grove/internal/picker"
 	"grove/internal/trash"
 
@@ -23,11 +29,18 @@ type removeOutput struct {
 	WouldRemove     []removeResult `json:"would_remove"`
 	ReturnPath      string         `json:"return_path,omitempty"`
 	PendingDeletion []trash.Entry  `json:"pending_deletion,omitempty"`
+	Bytes           int64          `json:"bytes,omitempty"`
+	UnknownSizes    int            `json:"unknown_sizes,omitempty"`
 }
 
 type removeResult struct {
-	Selector string `json:"selector"`
-	Path     string `json:"path"`
+	Selector   string           `json:"selector"`
+	Path       string           `json:"path"`
+	Footprint  *footprint.Entry `json:"footprint,omitempty"`
+	LastActive *time.Time       `json:"last_active,omitempty"`
+	InUse      *inuse.Result    `json:"in_use,omitempty"`
+	Merged     *merged.Result   `json:"merged,omitempty"`
+	Unchecked  []string         `json:"unchecked,omitempty"`
 }
 
 type removeCandidate struct {
@@ -60,62 +73,33 @@ type removeOptions struct {
 }
 
 func (a *application) removeCommand() *cobra.Command {
-	var discard, merged, missing, dryRun, wait bool
-	var olderThanValue string
-	command := &cobra.Command{
-		Use:   "rm [selector...]",
-		Short: "Remove worktrees",
-		Long:  "Remove worktrees and clean up config entries for missing repository directories after successful removal. Bulk dry runs preview both kinds of cleanup.",
-		Args:  cobra.ArbitraryArgs,
+	o := cleanupOptions{}
+	missing := false
+	command := &cobra.Command{Use: "rm [selector...]", Short: "Remove worktrees", Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			olderThan, err := parseOlderThan(olderThanValue)
-			if err != nil {
-				return err
+			bulk := o.merged || o.inactive != "" || o.older != "" || len(o.repos) > 0
+			if missing && (bulk || o.discard) {
+				return fmt.Errorf("--missing and other removal selectors cannot be used together (including --discard)")
 			}
-			bulkModes := 0
-			if merged {
-				bulkModes++
-			}
-			if olderThan.duration != 0 {
-				bulkModes++
-			}
-			if missing {
-				bulkModes++
-			}
-			if bulkModes > 1 {
-				return fmt.Errorf("--merged, --older-than, and --missing cannot be used together")
-			}
-			if dryRun && wait {
-				return fmt.Errorf("--wait cannot be used with --dry-run")
-			}
-			if dryRun && bulkModes == 0 {
-				return fmt.Errorf("--dry-run requires --merged, --older-than, or --missing")
-			}
-			if bulkModes != 0 && len(args) != 0 {
+			if (bulk || missing) && len(args) > 0 {
 				return fmt.Errorf("bulk removal does not accept selectors")
 			}
-			if discard && (merged || missing) {
-				return fmt.Errorf("--discard can only be used with selectors or --older-than")
+			if o.wait && o.dryRun {
+				return fmt.Errorf("--wait cannot be used with --dry-run")
 			}
-			if bulkModes != 0 && a.nullOutput {
+			if o.dryRun && !bulk && !missing {
+				return fmt.Errorf("--dry-run requires --merged, --older-than, --inactive-for, --repo, or --missing")
+			}
+			if (bulk || missing) && a.nullOutput {
 				return fmt.Errorf("--null is only valid for single-worktree removal")
 			}
-			return a.runRemove(cmd, args, removeOptions{
-				discard:   discard,
-				merged:    merged,
-				missing:   missing,
-				dryRun:    dryRun,
-				wait:      wait,
-				olderThan: olderThan,
-			})
-		},
-	}
-	command.Flags().BoolVar(&discard, "discard", false, "Discard all contents, including uncommitted files and unregistered nested repositories")
-	command.Flags().BoolVar(&merged, "merged", false, "Remove all clean worktrees merged into their default branches")
+			if bulk {
+				return a.runCleanup(cmd, o)
+			}
+			return a.runRemove(cmd, args, removeOptions{discard: o.discard, missing: missing, dryRun: o.dryRun, wait: o.wait})
+		}}
+	cleanupFlags(command, &o)
 	command.Flags().BoolVar(&missing, "missing", false, "Prune worktree registrations whose directories are gone")
-	command.Flags().StringVar(&olderThanValue, "older-than", "", "Remove worktrees older than a duration such as 14d or 4w")
-	command.Flags().BoolVar(&wait, "wait", false, "Wait for physical deletion before returning")
-	command.Flags().BoolVar(&dryRun, "dry-run", false, "Preview bulk removal without removing anything")
 	return command
 }
 
@@ -132,12 +116,6 @@ func (a *application) runRemove(cmd *cobra.Command, args []string, options remov
 			a.pruneMissingRepos(cmd, options.dryRun)
 		}
 	}()
-	if options.merged {
-		return a.removeMerged(cmd, context, options.dryRun, options.wait)
-	}
-	if options.olderThan.duration != 0 {
-		return a.removeOlderThan(cmd, context, options.olderThan, options.discard, options.dryRun, options.wait)
-	}
 	if options.missing {
 		if options.wait {
 			if _, err := finishRemoval(cmd, true, options.dryRun); err != nil {
@@ -168,17 +146,43 @@ func (a *application) runRemove(cmd *cobra.Command, args []string, options remov
 	if err := a.validatePathOutput(returnPath); err != nil {
 		return err
 	}
+	snapshotContext, cancel := contextpkg.WithTimeout(cmd.Context(), 3*time.Second)
+	snapshot := inuse.Take(snapshotContext)
+	cancel()
+	lookup := a.dependencies.inUse
+	if lookup == nil {
+		lookup = snapshot.Lookup
+	}
 	checks := checkRemoveEntries(entries, func(entry *inventory.Entry) removalCheck {
-		return removalCheck{err: validateRemoveEntry(context.inventory, entry, options.discard)}
+		removal, err := entry.Repository.Git.PrepareWorktreeRemoval(entry.Worktree.Path, options.discard)
+		if err == nil && len(context.inventory.Descendants(entry.Worktree.Path)) > 0 {
+			err = fmt.Errorf("contains registered worktree %s", context.inventory.Descendants(entry.Worktree.Path)[0].Worktree.Path)
+		}
+		if err == nil && !options.discard {
+			dirty, e := entry.Repository.Git.Dirty(entry.Worktree.Path)
+			err = e
+			if dirty {
+				err = fmt.Errorf("worktree has uncommitted files; use --discard to remove it")
+			}
+		}
+		return removalCheck{err: err, removal: removal}
 	})
 	for i, check := range checks {
 		if check.err != nil {
 			return fmt.Errorf("%s: %w", entries[i].Selector(), check.err)
 		}
 	}
-	removed := make([]removeResult, 0, len(entries))
 	for _, entry := range entries {
-		if err := entry.Repository.Git.RemoveWorktree(entry.Worktree.Path, options.discard); err != nil {
+		usage := lookup(entry.Worktree.Path)
+		if usage.State == inuse.InUse {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: removing deliberately selected %s in use by %s\n", entry.Selector(), cleanup.Processes(usage))
+		} else if usage.State != inuse.Free {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: in-use check unavailable for %s: %s\n", entry.Selector(), usage.Error)
+		}
+	}
+	removed := make([]removeResult, 0, len(entries))
+	for i, entry := range entries {
+		if err := checks[i].removal.Remove(); err != nil {
 			return fmt.Errorf("%s: %w", entry.Selector(), err)
 		}
 		removed = append(removed, removeResult{Selector: entry.Selector(), Path: entry.Worktree.Path})
@@ -275,26 +279,27 @@ func (a *application) pickWorktreesForRemoval(context *commandContext) ([]*inven
 	if a.noInput || !a.dependencies.interactive() {
 		return nil, fmt.Errorf("selector is required in non-interactive mode")
 	}
-	items := make([]picker.Item, 0, len(context.inventory.Entries))
-	now := time.Now()
+	entries := []*inventory.Entry{}
 	for _, entry := range context.inventory.Entries {
-		if entry.Worktree.Main || entry.Worktree.Prunable {
-			continue
+		if !entry.Worktree.Main && !entry.Worktree.Prunable {
+			entries = append(entries, entry)
 		}
-		label := entry.Selector()
-		if age := worktreeCreationLabel(entry.Worktree.Path, now); age != "" {
-			label = fmt.Sprintf("%-36s %s", label, age)
-		}
-		if entry.Worktree.Locked {
-			label += "  [locked]"
-		}
-		items = append(items, picker.Item{Key: entry.Worktree.Path, Label: label})
+	}
+	rows := cleanup.Collect(contextpkg.Background(), context.inventory, entries, true, a.dependencies.inUse)
+	cleanup.SortByActivity(rows)
+	current := ""
+	if e, err := context.inventory.Resolve(".", context.directory); err == nil {
+		current = e.Worktree.Path
+	}
+	items := []picker.Item{}
+	for _, r := range rows {
+		items = append(items, picker.Item{Key: r.Entry.Worktree.Path, Label: cleanupLabel(r, time.Now()), Selected: r.Preselected(time.Now(), 72*time.Hour, current, context.inventory)})
 	}
 	paths, err := a.dependencies.pickMany("remove > ", items)
 	if err != nil {
 		return nil, err
 	}
-	entries := make([]*inventory.Entry, 0, len(paths))
+	entries = make([]*inventory.Entry, 0, len(paths))
 	for _, path := range paths {
 		entry, resolveErr := context.inventory.Resolve(path, context.directory)
 		if resolveErr != nil {
@@ -422,156 +427,6 @@ func (a *application) removeMissing(cmd *cobra.Command, context *commandContext,
 	return nil
 }
 
-func (a *application) removeOlderThan(cmd *cobra.Command, context *commandContext, threshold cleanupAge, discard, dryRun, wait bool) error {
-	currentPath := ""
-	if current, err := context.inventory.Resolve(".", context.directory); err == nil {
-		currentPath = current.Worktree.Path
-	}
-	now := time.Now()
-	var candidates []removeCandidate
-	var skips cleanupSkips
-	for _, entry := range context.inventory.Entries {
-		if context.catalog.Current == entry.Repository && !context.catalog.CurrentRegistered {
-			continue
-		}
-		if entry.Worktree.Main {
-			continue
-		}
-		if entry.Worktree.Prunable {
-			skips.missing++
-			continue
-		}
-		createdAt, ok := worktreeCreatedAt(entry.Worktree.Path)
-		if !ok {
-			skips.unknownAge++
-			continue
-		}
-		age := now.Sub(createdAt)
-		if age < threshold.duration {
-			continue
-		}
-		if entry.Worktree.Locked {
-			skips.locked++
-			continue
-		}
-		if entry.Worktree.Branch == "" {
-			skips.detached++
-			continue
-		}
-		if entry.Worktree.Path == currentPath {
-			skips.current++
-			continue
-		}
-		candidates = append(candidates, removeCandidate{entry: entry, age: age})
-	}
-	// Tree walks and Git status dominate large previews. Eight candidates at a
-	// time bound subprocess and filesystem pressure; aggregation stays in inventory
-	// order so warnings and machine-readable output remain deterministic.
-	entries := make([]*inventory.Entry, len(candidates))
-	for i, candidate := range candidates {
-		entries[i] = candidate.entry
-	}
-	checks := checkRemoveEntries(entries, func(entry *inventory.Entry) removalCheck {
-		if !discard {
-			dirty, err := entry.Repository.Git.Dirty(entry.Worktree.Path)
-			if err != nil {
-				return removalCheck{err: err}
-			}
-			if dirty {
-				return removalCheck{dirty: true}
-			}
-		}
-		if descendants := context.inventory.Descendants(entry.Worktree.Path); len(descendants) != 0 {
-			return removalCheck{err: fmt.Errorf("contains registered worktree %s", descendants[0].Worktree.Path)}
-		}
-		return removalCheck{err: entry.Repository.Git.ValidateWorktreeRemoval(entry.Worktree.Path, discard)}
-	})
-	filtered := candidates[:0]
-	for i, check := range checks {
-		if check.dirty {
-			skips.dirty++
-			continue
-		}
-		if check.err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: %v\n", entries[i].Selector(), check.err)
-			skips.unsafe++
-			continue
-		}
-		filtered = append(filtered, candidates[i])
-	}
-	candidates = filtered
-
-	results := make([]removeResult, 0, len(candidates))
-	ages := make(map[string]time.Duration, len(candidates))
-	var failures []error
-	for _, candidate := range candidates {
-		entry := candidate.entry
-		if dryRun {
-			result := removeResult{Selector: entry.Selector(), Path: entry.Worktree.Path}
-			results = append(results, result)
-			ages[result.Path] = candidate.age
-			continue
-		}
-		if !discard {
-			dirty, err := entry.Repository.Git.Dirty(entry.Worktree.Path)
-			if err != nil {
-				failures = append(failures, fmt.Errorf("%s: %w", entry.Selector(), err))
-				continue
-			}
-			if dirty {
-				skips.dirty++
-				continue
-			}
-		}
-		if err := entry.Repository.Git.RemoveWorktree(entry.Worktree.Path, discard); err != nil {
-			failures = append(failures, fmt.Errorf("%s: %w", entry.Selector(), err))
-			continue
-		}
-		result := removeResult{Selector: entry.Selector(), Path: entry.Worktree.Path}
-		results = append(results, result)
-		ages[result.Path] = candidate.age
-	}
-
-	pending, finishErr := finishRemoval(cmd, wait, dryRun)
-	if finishErr != nil {
-		failures = append(failures, finishErr)
-	}
-
-	if a.jsonOutput {
-		output := removeOutput{Version: 1, DryRun: dryRun, Removed: []removeResult{}, WouldRemove: []removeResult{}, PendingDeletion: pending}
-		if dryRun {
-			output.WouldRemove = results
-		} else {
-			output.Removed = results
-		}
-		if err := writeJSON(cmd, output); err != nil {
-			return err
-		}
-	} else if len(results) == 0 {
-		if dryRun {
-			fmt.Fprintf(cmd.OutOrStdout(), "No worktrees older than %s would be removed.\n", threshold.label)
-		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "No worktrees older than %s removed.\n", threshold.label)
-		}
-	} else {
-		action := "Removed"
-		if dryRun {
-			action = "Would remove"
-		}
-		style := a.style(cmd.OutOrStdout())
-		fmt.Fprintf(cmd.OutOrStdout(), "%s %s older than %s %s\n", style.info(action), worktreeCount(len(results), "worktree", "worktrees"), threshold.label, style.muted("(branches kept):"))
-		for _, result := range results {
-			age := "created " + relativeAge(ages[result.Path]) + " ago"
-			fmt.Fprintf(cmd.OutOrStdout(), "  %s  %s\n", style.branch(result.Selector), style.muted(age))
-		}
-	}
-	a.writeCleanupSkips(cmd, skips)
-	if len(failures) != 0 {
-		return errors.Join(failures...)
-	}
-	return nil
-}
-
 func worktreeCount(count int, singular, plural string) string {
 	if count == 1 {
 		return fmt.Sprintf("1 %s", singular)
@@ -608,121 +463,6 @@ func (a *application) writeCleanupSkips(cmd *cobra.Command, skips cleanupSkips) 
 	}
 }
 
-func (a *application) removeMerged(cmd *cobra.Command, context *commandContext, dryRun, wait bool) error {
-	currentPath := ""
-	if current, err := context.inventory.Resolve(".", context.directory); err == nil {
-		currentPath = current.Worktree.Path
-	}
-	var candidates []removeCandidate
-	for _, entry := range context.inventory.Entries {
-		if context.catalog.Current == entry.Repository && !context.catalog.CurrentRegistered {
-			continue
-		}
-		if mergedSkipReason(entry, currentPath) != "" {
-			continue
-		}
-		candidates = append(candidates, removeCandidate{entry: entry})
-	}
-	entries := make([]*inventory.Entry, len(candidates))
-	for i, candidate := range candidates {
-		entries[i] = candidate.entry
-	}
-	checks := checkRemoveEntries(entries, func(entry *inventory.Entry) removalCheck {
-		if descendants := context.inventory.Descendants(entry.Worktree.Path); len(descendants) != 0 {
-			return removalCheck{err: fmt.Errorf("contains registered worktree %s", descendants[0].Worktree.Path)}
-		}
-		dirty, err := entry.Repository.Git.Dirty(entry.Worktree.Path)
-		if err != nil {
-			return removalCheck{err: err}
-		}
-		if dirty {
-			return removalCheck{dirty: true}
-		}
-		merged, _, err := entry.Repository.Git.BranchMerged(entry.Worktree.Branch, entry.Repository.DefaultBranch)
-		if err != nil {
-			return removalCheck{err: err}
-		}
-		if !merged {
-			return removalCheck{skip: true}
-		}
-		return removalCheck{err: entry.Repository.Git.ValidateWorktreeRemoval(entry.Worktree.Path, false)}
-	})
-	filtered := candidates[:0]
-	for i, check := range checks {
-		if check.err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: %v\n", entries[i].Selector(), check.err)
-			continue
-		}
-		if !check.dirty && !check.skip {
-			filtered = append(filtered, candidates[i])
-		}
-	}
-	candidates = filtered
-
-	results := make([]removeResult, 0, len(candidates))
-	var failures []error
-	for _, candidate := range candidates {
-		entry := candidate.entry
-		if dryRun {
-			results = append(results, removeResult{Selector: entry.Selector(), Path: entry.Worktree.Path})
-			continue
-		}
-		dirty, err := entry.Repository.Git.Dirty(entry.Worktree.Path)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("%s: %w", entry.Selector(), err))
-			continue
-		}
-		merged, _, mergeErr := entry.Repository.Git.BranchMerged(entry.Worktree.Branch, entry.Repository.DefaultBranch)
-		if mergeErr != nil {
-			failures = append(failures, fmt.Errorf("%s: %w", entry.Selector(), mergeErr))
-			continue
-		}
-		if dirty || !merged {
-			continue
-		}
-		if err := entry.Repository.Git.RemoveWorktree(entry.Worktree.Path, false); err != nil {
-			failures = append(failures, fmt.Errorf("%s: %w", entry.Selector(), err))
-			continue
-		}
-		results = append(results, removeResult{Selector: entry.Selector(), Path: entry.Worktree.Path})
-	}
-
-	pending, finishErr := finishRemoval(cmd, wait, dryRun)
-	if finishErr != nil {
-		failures = append(failures, finishErr)
-	}
-
-	if a.jsonOutput {
-		output := removeOutput{Version: 1, DryRun: dryRun, Removed: []removeResult{}, WouldRemove: []removeResult{}, PendingDeletion: pending}
-		if dryRun {
-			output.WouldRemove = results
-		} else {
-			output.Removed = results
-		}
-		if err := writeJSON(cmd, output); err != nil {
-			return err
-		}
-	} else if len(results) == 0 {
-		if dryRun {
-			fmt.Fprintln(cmd.OutOrStdout(), "No merged worktrees would be removed.")
-		} else {
-			fmt.Fprintln(cmd.OutOrStdout(), "No merged worktrees removed.")
-		}
-	} else {
-		verb := "removed"
-		if dryRun {
-			verb = "would remove"
-		}
-		for _, result := range results {
-			fmt.Fprintf(cmd.OutOrStdout(), "%s %s  %s\n", verb, result.Selector, result.Path)
-		}
-	}
-	if len(failures) != 0 {
-		return errors.Join(failures...)
-	}
-	return nil
-}
-
 func mergedSkipReason(entry *inventory.Entry, currentPath string) string {
 	switch {
 	case entry.Worktree.Main:
@@ -752,6 +492,7 @@ func lockedError(entry *inventory.Entry) error {
 // write command streams or shared counters, which keeps bulk diagnostics stable.
 type removalCheck struct {
 	dirty, skip bool
+	removal     *gitx.Removal
 	err         error
 }
 

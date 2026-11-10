@@ -13,8 +13,9 @@ import (
 var ErrCancelled = errors.New("selection cancelled")
 
 type Item struct {
-	Key   string
-	Label string
+	Key      string
+	Label    string
+	Selected bool
 }
 
 func Select(prompt string, items []Item) (string, error) {
@@ -34,6 +35,9 @@ func selectItems(prompt string, items []Item, multi bool) ([]string, error) {
 		return nil, fmt.Errorf("no worktrees")
 	}
 	args := selectionArgs(prompt, multi)
+	if multi {
+		args = append(args, preselectionArgs(items)...)
+	}
 	cmd := exec.Command("fzf", args...)
 	cmd.Stdin = bytes.NewReader(encodeItems(items))
 	cmd.Stderr = os.Stderr
@@ -51,10 +55,27 @@ func selectItems(prompt string, items []Item, multi bool) ([]string, error) {
 	return decodeSelections(out, items)
 }
 
+// load fires after all NUL records arrive. Numeric positions select arbitrary
+// rows without interpolating labels/paths into actions or invoking a shell.
+// --no-sort keeps positions and the caller's activity ranking stable.
+func preselectionArgs(items []Item) []string {
+	actions := []string{}
+	for i, item := range items {
+		if item.Selected {
+			actions = append(actions, fmt.Sprintf("pos(%d)+select", i+1))
+		}
+	}
+	bindings := "ctrl-a:select-all,ctrl-d:deselect-all"
+	if len(actions) > 0 {
+		bindings += ",load:" + strings.Join(actions, "+") + "+first"
+	}
+	return []string{"--no-sort", "--bind", bindings}
+}
+
 func selectionArgs(prompt string, multi bool) []string {
 	args := []string{"--read0", "--print0", "--delimiter=\t", "--with-nth=2..", "--prompt", prompt}
 	if multi {
-		args = append(args, "--multi", "--header", "tab/shift-tab select · enter confirm")
+		args = append(args, "--multi", "--header", "tab/shift-tab select · ctrl-a all · ctrl-d clear · enter confirm")
 	} else {
 		// Navigation candidates arrive in MRU order. Filtering should narrow that
 		// ranking, not replace it with fzf's match-score ordering.

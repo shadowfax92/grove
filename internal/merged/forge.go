@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type pullRequest struct {
@@ -78,7 +79,13 @@ func (c checker) forge(ctx context.Context, base string, branches []Branch, resu
 	// A finite limit bounds response memory. At the cap, negative results say
 	// truncated; a missing PR is never promoted into positive merge evidence.
 	const limit = 10000
-	cmd := exec.CommandContext(bounded, gh, "pr", "list", "--state", "merged", "--base", base, "--limit", fmt.Sprint(limit), "--json", "number,headRefName,headRefOid")
+	args := []string{"pr", "list", "--state", "merged", "--base", base, "--limit", fmt.Sprint(limit), "--json", "number,headRefName,headRefOid"}
+	// Round back to midnight UTC so GitHub's date granularity cannot exclude a
+	// PR on a worktree's creation day. Unknown dates leave the query unbounded.
+	if since := oldestCreation(branches); !since.IsZero() {
+		args = append(args, "--search", "merged:>="+since.UTC().Format("2006-01-02"))
+	}
+	cmd := exec.CommandContext(bounded, gh, args...)
 	cmd.Dir = c.path
 	configureForgeProcess(cmd)
 	cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1", "GIT_OPTIONAL_LOCKS=0")
@@ -125,6 +132,19 @@ func (c checker) forge(ctx context.Context, base string, branches []Branch, resu
 	}
 }
 
+func oldestCreation(branches []Branch) time.Time {
+	var oldest time.Time
+	for _, branch := range branches {
+		if branch.CreatedAt.IsZero() {
+			return time.Time{}
+		}
+		if oldest.IsZero() || branch.CreatedAt.Before(oldest) {
+			oldest = branch.CreatedAt
+		}
+	}
+	return oldest
+}
+
 func (c checker) cachePath(base string, branch Branch) string {
 	if c.options.CacheDir == "" {
 		return ""
@@ -166,6 +186,60 @@ func (c checker) cache(base string, branch Branch, pr int) {
 	// Per-tip atomic files avoid lost updates across concurrent Grove commands.
 	// Cache failures only lose acceleration; freshly queried evidence still stands.
 	f, err := os.CreateTemp(filepath.Dir(path), ".merged-*")
+	if err != nil {
+		return
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.Write(data); err != nil {
+		f.Close()
+		return
+	}
+	if f.Close() != nil {
+		return
+	}
+	_ = os.Rename(f.Name(), path)
+}
+
+// A short repository/base/tip cache makes repeated previews avoid trial merges
+// and negative forge queries. Positive forge evidence also retains its permanent
+// per-tip cache. Failed/incomplete checks are never cached as complete negatives.
+type checkedTip struct {
+	At     time.Time
+	Result Result
+}
+
+func (c checker) checkPath(base string, branch Branch) string {
+	path := c.cachePath(base+fmt.Sprint(c.options.Forge), branch)
+	if path == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(path), "check-"+filepath.Base(path))
+}
+func (c checker) cachedCheck(base string, branch Branch) (Result, bool) {
+	path := c.checkPath(base, branch)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Result{}, false
+	}
+	var entry checkedTip
+	if json.Unmarshal(data, &entry) != nil || entry.At.After(time.Now()) || time.Since(entry.At) > 5*time.Minute {
+		return Result{}, false
+	}
+	return entry.Result, true
+}
+func (c checker) cacheCheck(base string, branch Branch, result Result) {
+	if result.Error != "" || len(result.Skipped) > 0 || result.Tier == "unknown" {
+		return
+	}
+	path := c.checkPath(base, branch)
+	if path == "" || os.MkdirAll(filepath.Dir(path), 0700) != nil {
+		return
+	}
+	data, err := json.Marshal(checkedTip{time.Now(), result})
+	if err != nil {
+		return
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".check-*")
 	if err != nil {
 		return
 	}

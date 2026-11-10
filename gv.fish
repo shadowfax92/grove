@@ -57,7 +57,7 @@ function gv
             test -n "$path"
             and builtin cd -- $path
         case rm
-            if __gv_flag_enabled --merged $rest; or __gv_flag_enabled --missing $rest; or __gv_option_present --older-than $rest; or __gv_flag_enabled --dry-run $rest
+            if __gv_flag_enabled --merged $rest; or __gv_flag_enabled --missing $rest; or __gv_option_present --older-than $rest; or __gv_option_present --inactive-for $rest; or __gv_option_present --repo $rest; or __gv_flag_enabled --dry-run $rest
                 grove rm $rest
                 return $status
             end
@@ -78,6 +78,8 @@ function gv
             or return $grove_status
             test -n "$path"
             and builtin cd -- $path
+        case cleanup du trash
+            grove $argv
         case l ls list
             grove list $rest
         case cfg config

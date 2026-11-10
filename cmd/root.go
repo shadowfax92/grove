@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"grove/internal/inuse"
 	"grove/internal/picker"
 	"grove/internal/recency"
 	"grove/internal/trash"
@@ -26,6 +27,9 @@ type commandDependencies struct {
 	lastVisited           func(string) (time.Time, bool)
 	markVisited           func(string) error
 	startFootprintRefresh func([]string) error
+	startAutomaticCleanup func([]string) error
+	inUse                 func(string) inuse.Result
+	confirm               func(string) (bool, error)
 }
 
 type application struct {
@@ -95,6 +99,7 @@ func newRootCommand(dependencies commandDependencies) *cobra.Command {
 			return app.runNavigate(cmd, args)
 		},
 	}
+	root.PersistentPostRun = func(cmd *cobra.Command, args []string) { app.maybeAutomaticCleanup(cmd) }
 	root.SetHelpFunc(app.writeHelp)
 	root.PersistentFlags().StringVarP(&app.directory, "directory", "C", "", "Run as if started in this directory")
 	root.PersistentFlags().BoolVar(&app.noInput, "no-input", false, "Never open an interactive picker")
@@ -103,6 +108,7 @@ func newRootCommand(dependencies commandDependencies) *cobra.Command {
 	root.PersistentFlags().StringVar(&app.colorMode, "color", "auto", "Color output: auto, always, or never")
 	root.AddCommand(
 		app.cdCommand(),
+		app.cleanupCommand(),
 		app.configCommand(),
 		app.duCommand(),
 		app.listCommand(),

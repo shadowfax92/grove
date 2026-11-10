@@ -33,7 +33,8 @@ grove new fix/login           # preserve an explicit branch name
 grove cd feat/auth            # current repo
 grove cd browseros:feat/auth  # configured repo alias
 grove list                    # Git-backed repository/worktree tree
-grove du                      # cached disk usage, largest repositories first
+grove du                      # cached sizes + activity; never wait for a scan
+grove cleanup                 # choose projects, choose worktrees, confirm
 grove rm .                    # remove the current clean worktree
 grove rm                      # pick one or more worktrees with fzf
 grove rm feat/auth fix/login  # remove several exact worktrees
@@ -41,6 +42,7 @@ grove rm --discard .          # discard every unprotected worktree file
 grove rm --merged --dry-run   # preview conservative bulk cleanup
 grove rm --merged             # remove clean merged worktrees
 grove rm --older-than 14d     # remove old clean worktrees, merged or not
+grove cleanup --repo app --inactive-for 3d --merged --dry-run
 grove rm --missing            # prune registrations for deleted directories
 ```
 
@@ -162,13 +164,15 @@ grove --json du --include-main  # versioned measurements, including main
 The walk counts allocated blocks, counts each hardlinked file once per worktree,
 and never enters symlink targets. Nested registered worktrees are excluded from
 parent scans. Human totals always exclude main worktrees. Rows show creation
-age, measurement age, and the largest subdirectory; partial reads are labeled.
+age, measurement age, last source/index activity, in-use command names, merge
+evidence, and the largest subdirectory; partial reads are labeled. The footer
+shows cached space still waiting in trash. `--forge` adds GitHub PR evidence.
 
 Measurements live under `$XDG_STATE_HOME/grove/footprint` (or
-`~/.local/state/grove/footprint`). Missing or corrupt entries are rescanned with
-progress on stderr. Cached measurements expire after 15 minutes; `--max-age`
-changes that interval. A changed or replaced root invalidates its entry at once,
-but edits deeper in the tree are detected by the next scan. Stale cached results
+`~/.local/state/grove/footprint`). Missing or corrupt entries appear as unknown and refresh in a detached process.
+Only `--refresh` waits for scans, with progress on stderr. Cached measurements expire after 15 minutes; `--max-age`
+changes that interval. A replaced root invalidates its entry at once. Changed root metadata retains a
+labeled stale estimate; deeper edits are detected by the next scan. Stale cached results
 print immediately and refresh in a detached process. `--refresh` waits instead.
 Deleting the cache is safe. `--jobs` bounds simultaneous worktree scans.
 
@@ -177,6 +181,49 @@ It is disabled by default because these extra attributes make a full scan slower
 The number is an estimate: APFS snapshots, filesystem metadata, and concurrent changes mean
 it cannot guarantee the space deletion will reclaim. Other builds omit it. Use
 `--private-size=false` to skip the extra metadata read.
+
+### Guided and automatic cleanup
+
+```sh
+grove cleanup
+grove cleanup --repo app --inactive-for 3d --dry-run
+grove cleanup --repo app,another --merged --inactive-for 7d --discard
+grove cleanup --sweep --dry-run
+```
+
+The guided flow shows projects largest first, with counts, cached bytes, idle
+bytes and merged counts. Then it shows their worktrees least recently active
+first with size/measurement age, activity, creation age, process command names,
+merge reasons, lock status and pending safety checks. Idle or merged worktrees
+start selected only when process visibility proves they are free and no protection
+applies. Tab toggles; Ctrl-A selects all; Ctrl-D clears. Main, locked, current,
+detached and registered-descendant protections still apply when confirming.
+The final summary gives count, cached size and uncommitted-file count. An explicit
+yes here can authorize discarding dirty files. `--idle-after 3d` overrides
+`cleanup.idle_after` (default `3d`). A bare headless cleanup uses this idle threshold;
+a scoped headless cleanup selects all unprotected free worktrees in that scope.
+`gv cleanup` passes through and keeps the current directory.
+
+Automatic cleanup stays off until configured in `~/.config/grove/config.yaml`:
+
+```yaml
+cleanup:
+  enabled: true
+  idle_after: 3d
+  grace_period: 1d
+  interval: 1h
+```
+
+Ordinary commands reserve a launch at most once per interval and start a detached
+sweep. Navigation/worktree creation never waits for the sweep. It requires a merged
+current tip, clean files, a successful process check, and inactivity past the grace
+period; it preserves branches and never removes main, locked, nested registered,
+or the launching/current worktree. Unknown visibility aborts the sweep. It never
+uses discard or prunes config. Completed sweeps append sizes/reasons/errors to
+`${XDG_STATE_HOME:-~/.local/state}/grove/cleanup/sweeps.jsonl`; the next interactive
+ordinary command mentions the last result once on stderr. `cleanup --sweep` runs
+these rules on demand even when automation is disabled. Its dry run is provisional
+like other previews. Dry runs never start sweeps, reapers, or footprint refreshes.
 
 ### Remove
 
@@ -213,11 +260,25 @@ Every successful `grove rm` also removes config entries for repository directori
 
 Bulk removal considers every configured repository and always protects main, locked, current, detached, and registered nested worktrees:
 
-- `--merged` removes clean worktrees whose branch tip is an ancestor of the configured default branch. It is intentionally conservative: squash-merged branches may remain because Git ancestry cannot prove that merge.
+- `--merged` uses ancestry against the newer local/remote default, an isolated no-change trial merge, then GitHub PR evidence at the exact current tip. Every result shows its reason. `--forge=false` disables the forge tier. A branch with new commits since its PR merged is retained. Forge queries have a twenty-second default timeout and search no earlier than the oldest pending worktree's creation date (unknown dates leave history unbounded). Complete results cache for five minutes by repository/default-tip/branch-tip; positive forge evidence also persists per immutable tip.
 - `--older-than 14d` removes worktrees by creation age without considering merge state. Supported units are minutes (`m`), hours (`h`), days (`d`), and weeks (`w`). Dirty worktrees are skipped unless `--discard` is present.
 - `--missing` prunes stale Git registrations for worktree directories that no longer exist. It does not delete directories.
 
-Use `--dry-run` with any bulk mode to inspect the exact candidates first. Age cleanup shows the same creation ages as `grove list` and summarizes protected worktrees it skipped. All removal modes keep the underlying branches.
+- `--repo app` scopes by repository name or alias; repeat it or comma-separate names.
+- `--inactive-for 3d` selects by non-ignored working files and the private index, separately from creation age.
+
+Repository, creation-age, inactivity, and merge predicates combine with AND. Bulk
+modes always skip worktrees with live processes, including with `--discard`.
+Unknown process visibility blocks bulk cleanup unless `--allow-unknown-in-use`
+is explicit. Exact selectors still remove deliberately named in-use worktrees,
+with a warning naming their processes; exact selectors never open fzf.
+
+`--dry-run` returns provisional candidates from cheap activity/merge facts and
+cached sizes, including measurement ages. Dirty and unregistered-nested-repository
+checks are explicitly pending (`unchecked` in additive version-1 JSON fields).
+They run concurrently with progress only on the selected worktrees, before any
+removal; dirty trees are skipped unless `--discard` is explicit. No preview waits
+for a footprint scan. All removal modes keep branches.
 
 Removal validates the same protections, then renames the tree into Grove's trash and asks `git worktree remove --force` to unregister a stub holding only its `.git` pointer. The command returns after detaching; physical deletion runs in a separate process with up to four trees in parallel. Branches and unrelated missing registrations are kept. If the rename cannot run (including across filesystems), Grove uses the ordinary `git worktree remove` path. With `--discard`, stale linked-worktree pointers are repaired from Git's administrative records first.
 

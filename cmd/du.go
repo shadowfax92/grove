@@ -11,9 +11,14 @@ import (
 	"syscall"
 	"time"
 
+	"grove/internal/activity"
 	"grove/internal/catalog"
+	"grove/internal/cleanup"
 	"grove/internal/footprint"
+	"grove/internal/inuse"
 	"grove/internal/inventory"
+	"grove/internal/merged"
+	"grove/internal/trash"
 
 	"github.com/spf13/cobra"
 )
@@ -21,10 +26,13 @@ import (
 // duDocument is independent of list's JSON contract. Totals include only linked
 // worktrees; main checkouts are metadata-only unless --include-main is requested.
 type duDocument struct {
-	Version      int             `json:"version"`
-	Repositories []*duRepository `json:"repositories"`
-	Bytes        int64           `json:"bytes"`
-	Worktrees    int             `json:"worktree_count"`
+	Version         int             `json:"version"`
+	PendingBytes    int64           `json:"pending_bytes"`
+	PendingUnknown  int             `json:"pending_sizes_unknown"`
+	PendingDeletion []trash.Entry   `json:"pending_deletion,omitempty"`
+	Repositories    []*duRepository `json:"repositories"`
+	Bytes           int64           `json:"bytes"`
+	Worktrees       int             `json:"worktree_count"`
 }
 type duRepository struct {
 	Name      string        `json:"name"`
@@ -45,11 +53,14 @@ type duWorktree struct {
 	Stale          bool             `json:"stale"`
 	MeasurementAge float64          `json:"measurement_age_seconds,omitempty"`
 	Error          string           `json:"error,omitempty"`
+	Activity       *activity.Result `json:"activity,omitempty"`
+	InUse          *inuse.Result    `json:"in_use,omitempty"`
+	Merged         *merged.Result   `json:"merged,omitempty"`
 }
 type duOptions struct {
-	refresh, background, includeMain, privateSize bool
-	maxAge                                        time.Duration
-	jobs                                          int
+	refresh, background, includeMain, privateSize, forge bool
+	maxAge                                               time.Duration
+	jobs                                                 int
 }
 type duTask struct {
 	worktree *duWorktree
@@ -63,6 +74,7 @@ func (a *application) duCommand() *cobra.Command {
 		Long: "Show allocated disk usage grouped by repository. Cached measurements expire after 15 minutes; stale results print immediately and refresh in a detached process. Use --refresh to wait for fresh measurements. Main worktrees are excluded from totals. Private bytes, when available, estimate unshared file data, not guaranteed reclaimed volume space.",
 		RunE: func(cmd *cobra.Command, args []string) error { return a.runDU(cmd, args, options) },
 	}
+	command.Flags().BoolVar(&options.forge, "forge", false, "Include GitHub merged PR evidence")
 	command.Flags().BoolVar(&options.refresh, "refresh", false, "Wait for fresh measurements")
 	command.Flags().DurationVar(&options.maxAge, "max-age", footprint.DefaultMaxAge, "Maximum cache age before background refresh")
 	command.Flags().IntVar(&options.jobs, "jobs", 4, "Maximum simultaneous worktree scans")
@@ -149,15 +161,15 @@ func (a *application) runDU(cmd *cobra.Command, names []string, options duOption
 			continue
 		}
 		request := footprint.Request{Path: row.Path, Exclude: footprint.Exclusions(row.Path, roots), PrivateSize: options.privateSize}
-		measured, ok := cache.Load(request)
+		measured, invalidated, ok := cache.LoadForDisplay(request)
 		if ok {
 			row.Footprint = &measured
-			row.Stale = measured.Stale(now, options.maxAge)
+			row.Stale = invalidated || measured.Stale(now, options.maxAge)
 			row.MeasurementAge = now.Sub(measured.ScannedAt).Seconds()
 		}
-		if options.refresh || !ok || options.background && row.Stale {
+		if options.refresh || options.background && (!ok || row.Stale) {
 			tasks = append(tasks, duTask{row, request})
-		} else if row.Stale {
+		} else if !ok || row.Stale {
 			refreshNeeded = true
 		}
 	}
@@ -210,9 +222,50 @@ func (a *application) runDU(cmd *cobra.Command, names []string, options duOption
 			return ctx.Err()
 		}
 	}
-	cache.Prune()
+	retain := map[string]bool{}
+	if manager, err := trash.Default(); err == nil {
+		pending, pendingErr := manager.Pending()
+		if pendingErr == nil {
+			for _, entry := range pending {
+				retain[entry.Original] = true
+			}
+			cache.PruneExcept(retain)
+		}
+	}
 	if options.background {
 		return nil
+	}
+	// Status is cheap relative to footprint walks; ignored build output is never
+	// scanned for the foreground view. The detached refresh needs no signals.
+	signalEntries := []*inventory.Entry{}
+	for _, entry := range data.inventory.Entries {
+		if byRepository[entry.Repository] != nil && !entry.Worktree.Main {
+			signalEntries = append(signalEntries, entry)
+		}
+	}
+	facts := cleanup.Collect(ctx, data.inventory, signalEntries, options.forge, a.dependencies.inUse)
+	byPath := map[string]cleanup.Row{}
+	for _, r := range facts {
+		byPath[r.Entry.Worktree.Path] = r
+	}
+	for _, repo := range document.Repositories {
+		for _, row := range repo.Worktrees {
+			if r, ok := byPath[row.Path]; ok {
+				row.Activity = &r.Activity
+				row.InUse = &r.InUse
+				row.Merged = &r.Merged
+			}
+		}
+	}
+	if manager, err := trash.Default(); err == nil {
+		document.PendingDeletion, _ = manager.Pending()
+		for _, entry := range document.PendingDeletion {
+			if m, ok := cache.LoadEstimate(entry.Original); ok {
+				document.PendingBytes += m.Bytes
+			} else {
+				document.PendingUnknown++
+			}
+		}
 	}
 	finishDUTotals(&document)
 	if a.jsonOutput {
@@ -308,7 +361,7 @@ func (a *application) printDU(cmd *cobra.Command, document duDocument) error {
 				label = row.Path
 			}
 			if row.Footprint == nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "  %s  unavailable  %s\n", label, row.Error)
+				fmt.Fprintf(cmd.OutOrStdout(), "  %s  size unknown (not measured) %s%s\n", label, row.Error, duSignals(row, now))
 				continue
 			}
 			m := row.Footprint
@@ -316,13 +369,13 @@ func (a *application) printDU(cmd *cobra.Command, document duDocument) error {
 			if len(m.Largest) > 0 {
 				largest = fmt.Sprintf("  %s (%s)", m.Largest[0].Path, diskSize(m.Largest[0].Bytes))
 			}
-			measured := "measured " + relativeAge(now.Sub(m.ScannedAt)) + " ago"
+			measured := "measured " + ago(now.Sub(m.ScannedAt))
 			if row.Stale {
 				measured += "; stale"
 			}
 			age := ""
 			if row.CreatedAt != nil {
-				age = "  created " + relativeAge(now.Sub(*row.CreatedAt)) + " ago"
+				age = "  created " + ago(now.Sub(*row.CreatedAt))
 			}
 			detail := ""
 			if m.PrivateBytes != nil {
@@ -334,9 +387,10 @@ func (a *application) printDU(cmd *cobra.Command, document duDocument) error {
 			if row.Error != "" {
 				detail += "  warning: " + row.Error
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "  %9s  %s%s%s  %s%s\n", diskSize(m.Bytes), style.branch(label), largest, age, measured, detail)
+			fmt.Fprintf(cmd.OutOrStdout(), "  %9s  %s%s%s  %s%s\n", diskSize(m.Bytes), style.branch(label), largest, age, measured, detail+duSignals(row, now))
 		}
 	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Space waiting in trash: ~%s cached (%d entries; %d sizes unknown).\n", diskSize(document.PendingBytes), len(document.PendingDeletion), document.PendingUnknown)
 	_, err := fmt.Fprintf(cmd.OutOrStdout(), "\nTotal: %s in %d linked worktrees (main excluded)\n", diskSize(document.Bytes), document.Worktrees)
 	return err
 }
@@ -362,4 +416,32 @@ func startFootprintRefresh(args []string) error {
 		return err
 	}
 	return command.Process.Release()
+}
+
+func duSignals(row *duWorktree, now time.Time) string {
+	parts := []string{}
+	if row.Activity != nil {
+		if row.Activity.Error != "" {
+			parts = append(parts, "last active unknown")
+		} else {
+			parts = append(parts, "last active "+ago(now.Sub(row.Activity.LastActive)))
+		}
+	}
+	if row.InUse != nil {
+		switch row.InUse.State {
+		case inuse.InUse:
+			parts = append(parts, "in use: "+cleanup.Processes(*row.InUse))
+		case inuse.Free:
+			parts = append(parts, "not in use")
+		default:
+			parts = append(parts, "in use unknown")
+		}
+	}
+	if row.Merged != nil && row.Merged.Merged {
+		parts = append(parts, "merged: "+row.Merged.Reason)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "  [" + strings.Join(parts, "; ") + "]"
 }

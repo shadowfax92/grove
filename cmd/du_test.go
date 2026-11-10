@@ -19,7 +19,7 @@ func TestDUJSONCacheAndRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := newRootCommand(commandDependencies{getwd: func() (string, error) { return repo, nil }})
-	stdout, stderr, err := executeV2(root, "--json", "du", "app", "--private-size=false")
+	stdout, stderr, err := executeV2(root, "--json", "du", "app", "--private-size=false", "--refresh")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestDUHumanTotalsExcludeNestedMainAndScope(t *testing.T) {
 	runV2Git(t, repo, "worktree", "add", "-b", "feat/example", linked)
 	other := initV2Repo(t)
 	writeV2Config(t, repo, "  - path: "+other+"\n    name: second\n")
-	stdout, _, err := executeV2(newRootCommand(commandDependencies{getwd: func() (string, error) { return repo, nil }}), "du", "app", "--include-main", "--private-size=false")
+	stdout, _, err := executeV2(newRootCommand(commandDependencies{getwd: func() (string, error) { return repo, nil }}), "du", "app", "--include-main", "--private-size=false", "--refresh")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestDURefreshPreservesDashPrefixedRepository(t *testing.T) {
 	runV2Git(t, repo, "worktree", "add", "-b", "feature", linked)
 	writeV2Config(t, "", "  - path: "+repo+"\n    name: -example\n")
 	deps := commandDependencies{getwd: func() (string, error) { return repo, nil }}
-	if _, _, err := executeV2(newRootCommand(deps), "du", "--", "-example"); err != nil {
+	if _, _, err := executeV2(newRootCommand(deps), "du", "--refresh", "--", "-example"); err != nil {
 		t.Fatal(err)
 	}
 	var forwarded []string
@@ -127,4 +127,31 @@ func TestDURefreshPreservesDashPrefixedRepository(t *testing.T) {
 	if len(forwarded) < 2 || forwarded[len(forwarded)-2] != "--" || forwarded[len(forwarded)-1] != "-example" {
 		t.Fatalf("repository alias became flags: %q", forwarded)
 	}
+}
+
+func TestDUKeepsPendingTrashSizeAcrossReads(t *testing.T) {
+	repo, linked, deps := cleanupFixture(t)
+	if err := os.WriteFile(filepath.Join(linked, "data"), make([]byte, 8192), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := executeV2(newRootCommand(deps), "du", "--refresh"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := executeV2(newRootCommand(deps), "rm", "--discard", "topic"); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		out, _, err := executeV2(newRootCommand(deps), "--json", "du")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc duDocument
+		if err := json.Unmarshal([]byte(out), &doc); err != nil {
+			t.Fatal(err)
+		}
+		if len(doc.PendingDeletion) != 1 || doc.PendingBytes < 8192 || doc.PendingUnknown != 0 {
+			t.Fatal(out)
+		}
+	}
+	_ = repo
 }

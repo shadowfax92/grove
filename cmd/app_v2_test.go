@@ -878,7 +878,7 @@ func TestRemoveOlderThanRequiresDiscardButNeverOverridesLocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry-run error = %v", err)
 	}
-	if strings.Contains(stdout, "feat/dirty-old") || !strings.Contains(stderr, "Skipped 1 dirty") || !strings.Contains(stderr, "1 locked") || !strings.Contains(stderr, "--discard") {
+	if !strings.Contains(stdout, "feat/dirty-old") || strings.Contains(stdout, "feat/locked-old") || !strings.Contains(stderr, "checks have not run") {
 		t.Fatalf("stdout = %q, stderr = %q", stdout, stderr)
 	}
 
@@ -1000,7 +1000,7 @@ func TestRemoveOlderThanNeverRemovesNestedWorktrees(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry-run error = %v", err)
 	}
-	if !strings.Contains(stdout, "No worktrees") || !strings.Contains(stderr, "Skipped 1 dirty") || strings.Contains(stderr, "contains registered worktree") {
+	if !strings.Contains(stdout, "Would remove 0 worktrees") || strings.Contains(stdout, "feat/parent") {
 		t.Fatalf("stdout = %q, stderr = %q", stdout, stderr)
 	}
 
@@ -1009,7 +1009,7 @@ func TestRemoveOlderThanNeverRemovesNestedWorktrees(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cleanup error = %v", err)
 	}
-	if !strings.Contains(stdout, "No worktrees") || !strings.Contains(stderr, "contains registered worktree") || !strings.Contains(stderr, "1 unsafe") {
+	if !strings.Contains(stdout, "Removed 0 worktrees") || strings.Contains(stdout, "feat/parent") {
 		t.Fatalf("stdout = %q, stderr = %q", stdout, stderr)
 	}
 	for _, path := range []string{parentPath, childPath} {
@@ -1075,7 +1075,7 @@ func TestRemoveBulkCleanupRejectsAmbiguousFlags(t *testing.T) {
 	}{
 		{args: []string{"rm", "--older-than", "later"}, want: "invalid --older-than"},
 		{args: []string{"rm", "--older-than", "0d"}, want: "positive duration"},
-		{args: []string{"rm", "--merged", "--older-than", "14d"}, want: "cannot be used together"},
+
 		{args: []string{"rm", "--missing", "--older-than", "14d"}, want: "cannot be used together"},
 		{args: []string{"rm", "--missing", "--discard"}, want: "--discard"},
 		{args: []string{"rm", "--dry-run"}, want: "requires"},
@@ -1417,12 +1417,12 @@ func TestRootExposesOnlyCohesiveCommands(t *testing.T) {
 		}
 	}
 	got := strings.Join(names, ",")
-	for _, want := range []string{"cd", "config", "list", "new", "rm"} {
+	for _, want := range []string{"cd", "cleanup", "config", "list", "new", "rm"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("commands = %q, missing %s", got, want)
 		}
 	}
-	for _, removed := range []string{"cleanup", "done", "init", "pull", "reap", "recycle", "sync", "which"} {
+	for _, removed := range []string{"done", "init", "pull", "reap", "recycle", "sync", "which"} {
 		if strings.Contains(got, removed) {
 			t.Fatalf("commands = %q, still contains %s", got, removed)
 		}

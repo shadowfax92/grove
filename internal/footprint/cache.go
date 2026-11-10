@@ -138,7 +138,10 @@ func (c *Cache) store(entry Entry) error {
 // Prune only removes cache entries whose roots are confirmed absent, never
 // entries merely outside the caller's selected repositories or inaccessible.
 // Lock files stay put: replacing their inodes would split the process lease.
-func (c *Cache) Prune() {
+func (c *Cache) Prune() { c.PruneExcept(nil) }
+
+// PruneExcept retains measurements used to account for pending trash journals.
+func (c *Cache) PruneExcept(retain map[string]bool) {
 	entries, err := os.ReadDir(c.directory)
 	if err != nil {
 		return
@@ -154,6 +157,9 @@ func (c *Cache) Prune() {
 		}
 		var entry Entry
 		if json.Unmarshal(data, &entry) != nil || !filepath.IsAbs(entry.Path) || filepath.Base(c.entryPath(entry.Path)) != file.Name() {
+			continue
+		}
+		if retain[entry.Path] {
 			continue
 		}
 		if _, err := os.Lstat(entry.Path); !errors.Is(err, os.ErrNotExist) {
@@ -185,4 +191,36 @@ func (c *Cache) BackgroundLease(scope string) (release func(), acquired bool) {
 		return func() {}, false
 	}
 	return func() { _ = lock.Close() }, true
+}
+
+// LoadEstimate reads the last known measurement without touching its root. This
+// is presentation-only, notably for a tree already moved to trash; never use it
+// as a freshness or removal check. Load remains the root-validating API.
+func (c *Cache) LoadEstimate(path string) (Entry, bool) {
+	data, err := os.ReadFile(c.entryPath(path))
+	if err != nil {
+		return Entry{}, false
+	}
+	var entry Entry
+	if json.Unmarshal(data, &entry) != nil || entry.Version != Version || entry.Path != filepath.Clean(path) || entry.ScannedAt.IsZero() || entry.Bytes < 0 {
+		return Entry{}, false
+	}
+	return entry, true
+}
+
+// LoadForDisplay retains a stale estimate after root/.git mtimes change, but
+// rejects replacement roots and incompatible accounting scopes. It never walks.
+func (c *Cache) LoadForDisplay(request Request) (Entry, bool, bool) {
+	if entry, ok := c.Load(request); ok {
+		return entry, false, true
+	}
+	entry, ok := c.LoadEstimate(request.Path)
+	if !ok {
+		return Entry{}, false, false
+	}
+	id, err := identify(request.Path)
+	if err != nil || id.Device != entry.Identity.Device || id.Inode != entry.Identity.Inode || entry.PrivateSize != request.PrivateSize || normalizeExclusions(entry.Exclude) != normalizeExclusions(request.Exclude) {
+		return Entry{}, false, false
+	}
+	return entry, true, true
 }

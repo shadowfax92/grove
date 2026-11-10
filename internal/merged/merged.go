@@ -20,6 +20,9 @@ import (
 type Branch struct {
 	Name string
 	Tip  string
+	// CreatedAt bounds forge history to PRs that could belong to this worktree.
+	// A zero timestamp deliberately leaves the query unbounded.
+	CreatedAt time.Time
 }
 
 // Result contains positive evidence for this tip, or an explicit negative/unknown
@@ -36,7 +39,7 @@ type Result struct {
 
 // Options limits each subprocess, including the optional single forge query per
 // repository. CacheDir is disposable positive evidence, keyed by repo/base/name/tip.
-// An empty CacheDir disables persistence. Zero Timeout defaults to five seconds.
+// An empty CacheDir disables persistence. Zero Timeout defaults to twenty seconds.
 type Options struct {
 	Forge    bool
 	Timeout  time.Duration
@@ -59,7 +62,7 @@ type checker struct {
 // tiers are explicit so cleanup policy can distinguish evidence from uncertainty.
 func Check(ctx context.Context, path, defaultBranch string, branches []Branch, options Options) map[string]Result {
 	if options.Timeout <= 0 {
-		options.Timeout = 5 * time.Second
+		options.Timeout = 20 * time.Second
 	}
 	c := checker{path: path, options: options}
 	if defaultBranch == "" {
@@ -74,6 +77,7 @@ func Check(ctx context.Context, path, defaultBranch string, branches []Branch, o
 		return results
 	}
 	var pending []Branch
+	reused := map[string]bool{}
 	objectDir := ""
 	objectErr := ""
 	mergeTreeUnsupported := false
@@ -98,6 +102,11 @@ func Check(ctx context.Context, path, defaultBranch string, branches []Branch, o
 		if !validOID(branch.Tip) {
 			result.Error = "invalid branch tip"
 			results[branch.Name] = result
+			continue
+		}
+		if cached, ok := c.cachedCheck(base.tip, branch); ok {
+			results[branch.Name] = cached
+			reused[branch.Name] = true
 			continue
 		}
 		_, err := c.git(ctx, nil, "merge-base", "--is-ancestor", branch.Tip, base.tip)
@@ -166,6 +175,11 @@ func Check(ctx context.Context, path, defaultBranch string, branches []Branch, o
 		pending = append(pending, branch)
 	}
 	c.forge(ctx, defaultName(defaultBranch), pending, results)
+	for _, branch := range branches {
+		if branch.Tip != "" && !reused[branch.Name] {
+			c.cacheCheck(base.tip, branch, results[branch.Name])
+		}
+	}
 	return results
 }
 

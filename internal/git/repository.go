@@ -227,12 +227,90 @@ func (r *Repository) RemoveWorktree(path string, discard bool) error {
 }
 
 func (r *Repository) removeWorktreeWithTrash(path string, discard bool, manager *trash.Manager) error {
+	return r.removePreparedWorktree(path, discard, nil, manager)
+}
+
+// Removal is a short-lived capability for one selected worktree, never a cached
+// permission. Preparation walks nested repositories concurrently in the caller;
+// Remove rechecks root identity, Git registration, locks, descendants and dirtiness
+// at the detach boundary without repeating the whole build-output walk.
+type Removal struct {
+	repository *Repository
+	path       string
+	discard    bool
+	identity   os.FileInfo
+	guard      func() error
+}
+
+func (r *Repository) PrepareWorktreeRemoval(path string, discard bool) (*Removal, error) {
+	identity, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
 	target, err := r.validateWorktreeRemoval(path, discard)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Lstat(target)
+	if err != nil {
+		return nil, err
+	}
+	if !os.SameFile(identity, info) {
+		return nil, fmt.Errorf("worktree changed during validation")
+	}
+	return &Removal{repository: r, path: target, discard: discard, identity: info}, nil
+}
+
+// Guard installs caller policy (for example a pinned merged tip) for rechecking
+// under the trash-root lock, after a possibly long wait for another removal.
+func (p *Removal) Guard(check func() error) { p.guard = check }
+func (p *Removal) checkIdentity() error {
+	info, err := os.Lstat(p.path)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(p.identity, info) {
+		return fmt.Errorf("worktree changed since validation")
+	}
+	return nil
+}
+func (p *Removal) Remove() error {
+	info, err := os.Lstat(p.path)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(p.identity, info) {
+		return fmt.Errorf("worktree changed since validation")
+	}
+	manager, err := trash.Default()
+	if err != nil {
+		if p.guard != nil {
+			if err := p.guard(); err != nil {
+				return err
+			}
+		}
+		return p.repository.removeWorktreeSlow(p.path, p.discard)
+	}
+	return p.repository.removePreparedWorktree(p.path, p.discard, p, manager)
+}
+func (r *Repository) removePreparedWorktree(path string, discard bool, prepared *Removal, manager *trash.Manager) error {
+	// A prepared capability suppresses only the already-completed nested walk.
+	target, err := r.validateWorktreeRemoval(path, discard || prepared != nil)
 	if err != nil {
 		return err
 	}
 	validate := func() error {
-		if _, err := r.validateWorktreeRemoval(target, discard); err != nil {
+		if prepared != nil {
+			if err := prepared.checkIdentity(); err != nil {
+				return err
+			}
+			if prepared.guard != nil {
+				if err := prepared.guard(); err != nil {
+					return err
+				}
+			}
+		}
+		if _, err := r.validateWorktreeRemoval(target, discard || prepared != nil); err != nil {
 			return err
 		}
 		if !discard {
@@ -267,6 +345,13 @@ func (r *Repository) removeWorktreeWithTrash(path string, discard bool, manager 
 			if detached {
 				return nil
 			}
+		}
+	}
+	// The fast path can fall back after waiting for its root. Caller guards
+	// still apply when ordinary Git owns the final unlink.
+	if prepared != nil {
+		if err := validate(); err != nil {
+			return err
 		}
 	}
 	return r.removeWorktreeSlow(target, discard)
