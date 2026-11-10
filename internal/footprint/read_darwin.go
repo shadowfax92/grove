@@ -26,16 +26,24 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
 
+// Each active directory reader borrows a buffer. Reusing these avoids allocating
+// 64 KiB for every directory in dependency/build trees with many small folders.
+// Parsed names and metadata are copied before the buffer returns to the pool.
+var attributeBuffers = sync.Pool{New: func() any { buffer := make([]byte, 64*1024); return &buffer }}
+
 // macOS supplies metadata for a whole directory batch in one syscall. Reading
 // the returned attribute masks (rather than assuming all requested fields exist)
 // handles mixed file types and filesystems without fabricating zero sizes.
 func readEntries(ctx context.Context, directory *os.File, private bool, visit entryVisitor) error {
-	buffer := make([]byte, 64*1024)
+	borrowed := attributeBuffers.Get().(*[]byte)
+	defer attributeBuffers.Put(borrowed)
+	buffer := *borrowed
 	flag := C.int(0)
 	if private {
 		flag = 1
