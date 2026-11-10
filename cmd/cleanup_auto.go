@@ -14,22 +14,33 @@ import (
 type automaticSettings struct{ grace, interval time.Duration }
 
 func cleanupSettings(c config.CleanupConfig) (automaticSettings, error) {
-	grace, interval := c.GracePeriod, c.Interval
-	if grace == "" {
-		grace = "1d"
-	}
+	interval := c.Interval
 	if interval == "" {
 		interval = "1h"
 	}
-	g, err := cleanup.Duration(grace)
+	g, err := cleanupGrace(c)
 	if err != nil {
-		return automaticSettings{}, fmt.Errorf("cleanup.grace_period: %w", err)
+		return automaticSettings{}, err
 	}
 	i, err := cleanup.Duration(interval)
 	if err != nil {
 		return automaticSettings{}, fmt.Errorf("cleanup.interval: %w", err)
 	}
 	return automaticSettings{g, i}, nil
+}
+
+// The grace period also protects manual merged cleanup and picker defaults;
+// an unrelated invalid scheduling interval must not disable those safeguards.
+func cleanupGrace(c config.CleanupConfig) (time.Duration, error) {
+	value := c.GracePeriod
+	if value == "" {
+		value = "1d"
+	}
+	grace, err := cleanup.Duration(value)
+	if err != nil {
+		return 0, fmt.Errorf("cleanup.grace_period: %w", err)
+	}
+	return grace, nil
 }
 
 // Called after ordinary commands. A background child inherits config/state but

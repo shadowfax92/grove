@@ -33,13 +33,16 @@ func TestSelectionAndPreselection(t *testing.T) {
 		{"main", func(r *Row) { e := *r.Entry; e.Worktree.Main = true; r.Entry = &e }, false, false, false},
 		{"recent unmerged", func(r *Row) { r.Activity.LastActive = now; r.Merged.Merged = false }, false, false, false},
 		{"activity error", func(r *Row) { r.Activity.Error = "unavailable"; r.Merged.Merged = false }, false, false, false},
-		{"recent merged", func(r *Row) { r.Activity.LastActive = now }, true, false, false},
+		{"recent merged", func(r *Row) { r.Activity.LastActive = now }, false, false, false},
+		{"merged past grace but not idle", func(r *Row) { r.Activity.LastActive = now.Add(-48 * time.Hour) }, true, false, false},
+		{"merged activity error", func(r *Row) { r.Activity.Error = "unavailable" }, false, false, false},
+		{"merged activity unknown", func(r *Row) { r.Activity.LastActive = time.Time{} }, false, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := base
 			tc.change(&r)
-			if got := r.Preselected(now, 72*time.Hour, "", inv); got != tc.pre {
+			if got := r.Preselected(now, 72*time.Hour, 24*time.Hour, "", inv); got != tc.pre {
 				t.Fatalf("preselected=%v", got)
 			}
 			selected, err := Select([]Row{r}, inv, now, Selection{InactiveFor: 72 * time.Hour, Merged: true})
@@ -48,7 +51,7 @@ func TestSelectionAndPreselection(t *testing.T) {
 			}
 		})
 	}
-	if base.Preselected(now, time.Hour, base.Entry.Worktree.Path, inv) {
+	if base.Preselected(now, time.Hour, 24*time.Hour, base.Entry.Worktree.Path, inv) {
 		t.Fatal("current preselected")
 	}
 	unknown := base

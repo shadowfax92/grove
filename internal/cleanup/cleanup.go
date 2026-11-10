@@ -44,9 +44,11 @@ func (r Row) Idle(now time.Time, threshold time.Duration) bool {
 }
 
 // Preselected never includes protected, live, or unknown-usage trees, even when
-// merge evidence is positive. The picker may still show them for deliberate use.
-func (r Row) Preselected(now time.Time, idle time.Duration, current string, inv *inventory.Inventory) bool {
-	return Protected(r.Entry, current, inv) == "" && r.InUse.State == inuse.Free && (r.Idle(now, idle) || r.Merged.Merged)
+// merge evidence is positive. Recent or unknown activity also blocks defaults:
+// an empty branch can be trivially merged while its worktree is still new.
+// The picker may still show these rows for deliberate use.
+func (r Row) Preselected(now time.Time, idle, grace time.Duration, current string, inv *inventory.Inventory) bool {
+	return Protected(r.Entry, current, inv) == "" && r.InUse.State == inuse.Free && r.Idle(now, grace) && (r.Idle(now, idle) || r.Merged.Merged)
 }
 func Protected(e *inventory.Entry, current string, inv *inventory.Inventory) string {
 	switch {
@@ -104,7 +106,7 @@ func Select(rows []Row, inv *inventory.Inventory, now time.Time, s Selection) ([
 // Collect reads cached sizes only. Activity visits Git's non-ignored file list,
 // never ignored build output; merge queries are shared by repository. Dirty and
 // nested-repository walks belong exclusively to the post-selection stage.
-func Collect(ctx context.Context, inv *inventory.Inventory, entries []*inventory.Entry, forge bool, lookup func(string) inuse.Result) []Row {
+func Collect(ctx context.Context, inv *inventory.Inventory, entries []*inventory.Entry, forge bool, lookup func(string) inuse.Result, progress *Progress) []Row {
 	rows := make([]Row, len(entries))
 	cache, _ := footprint.Default()
 	roots := []string{}
@@ -113,77 +115,100 @@ func Collect(ctx context.Context, inv *inventory.Inventory, entries []*inventory
 			roots = append(roots, e.Worktree.Path)
 		}
 	}
+	byRepo := map[*catalog.Repository][]int{}
+	for i, e := range entries {
+		rows[i].Entry = e
+		if info, err := os.Stat(filepath.Join(e.Worktree.Path, ".git")); err == nil {
+			rows[i].CreatedAt = info.ModTime()
+		}
+		if !e.Worktree.Main && !e.Worktree.Prunable && e.Worktree.Branch != "" {
+			byRepo[e.Repository] = append(byRepo[e.Repository], i)
+		}
+	}
+	progress.update(func(p *CollectionState) { p.Worktrees = len(entries); p.Repositories = len(byRepo) })
+	started := time.Now()
 	if lookup == nil {
 		bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
 		snapshot := inuse.Take(bounded)
 		cancel()
 		lookup = snapshot.Lookup
 	}
-	jobs := make(chan int)
-	var workers sync.WaitGroup
-	for range 32 {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			for i := range jobs {
-				e := entries[i]
-				r := Row{Entry: e, InUse: lookup(e.Worktree.Path)}
-				if info, err := os.Stat(filepath.Join(e.Worktree.Path, ".git")); err == nil {
-					r.CreatedAt = info.ModTime()
-				}
-				if !e.Worktree.Prunable {
-					bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
-					r.Activity = activity.Measure(bounded, e.Worktree.Path)
-					cancel()
-					if cache != nil {
-						m, invalidated, ok := cache.LoadForDisplay(footprint.Request{Path: e.Worktree.Path, Exclude: footprint.Exclusions(e.Worktree.Path, roots)})
-						if ok {
-							r.Footprint = &m
-							r.Stale = invalidated || m.Stale(time.Now(), footprint.DefaultMaxAge)
+	progress.update(func(p *CollectionState) { p.ProcessesDone = true; p.ProcessDuration = time.Since(started) })
+	// Activity/cache reads and merge classification are independent once inventory
+	// and creation dates are pinned. Workers write disjoint Row fields; consumers
+	// see rows only after both groups finish. Progress has its own synchronized state.
+	var groups sync.WaitGroup
+	groups.Add(2)
+	go func() {
+		defer groups.Done()
+		started := time.Now()
+		jobs := make(chan int)
+		var workers sync.WaitGroup
+		for range 32 {
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				for i := range jobs {
+					e := entries[i]
+					r := &rows[i]
+					r.InUse = lookup(e.Worktree.Path)
+					if !e.Worktree.Prunable {
+						bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
+						r.Activity = activity.Measure(bounded, e.Worktree.Path)
+						cancel()
+						if cache != nil {
+							m, invalidated, ok := cache.LoadForDisplay(footprint.Request{Path: e.Worktree.Path, Exclude: footprint.Exclusions(e.Worktree.Path, roots)})
+							if ok {
+								r.Footprint = &m
+								r.Stale = invalidated || m.Stale(time.Now(), footprint.DefaultMaxAge)
+							}
 						}
+					} else {
+						r.Activity.Error = "worktree unavailable"
 					}
-				} else {
-					r.Activity.Error = "worktree unavailable"
+					progress.update(func(p *CollectionState) { p.WorktreesDone++ })
 				}
-				rows[i] = r
-			}
-		}()
-	}
-	for i := range entries {
-		jobs <- i
-	}
-	close(jobs)
-	workers.Wait()
-	byRepo := map[*catalog.Repository][]int{}
-	for i, r := range rows {
-		if !r.Entry.Worktree.Main && !r.Entry.Worktree.Prunable && r.Entry.Worktree.Branch != "" {
-			byRepo[r.Entry.Repository] = append(byRepo[r.Entry.Repository], i)
+			}()
 		}
-	}
-	repos := make(chan *catalog.Repository)
-	cacheDir, _ := merged.DefaultCacheDir()
-	for range 8 {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			for repo := range repos {
-				branches := []merged.Branch{}
-				for _, i := range byRepo[repo] {
-					r := rows[i]
-					branches = append(branches, merged.Branch{Name: r.Entry.Worktree.Branch, Tip: r.Entry.Worktree.Head, CreatedAt: r.CreatedAt})
+		for i := range entries {
+			jobs <- i
+		}
+		close(jobs)
+		workers.Wait()
+		progress.update(func(p *CollectionState) { p.ActivityDuration = time.Since(started) })
+	}()
+	go func() {
+		defer groups.Done()
+		started := time.Now()
+		repos := make(chan *catalog.Repository)
+		cacheDir, _ := merged.DefaultCacheDir()
+		var workers sync.WaitGroup
+		for range 8 {
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				for repo := range repos {
+					branches := []merged.Branch{}
+					for _, i := range byRepo[repo] {
+						r := &rows[i]
+						branches = append(branches, merged.Branch{Name: r.Entry.Worktree.Branch, Tip: r.Entry.Worktree.Head, CreatedAt: r.CreatedAt})
+					}
+					results := merged.Check(ctx, repo.Git.MainPath, repo.DefaultBranch, branches, merged.Options{Forge: forge, CacheDir: cacheDir})
+					for _, i := range byRepo[repo] {
+						rows[i].Merged = results[rows[i].Entry.Worktree.Branch]
+					}
+					progress.update(func(p *CollectionState) { p.RepositoriesDone++ })
 				}
-				results := merged.Check(ctx, repo.Git.MainPath, repo.DefaultBranch, branches, merged.Options{Forge: forge, CacheDir: cacheDir})
-				for _, i := range byRepo[repo] {
-					rows[i].Merged = results[rows[i].Entry.Worktree.Branch]
-				}
-			}
-		}()
-	}
-	for repo := range byRepo {
-		repos <- repo
-	}
-	close(repos)
-	workers.Wait()
+			}()
+		}
+		for repo := range byRepo {
+			repos <- repo
+		}
+		close(repos)
+		workers.Wait()
+		progress.update(func(p *CollectionState) { p.MergeDuration = time.Since(started) })
+	}()
+	groups.Wait()
 	return rows
 }
 func SortByActivity(rows []Row) {
