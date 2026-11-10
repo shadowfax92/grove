@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"grove/internal/trash"
 )
 
 type Repository struct {
@@ -213,7 +215,64 @@ func (r *Repository) resolveWorktreePath(branch string) (string, bool, []Worktre
 	return destination, false, worktrees, nil
 }
 
+// RemoveWorktree validates before detach; recursive deletion belongs exclusively
+// to trash after Git has unregistered the stub. Callers needing freed bytes can
+// wait through trash.Manager.Reap rather than changing this path's meaning.
 func (r *Repository) RemoveWorktree(path string, discard bool) error {
+	manager, err := trash.Default()
+	if err != nil {
+		return r.removeWorktreeSlow(path, discard)
+	}
+	return r.removeWorktreeWithTrash(path, discard, manager)
+}
+
+func (r *Repository) removeWorktreeWithTrash(path string, discard bool, manager *trash.Manager) error {
+	target, err := r.validateWorktreeRemoval(path, discard)
+	if err != nil {
+		return err
+	}
+	validate := func() error {
+		if _, err := r.validateWorktreeRemoval(target, discard); err != nil {
+			return err
+		}
+		if !discard {
+			dirty, err := r.Dirty(target)
+			if err != nil {
+				return err
+			}
+			if dirty {
+				return fmt.Errorf("worktree has uncommitted files; use --discard to remove it")
+			}
+		}
+		return nil
+	}
+	if discard {
+		if err := r.repairWorktreeGitFileIfNeeded(target); err != nil {
+			return err
+		}
+	}
+	// Resolve the administrative identity before moving the tree; a corrupted
+	// pointer cannot turn a forced stub removal into removal of another worktree.
+	admin, err := runGitText(target, "rev-parse", "--path-format=absolute", "--git-dir")
+	if err == nil {
+		admin, err = canonicalPath(admin)
+		if err == nil && r.worktreeAdminTargets(admin, target) {
+			detached, detachErr := manager.Detach(target, r.MainPath, admin, validate, func() error {
+				_, err := runGitText(r.MainPath, "worktree", "remove", "--force", "--", target)
+				return err
+			})
+			if detachErr != nil {
+				return detachErr
+			}
+			if detached {
+				return nil
+			}
+		}
+	}
+	return r.removeWorktreeSlow(target, discard)
+}
+
+func (r *Repository) removeWorktreeSlow(path string, discard bool) error {
 	target, err := r.validateWorktreeRemoval(path, discard)
 	if err != nil {
 		return err
@@ -227,11 +286,9 @@ func (r *Repository) RemoveWorktree(path string, discard bool) error {
 	if discard {
 		args = append(args, "--force")
 	}
-	args = append(args, target)
-	if _, err := runGitText(r.MainPath, args...); err != nil {
-		return err
-	}
-	return nil
+	args = append(args, "--", target)
+	_, err = runGitText(r.MainPath, args...)
+	return err
 }
 
 func (r *Repository) repairWorktreeGitFileIfNeeded(target string) error {
@@ -550,7 +607,9 @@ type nestedRepositoryScan struct {
 }
 
 func nestedGitRepository(root string) (string, error) {
-	const workerCount = 8
+	// Bulk removal validates eight candidates concurrently. Keep each tree's
+	// directory walk small so those checks have at most sixteen active readers.
+	const workerCount = 2
 	jobs := make(chan string)
 	results := make(chan nestedRepositoryScan, workerCount)
 	cancelled := make(chan struct{})
@@ -606,6 +665,7 @@ func nestedGitRepository(root string) (string, error) {
 }
 
 func scanDirectoryForNestedRepository(root, directory string) nestedRepositoryScan {
+
 	stream, err := os.Open(directory)
 	if err != nil {
 		return nestedRepositoryScan{err: err}
@@ -665,6 +725,9 @@ func runGitText(dir string, args ...string) (string, error) {
 func runGitBytes(dir string, args ...string) ([]byte, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
+	// Observational Git calls must not refresh activity timestamps in the index.
+	// Required write locks still apply to commands that mutate Git metadata.
+	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		detail := strings.TrimSpace(string(out))

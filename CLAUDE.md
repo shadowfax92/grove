@@ -14,7 +14,8 @@ The module name is `grove`.
 
 ## Architecture
 
-- `cmd/` builds the Cobra tree and owns output contracts for `cd`, `new`, `list`, `du`, `rm`, `llm`, and `config`.
+- `cmd/` builds the Cobra tree and owns output contracts for `cd`, `new`, `list`, `du`, `rm`, `trash`, `llm`, and `config`.
+- `internal/trash/` journals validated detach operations and owns resumable, symlink-safe physical deletion; its state index discovers pending roots without replacing Git inventory.
 - `internal/git/` is the Git boundary. It discovers canonical common directories, parses NUL-delimited worktree records, checks status and ancestry, creates `.wt/<branch>`, and removes through Git.
 - `internal/config/` parses and appends to `~/.config/grove/config.yaml` without making every configured path a load-time invariant.
 - `internal/catalog/` turns valid config rows into physical repositories and alias/setup profiles. Common Git directory is repository identity.
@@ -39,11 +40,11 @@ Git metadata is the only worktree source of truth. Grove has no inventory state 
 - Age-based cleanup ignores merge state, keeps branches, and preserves the same main, lock, current-worktree, and nesting protections as exact removal.
 - Missing cleanup prunes stale Git registrations and keeps branches.
 - Missing repository directories are silently skipped on reads. Every successful removal also prunes their config rows under the registration lock; dry runs only preview, and cancellation/failure never changes config.
-- Worktree removal never falls back to `os.RemoveAll`.
+- Recursive worktree deletion happens only inside Grove's trash, on recognized directories Grove moved there after validation; symlinks are never followed. Failed renames fall back to Git removal.
 - Exact selectors never open fzf; omitted selectors require an interactive terminal.
 - Navigation recency may reorder only live Git inventory; missing, corrupt, or deleted markers never block navigation or preserve worktrees.
 - Path, JSON, and NUL output remain machine-readable. Human presentation may use terminal-aware color. Warnings and setup output use stderr.
-- Old external worktrees remain supported during migration and are never moved automatically.
+- Old external worktrees remain supported during migration and are never relocated except into same-filesystem trash during explicitly requested removal.
 - LLM stores are opt-in through `llm.root`. Store problems warn during `grove new`; they never fail worktree creation.
 - `.llm` and each `llm.aliases` name are symlinks at the worktree root, each pointing straight at the store and excluded as `/<name>` (no trailing slash: Git matches symlinks as files) in the common `info/exclude`.
 - Grove repoints only symlinks. A real file or directory, or a tracked path, at an anchor name is never replaced; it blocks only that anchor.

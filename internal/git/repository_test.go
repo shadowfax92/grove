@@ -453,3 +453,41 @@ func canonicalTestPath(t *testing.T, path string) string {
 	}
 	return resolved
 }
+
+func TestFastRemoveFallsBackToGitWhenTrashUnavailable(t *testing.T) {
+	mainPath := initTestRepo(t)
+	writeCommit(t, mainPath, "base.txt", "base")
+	repo, err := OpenRepository(mainPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked, _, err := repo.CreateWorktree("fixture", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A file at the trash location makes rename-based detach unavailable; Git
+	// removal remains the fallback and keeps both branch and safety protections.
+	if err = os.WriteFile(filepath.Join(mainPath, ".wt", ".grove-trash"), []byte("occupied"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = repo.RemoveWorktree(linked, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Lstat(linked); !os.IsNotExist(err) {
+		t.Fatalf("worktree still present: %v", err)
+	}
+	runGit(t, mainPath, "show-ref", "--verify", "refs/heads/fixture")
+}
+
+func TestFastRemoveNeverRemovesMain(t *testing.T) {
+	mainPath := initTestRepo(t)
+	writeCommit(t, mainPath, "base.txt", "base")
+	repo, err := OpenRepository(mainPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = repo.RemoveWorktree(mainPath, true); err == nil {
+		t.Fatal("removed main")
+	}
+	runGit(t, mainPath, "status", "--porcelain")
+}

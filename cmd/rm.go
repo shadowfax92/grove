@@ -5,21 +5,24 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"grove/internal/config"
 	"grove/internal/inventory"
 	"grove/internal/picker"
+	"grove/internal/trash"
 
 	"github.com/spf13/cobra"
 )
 
 type removeOutput struct {
-	Version     int            `json:"version"`
-	DryRun      bool           `json:"dry_run"`
-	Removed     []removeResult `json:"removed"`
-	WouldRemove []removeResult `json:"would_remove"`
-	ReturnPath  string         `json:"return_path,omitempty"`
+	Version         int            `json:"version"`
+	DryRun          bool           `json:"dry_run"`
+	Removed         []removeResult `json:"removed"`
+	WouldRemove     []removeResult `json:"would_remove"`
+	ReturnPath      string         `json:"return_path,omitempty"`
+	PendingDeletion []trash.Entry  `json:"pending_deletion,omitempty"`
 }
 
 type removeResult struct {
@@ -52,11 +55,12 @@ type removeOptions struct {
 	merged    bool
 	missing   bool
 	dryRun    bool
+	wait      bool
 	olderThan cleanupAge
 }
 
 func (a *application) removeCommand() *cobra.Command {
-	var discard, merged, missing, dryRun bool
+	var discard, merged, missing, dryRun, wait bool
 	var olderThanValue string
 	command := &cobra.Command{
 		Use:   "rm [selector...]",
@@ -81,6 +85,9 @@ func (a *application) removeCommand() *cobra.Command {
 			if bulkModes > 1 {
 				return fmt.Errorf("--merged, --older-than, and --missing cannot be used together")
 			}
+			if dryRun && wait {
+				return fmt.Errorf("--wait cannot be used with --dry-run")
+			}
 			if dryRun && bulkModes == 0 {
 				return fmt.Errorf("--dry-run requires --merged, --older-than, or --missing")
 			}
@@ -98,6 +105,7 @@ func (a *application) removeCommand() *cobra.Command {
 				merged:    merged,
 				missing:   missing,
 				dryRun:    dryRun,
+				wait:      wait,
 				olderThan: olderThan,
 			})
 		},
@@ -106,6 +114,7 @@ func (a *application) removeCommand() *cobra.Command {
 	command.Flags().BoolVar(&merged, "merged", false, "Remove all clean worktrees merged into their default branches")
 	command.Flags().BoolVar(&missing, "missing", false, "Prune worktree registrations whose directories are gone")
 	command.Flags().StringVar(&olderThanValue, "older-than", "", "Remove worktrees older than a duration such as 14d or 4w")
+	command.Flags().BoolVar(&wait, "wait", false, "Wait for physical deletion before returning")
 	command.Flags().BoolVar(&dryRun, "dry-run", false, "Preview bulk removal without removing anything")
 	return command
 }
@@ -124,12 +133,17 @@ func (a *application) runRemove(cmd *cobra.Command, args []string, options remov
 		}
 	}()
 	if options.merged {
-		return a.removeMerged(cmd, context, options.dryRun)
+		return a.removeMerged(cmd, context, options.dryRun, options.wait)
 	}
 	if options.olderThan.duration != 0 {
-		return a.removeOlderThan(cmd, context, options.olderThan, options.discard, options.dryRun)
+		return a.removeOlderThan(cmd, context, options.olderThan, options.discard, options.dryRun, options.wait)
 	}
 	if options.missing {
+		if options.wait {
+			if _, err := finishRemoval(cmd, true, options.dryRun); err != nil {
+				return err
+			}
+		}
 		return a.removeMissing(cmd, context, options.dryRun)
 	}
 	var entries []*inventory.Entry
@@ -154,9 +168,12 @@ func (a *application) runRemove(cmd *cobra.Command, args []string, options remov
 	if err := a.validatePathOutput(returnPath); err != nil {
 		return err
 	}
-	for _, entry := range entries {
-		if err := validateRemoveEntry(context.inventory, entry, options.discard); err != nil {
-			return fmt.Errorf("%s: %w", entry.Selector(), err)
+	checks := checkRemoveEntries(entries, func(entry *inventory.Entry) removalCheck {
+		return removalCheck{err: validateRemoveEntry(context.inventory, entry, options.discard)}
+	})
+	for i, check := range checks {
+		if check.err != nil {
+			return fmt.Errorf("%s: %w", entries[i].Selector(), check.err)
 		}
 	}
 	removed := make([]removeResult, 0, len(entries))
@@ -166,12 +183,17 @@ func (a *application) runRemove(cmd *cobra.Command, args []string, options remov
 		}
 		removed = append(removed, removeResult{Selector: entry.Selector(), Path: entry.Worktree.Path})
 	}
+	pending, err := finishRemoval(cmd, options.wait, false)
+	if err != nil {
+		return err
+	}
 	if a.jsonOutput {
 		return writeJSON(cmd, removeOutput{
-			Version:     1,
-			Removed:     removed,
-			WouldRemove: []removeResult{},
-			ReturnPath:  returnPath,
+			Version:         1,
+			Removed:         removed,
+			WouldRemove:     []removeResult{},
+			ReturnPath:      returnPath,
+			PendingDeletion: pending,
 		})
 	}
 	return a.writePath(cmd, returnPath)
@@ -400,7 +422,7 @@ func (a *application) removeMissing(cmd *cobra.Command, context *commandContext,
 	return nil
 }
 
-func (a *application) removeOlderThan(cmd *cobra.Command, context *commandContext, threshold cleanupAge, discard, dryRun bool) error {
+func (a *application) removeOlderThan(cmd *cobra.Command, context *commandContext, threshold cleanupAge, discard, dryRun, wait bool) error {
 	currentPath := ""
 	if current, err := context.inventory.Resolve(".", context.directory); err == nil {
 		currentPath = current.Worktree.Path
@@ -440,30 +462,44 @@ func (a *application) removeOlderThan(cmd *cobra.Command, context *commandContex
 			skips.current++
 			continue
 		}
+		candidates = append(candidates, removeCandidate{entry: entry, age: age})
+	}
+	// Tree walks and Git status dominate large previews. Eight candidates at a
+	// time bound subprocess and filesystem pressure; aggregation stays in inventory
+	// order so warnings and machine-readable output remain deterministic.
+	entries := make([]*inventory.Entry, len(candidates))
+	for i, candidate := range candidates {
+		entries[i] = candidate.entry
+	}
+	checks := checkRemoveEntries(entries, func(entry *inventory.Entry) removalCheck {
 		if !discard {
 			dirty, err := entry.Repository.Git.Dirty(entry.Worktree.Path)
 			if err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: %v\n", entry.Selector(), err)
-				skips.unsafe++
-				continue
+				return removalCheck{err: err}
 			}
 			if dirty {
-				skips.dirty++
-				continue
+				return removalCheck{dirty: true}
 			}
 		}
 		if descendants := context.inventory.Descendants(entry.Worktree.Path); len(descendants) != 0 {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: contains registered worktree %s\n", entry.Selector(), descendants[0].Worktree.Path)
+			return removalCheck{err: fmt.Errorf("contains registered worktree %s", descendants[0].Worktree.Path)}
+		}
+		return removalCheck{err: entry.Repository.Git.ValidateWorktreeRemoval(entry.Worktree.Path, discard)}
+	})
+	filtered := candidates[:0]
+	for i, check := range checks {
+		if check.dirty {
+			skips.dirty++
+			continue
+		}
+		if check.err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: %v\n", entries[i].Selector(), check.err)
 			skips.unsafe++
 			continue
 		}
-		if err := entry.Repository.Git.ValidateWorktreeRemoval(entry.Worktree.Path, discard); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: %v\n", entry.Selector(), err)
-			skips.unsafe++
-			continue
-		}
-		candidates = append(candidates, removeCandidate{entry: entry, age: age})
+		filtered = append(filtered, candidates[i])
 	}
+	candidates = filtered
 
 	results := make([]removeResult, 0, len(candidates))
 	ages := make(map[string]time.Duration, len(candidates))
@@ -496,8 +532,13 @@ func (a *application) removeOlderThan(cmd *cobra.Command, context *commandContex
 		ages[result.Path] = candidate.age
 	}
 
+	pending, finishErr := finishRemoval(cmd, wait, dryRun)
+	if finishErr != nil {
+		failures = append(failures, finishErr)
+	}
+
 	if a.jsonOutput {
-		output := removeOutput{Version: 1, DryRun: dryRun, Removed: []removeResult{}, WouldRemove: []removeResult{}}
+		output := removeOutput{Version: 1, DryRun: dryRun, Removed: []removeResult{}, WouldRemove: []removeResult{}, PendingDeletion: pending}
 		if dryRun {
 			output.WouldRemove = results
 		} else {
@@ -567,7 +608,7 @@ func (a *application) writeCleanupSkips(cmd *cobra.Command, skips cleanupSkips) 
 	}
 }
 
-func (a *application) removeMerged(cmd *cobra.Command, context *commandContext, dryRun bool) error {
+func (a *application) removeMerged(cmd *cobra.Command, context *commandContext, dryRun, wait bool) error {
 	currentPath := ""
 	if current, err := context.inventory.Resolve(".", context.directory); err == nil {
 		currentPath = current.Worktree.Path
@@ -580,28 +621,43 @@ func (a *application) removeMerged(cmd *cobra.Command, context *commandContext, 
 		if mergedSkipReason(entry, currentPath) != "" {
 			continue
 		}
+		candidates = append(candidates, removeCandidate{entry: entry})
+	}
+	entries := make([]*inventory.Entry, len(candidates))
+	for i, candidate := range candidates {
+		entries[i] = candidate.entry
+	}
+	checks := checkRemoveEntries(entries, func(entry *inventory.Entry) removalCheck {
 		if descendants := context.inventory.Descendants(entry.Worktree.Path); len(descendants) != 0 {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: contains registered worktree %s\n", entry.Selector(), descendants[0].Worktree.Path)
-			continue
+			return removalCheck{err: fmt.Errorf("contains registered worktree %s", descendants[0].Worktree.Path)}
 		}
 		dirty, err := entry.Repository.Git.Dirty(entry.Worktree.Path)
 		if err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: %v\n", entry.Selector(), err)
-			continue
+			return removalCheck{err: err}
 		}
 		if dirty {
-			continue
+			return removalCheck{dirty: true}
 		}
 		merged, _, err := entry.Repository.Git.BranchMerged(entry.Worktree.Branch, entry.Repository.DefaultBranch)
 		if err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: %v\n", entry.Selector(), err)
-			continue
+			return removalCheck{err: err}
 		}
 		if !merged {
+			return removalCheck{skip: true}
+		}
+		return removalCheck{err: entry.Repository.Git.ValidateWorktreeRemoval(entry.Worktree.Path, false)}
+	})
+	filtered := candidates[:0]
+	for i, check := range checks {
+		if check.err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: %v\n", entries[i].Selector(), check.err)
 			continue
 		}
-		candidates = append(candidates, removeCandidate{entry: entry})
+		if !check.dirty && !check.skip {
+			filtered = append(filtered, candidates[i])
+		}
 	}
+	candidates = filtered
 
 	results := make([]removeResult, 0, len(candidates))
 	var failures []error
@@ -631,8 +687,13 @@ func (a *application) removeMerged(cmd *cobra.Command, context *commandContext, 
 		results = append(results, removeResult{Selector: entry.Selector(), Path: entry.Worktree.Path})
 	}
 
+	pending, finishErr := finishRemoval(cmd, wait, dryRun)
+	if finishErr != nil {
+		failures = append(failures, finishErr)
+	}
+
 	if a.jsonOutput {
-		output := removeOutput{Version: 1, DryRun: dryRun, Removed: []removeResult{}, WouldRemove: []removeResult{}}
+		output := removeOutput{Version: 1, DryRun: dryRun, Removed: []removeResult{}, WouldRemove: []removeResult{}, PendingDeletion: pending}
 		if dryRun {
 			output.WouldRemove = results
 		} else {
@@ -685,4 +746,57 @@ func lockedError(entry *inventory.Entry) error {
 		return fmt.Errorf("worktree is locked")
 	}
 	return fmt.Errorf("worktree is locked: %s", reason)
+}
+
+// removalCheck carries worker results back to the output owner. Workers never
+// write command streams or shared counters, which keeps bulk diagnostics stable.
+type removalCheck struct {
+	dirty, skip bool
+	err         error
+}
+
+func checkRemoveEntries(entries []*inventory.Entry, check func(*inventory.Entry) removalCheck) []removalCheck {
+	results := make([]removalCheck, len(entries))
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	for range 8 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for i := range jobs {
+				results[i] = check(entries[i])
+			}
+		}()
+	}
+	for i := range entries {
+		jobs <- i
+	}
+	close(jobs)
+	workers.Wait()
+	return results
+}
+
+func finishRemoval(cmd *cobra.Command, wait, dryRun bool) ([]trash.Entry, error) {
+	if dryRun {
+		return nil, nil
+	}
+	manager, err := trash.Default()
+	if err != nil {
+		if wait {
+			return nil, err
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: pending deletion: %v\n", err)
+		return nil, nil
+	}
+	if wait {
+		if err = manager.Reap(cmd.Context()); err != nil {
+			return nil, err
+		}
+	}
+	pending, err := manager.Pending()
+	// Optional housekeeping must not corrupt path or JSON stdout.
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: pending deletion: %v\n", err)
+	}
+	return pending, nil
 }

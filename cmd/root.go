@@ -1,13 +1,17 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"grove/internal/picker"
 	"grove/internal/recency"
+	"grove/internal/trash"
 
 	"github.com/spf13/cobra"
 )
@@ -105,13 +109,51 @@ func newRootCommand(dependencies commandDependencies) *cobra.Command {
 		app.llmCommand(),
 		app.newCommand(),
 		app.removeCommand(),
+		app.trashCommand(),
 	)
 	return root
 }
 
 func Execute() {
+	// Reapers run the same executable but bypass Cobra and all navigation/setup.
+	// The state override is inherited only by the detached child, including when
+	// its launching binary is replaced atomically during an upgrade.
+	manager, managerErr := trash.Default()
+	if len(os.Args) == 2 && os.Args[1] == "__grove-reap" {
+		if state := os.Getenv("GROVE_REAPER_STATE"); state != "" {
+			manager = trash.New(state)
+			managerErr = nil
+		}
+		if managerErr == nil {
+			if os.Getenv("GROVE_REAPER_INHERITED") == "1" {
+				_ = manager.ReapInherited(context.Background())
+			} else {
+				_ = manager.Reap(context.Background())
+			}
+		}
+		return
+	}
+	// Dry runs stay read-only, even when previous deletion work is pending.
+	dryRun := false
+	for _, arg := range os.Args[1:] {
+		name, value, hasValue := strings.Cut(arg, "=")
+		if name == "--dry-run" {
+			enabled := true
+			if hasValue {
+				enabled, _ = strconv.ParseBool(value)
+			}
+			dryRun = dryRun || enabled
+		}
+	}
+	if managerErr == nil && !dryRun {
+		_ = manager.Resume()
+	}
 	root := newRootCommand(commandDependencies{})
-	if err := root.Execute(); err != nil {
+	err := root.Execute()
+	if managerErr == nil && !dryRun {
+		_ = manager.Resume()
+	}
+	if err != nil {
 		if errors.Is(err, picker.ErrCancelled) {
 			return
 		}
