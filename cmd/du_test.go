@@ -109,3 +109,22 @@ func TestDUTotalsAndOrdering(t *testing.T) {
 func footprintForTest(size int64, now time.Time) *footprint.Entry {
 	return &footprint.Entry{Bytes: size, ScannedAt: now}
 }
+
+func TestDURefreshPreservesDashPrefixedRepository(t *testing.T) {
+	repo := initV2Repo(t)
+	linked := filepath.Join(t.TempDir(), "linked")
+	runV2Git(t, repo, "worktree", "add", "-b", "feature", linked)
+	writeV2Config(t, "", "  - path: "+repo+"\n    name: -example\n")
+	deps := commandDependencies{getwd: func() (string, error) { return repo, nil }}
+	if _, _, err := executeV2(newRootCommand(deps), "du", "--", "-example"); err != nil {
+		t.Fatal(err)
+	}
+	var forwarded []string
+	deps.startFootprintRefresh = func(args []string) error { forwarded = args; return nil }
+	if _, _, err := executeV2(newRootCommand(deps), "du", "--max-age=0s", "--", "-example"); err != nil {
+		t.Fatal(err)
+	}
+	if len(forwarded) < 2 || forwarded[len(forwarded)-2] != "--" || forwarded[len(forwarded)-1] != "-example" {
+		t.Fatalf("repository alias became flags: %q", forwarded)
+	}
+}

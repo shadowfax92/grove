@@ -225,6 +225,8 @@ func (a *application) runDU(cmd *cobra.Command, names []string, options duOption
 	}
 	if refreshNeeded {
 		args := []string{"-C", data.directory, "du", "--background-refresh", fmt.Sprintf("--max-age=%s", options.maxAge), fmt.Sprintf("--jobs=%d", options.jobs), fmt.Sprintf("--private-size=%t", options.privateSize), fmt.Sprintf("--include-main=%t", options.includeMain)}
+		// Repository names after -- remain positional even when an alias starts with a dash.
+		args = append(args, "--")
 		args = append(args, names...)
 		launch := a.dependencies.startFootprintRefresh
 		if launch == nil {
