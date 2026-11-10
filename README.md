@@ -73,7 +73,7 @@ Each directory under `.wt` is a normal linked worktree with its own `.git` file.
 
 The worktree returned by `grove new` is always its root. A configured `workdir` changes only where setup commands run; it never changes the path printed for an agent.
 
-Existing worktrees outside `.wt` remain visible and removable. Grove does not move them.
+Existing worktrees outside `.wt` remain visible and removable. Grove preserves their locations until removal.
 
 ## Commands
 
@@ -156,6 +156,9 @@ grove rm feat/auth
 grove rm feat/auth fix/login
 grove rm .
 grove rm --discard .
+grove rm --discard --wait feat/cache  # wait until disk space is reclaimed
+grove trash                           # show pending physical deletion
+grove trash --wait                    # finish pending deletion
 grove rm --merged --dry-run
 grove rm --merged
 grove rm --older-than 14d --dry-run
@@ -187,7 +190,11 @@ Bulk removal considers every configured repository and always protects main, loc
 
 Use `--dry-run` with any bulk mode to inspect the exact candidates first. Age cleanup shows the same creation ages as `grove list` and summarizes protected worktrees it skipped. All removal modes keep the underlying branches.
 
-Deletion goes through `git worktree remove`. With `--discard`, Grove repairs stale linked-worktree pointers from Git's administrative records before retrying removal. It never falls back to recursive filesystem deletion.
+Removal validates the same protections, then renames the tree into Grove's trash and asks `git worktree remove --force` to unregister a stub holding only its `.git` pointer. The command returns after detaching; physical deletion runs in a separate process with up to four trees in parallel. Branches and unrelated missing registrations are kept. If the rename cannot run (including across filesystems), Grove uses the ordinary `git worktree remove` path. With `--discard`, stale linked-worktree pointers are repaired from Git's administrative records first.
+
+Managed trash lives at `<main>/.wt/.grove-trash`; old external worktrees use `.grove-trash` beside the worktree on its own filesystem. Each entry carries a versioned journal with the original path, Git administrative identity, and moved-directory identity. An interrupted detach restores the original tree while its Git registration exists; once Git has unregistered it, deletion resumes instead. A new worktree reusing the old path is never part of that deletion.
+
+`grove trash` (also `--json`) shows pending entries. `grove rm --wait` waits after removal, and `grove trash --wait` retries outstanding work. Removal JSON retains version 1 and adds `pending_deletion` when entries remain. Normal command startup and completion restart pending deletion after a crash, reboot, or upgrade; dry runs stay read-only. The reaper recognizes only Grove-marked entries, refuses unknown content, never follows symlinks, and handles read-only cache directories. A tree still being written gets bounded deletion passes and remains pending for a later retry. Recursive deletion happens only in Grove's trash after validation and detach.
 
 ### LLM context stores
 

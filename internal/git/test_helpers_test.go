@@ -10,6 +10,7 @@ import (
 
 func initTestRepo(t *testing.T) string {
 	t.Helper()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	repoPath := t.TempDir()
 	runGit(t, repoPath, "init", "-b", "main")
 	runGit(t, repoPath, "config", "user.name", "Grove Test")

@@ -6,8 +6,12 @@ build:
 	go build -ldflags "-X grove/cmd.Version=$(VERSION)" -o grove .
 
 install: build fish
-	cp grove $(PREFIX)/grove
-	codesign --force --sign - $(PREFIX)/grove
+	@set -eu; temporary=$$(mktemp "$(PREFIX)/.grove-install.XXXXXX"); \
+	trap 'rm -f "$$temporary"' EXIT; \
+	cp grove "$$temporary"; \
+	chmod 755 "$$temporary"; \
+	codesign --force --sign - "$$temporary"; \
+	mv -f "$$temporary" "$(PREFIX)/grove"
 
 fish:
 	mkdir -p $(FISH_FUNCTIONS)
